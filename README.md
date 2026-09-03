@@ -7,7 +7,7 @@ voices, on CPU, low latency, around a table.
 **Yu-Ting (Harry) Liao** — MA Computational Arts, Goldsmiths, University of
 London, 2026. Final project.
 
-- Documentation video: *(add Vimeo link here)*
+- Documentation video: **https://vimeo.com/1223687812**
 - Technical documentation: [`docs/SOLO_CHOIR_TECH_DOC.md`](docs/SOLO_CHOIR_TECH_DOC.md)
 - Research framing: [`docs/SOLO_CHOIR_RESEARCH_VISION.md`](docs/SOLO_CHOIR_RESEARCH_VISION.md)
 - Voice provenance and consent: [`docs/VOICE_CREDITS.md`](docs/VOICE_CREDITS.md)
