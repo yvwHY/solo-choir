@@ -1,0 +1,84 @@
+<!-- Baseline listening test (spec 2026-07-07 §5). Static page; expects manifest.js + the
+     phrase*_a/b.wav files beside it. Serve the stimuli folder locally:
+       cp eval/listening_test/index.html <stimuli_dir>/ && cd <stimuli_dir> && python -m http.server 8901
+     KEY.csv is never referenced here; move it out of the folder before any remote link. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choir harmony listening test</title>
+<style>
+  body{font-family:-apple-system,"Helvetica Neue",sans-serif;max-width:640px;margin:2em auto;
+       padding:0 16px;line-height:1.5;color:#222}
+  fieldset{margin:1.2em 0;border:1px solid #ccc;border-radius:8px;padding:12px 14px}
+  legend{font-weight:600}
+  .likert{margin:4px 0}
+  .likert label{margin-right:.55em;white-space:nowrap}
+  audio{vertical-align:middle;max-width:100%}
+  button{font-size:1rem;padding:8px 18px;border-radius:6px;border:1px solid #888;cursor:pointer}
+  small{color:#666}
+  .meta label{margin-right:1em}
+</style>
+</head>
+<body>
+<h2>Choir harmony listening test</h2>
+<p>Wear headphones. For each phrase, listen to version A and B (replay as often as you like),
+rate both, then pick which you prefer. About 10 minutes. Responses are anonymous.</p>
+<p class="meta">
+  <label>Nickname (any): <input id="pid" size="10"></label>
+  <label><input type="checkbox" id="hp"> I am wearing headphones</label>
+  <label><input type="checkbox" id="mus"> I play/sing music regularly</label>
+</p>
+<div id="trials"></div>
+<button id="done">Finish &amp; save</button>
+<p><small>Saving downloads a small results file — please hand it back to the researcher.</small></p>
+<script src="manifest.js"></script>
+<script>
+"use strict";
+const AXES = [["natural", "sounds natural"],
+              ["artificial", "sounds artificial / processed"],
+              ["intonation", "sounds in tune"]];
+const trials = [...MANIFEST].sort(() => Math.random() - 0.5);   // phrase order per participant
+const el = document.getElementById("trials");
+trials.forEach((tr, i) => {
+  let h = `<fieldset><legend>Phrase ${i + 1} of ${trials.length}</legend>`;
+  for (const v of ["a", "b"]) {
+    h += `<p><b>Version ${v.toUpperCase()}</b> <audio controls preload="auto" src="${tr[v]}"></audio></p>`;
+    for (const [ax, txt] of AXES) {
+      h += `<div class="likert">${txt}: `;
+      for (let s = 1; s <= 7; s++) {
+        h += `<label><input type="radio" name="${tr.phrase}_${v}_${ax}" value="${s}">${s}</label>`;
+      }
+      h += ` <small>(1 = not at all, 7 = very)</small></div>`;
+    }
+  }
+  h += `<div class="likert"><b>Overall I prefer:</b>
+        <label><input type="radio" name="${tr.phrase}_pref" value="a"> A</label>
+        <label><input type="radio" name="${tr.phrase}_pref" value="b"> B</label></div></fieldset>`;
+  el.insertAdjacentHTML("beforeend", h);
+});
+document.getElementById("done").addEventListener("click", () => {
+  const answers = {};
+  for (const inp of document.querySelectorAll("input[type=radio]:checked")) {
+    answers[inp.name] = inp.value;
+  }
+  const need = trials.length * (AXES.length * 2 + 1);
+  if (Object.keys(answers).length < need) {
+    alert("Some ratings are missing — please complete every row before saving.");
+    return;
+  }
+  const out = {pid: document.getElementById("pid").value || "anon",
+               headphones: document.getElementById("hp").checked,
+               musical: document.getElementById("mus").checked,
+               order: trials.map(t => t.phrase),
+               answers: answers,
+               ts: new Date().toISOString()};
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], {type: "application/json"}));
+  a.download = `results_${out.pid}_${Date.now()}.json`;
+  a.click();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Solo Choir</title>
+<style>
+  :root{
+    --self:#4a93b8; --self2:#8fd0e6; --acc:#1f8f84;
+    --ink:#1f2a32; --dim:#39434a; --dimmer:#525d66;   /* darkened for AA contrast on the translucent panel (Task 3.1); was #4d5a62 / #6f7d85 */
+    --line:rgba(20,40,45,.16); --hair:rgba(20,40,45,.10);
+    --panel:rgba(252,253,254,.45); --labelink:#222a30; --good:#2fa37a;
+    --mono: ui-monospace,"SF Mono",Menlo,"Cascadia Mono",monospace;
+    --sans:"Space Grotesk", system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;font-family:var(--sans);overflow:hidden;color:var(--ink);
+    background:linear-gradient(180deg,#c6d0d9 0%,#aeb9c4 55%,#9ca8b4 100%)}
+  #stage{position:fixed;inset:0} canvas{display:block} button{font-family:inherit}
+  select:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+  .top{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:16px;padding:18px 24px;background:linear-gradient(180deg,rgba(248,250,251,.45),rgba(248,250,251,0));pointer-events:none}
+  .brand .name{font-size:15px;font-weight:600;letter-spacing:.34em}
+  .brand .sub{font-family:var(--mono);font-size:10.5px;letter-spacing:.22em;color:var(--dim);margin-top:6px;text-transform:uppercase}
+  .top .spacer{flex:1}
+  .stat{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);display:flex;align-items:center;gap:12px;text-transform:uppercase}
+  .stat b{color:var(--ink);font-weight:600}
+  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:100px;padding:5px 11px;color:var(--acc);background:rgba(31,143,132,.05)}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--acc);box-shadow:0 0 7px rgba(31,143,132,.6)}
+  .pill.off{color:var(--dim);border-color:var(--line)} .pill.off .dot{background:var(--dimmer);box-shadow:none}
+
+  .panel{position:fixed;top:78px;left:24px;z-index:11;width:248px;background:var(--panel);border:1px solid var(--hair);border-radius:14px;padding:15px 16px 17px;backdrop-filter:blur(11px);box-shadow:0 10px 34px rgba(20,40,45,.10);transition:transform .26s cubic-bezier(.4,0,.2,1),opacity .26s}
+  .panel.collapsed{transform:translateX(calc(-100% - 40px));opacity:0;pointer-events:none}
+  .panelClose{width:22px;height:22px;border-radius:6px;border:1px solid var(--line);background:rgba(255,255,255,.55);color:var(--dim);font-family:var(--mono);font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+  .panelClose:hover{color:var(--ink);border-color:var(--acc)}
+  .panelTab{position:fixed;left:0;top:88px;z-index:11;display:none;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--acc);background:var(--panel);border:1px solid var(--hair);border-left:none;border-radius:0 10px 10px 0;padding:10px 13px;cursor:pointer;backdrop-filter:blur(11px);box-shadow:0 10px 34px rgba(20,40,45,.10)}
+  .panelTab.show{display:flex}
+  .panelTab .dot{width:6px;height:6px;border-radius:50%;background:var(--self2);box-shadow:0 0 7px rgba(143,208,230,.8)}
+  .panel h3{font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;display:flex;justify-content:space-between;align-items:center;margin-bottom:13px}
+  .panel h3 .badge{color:var(--self);font-size:10px}
+  .field{margin-bottom:12px}
+  .field>label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dimmer);text-transform:uppercase;margin-bottom:6px}
+  .devrefresh{font-family:var(--mono);font-size:11px;line-height:1;color:var(--dim);background:rgba(255,255,255,.5);border:1px solid var(--line);border-radius:5px;padding:1px 5px;margin-left:6px;cursor:pointer;vertical-align:middle}
+  .devrefresh:hover{color:var(--ink);border-color:var(--acc)}
+  .devrefresh.spin{color:var(--acc)}
+  .model{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:11px;color:var(--self)}
+  .model .mdot{width:8px;height:8px;border-radius:2px;background:var(--self2);box-shadow:0 0 7px rgba(143,208,230,.8)}
+  select{width:100%;font-family:var(--mono);font-size:11px;color:var(--ink);background:rgba(255,255,255,.5);border:1px solid var(--line);border-radius:7px;padding:7px 9px;appearance:none;cursor:pointer}
+  input[type=range]{-webkit-appearance:none;width:100%;height:4px;background:rgba(20,40,45,.14);border-radius:3px;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:var(--ink);box-shadow:0 1px 3px rgba(20,40,45,.4);transition:background .15s,transform .12s}
+  input[type=range]:hover::-webkit-slider-thumb{background:var(--acc)}
+  input[type=range]:active::-webkit-slider-thumb{transform:scale(1.18);background:var(--acc)}
+  .slabel{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dimmer);text-transform:uppercase;margin-bottom:6px}
+  .slabel b{color:var(--ink);font-weight:500}
+  .conv{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;margin-top:3px;font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);background:transparent;border:1px solid var(--line);border-radius:9px;padding:10px;cursor:pointer;transition:.18s}
+  .conv[aria-pressed="true"]{color:var(--self);border-color:var(--self2);background:rgba(143,208,230,.12)}
+  .sw{position:relative;width:30px;height:15px;border-radius:100px;border:1px solid var(--line);transition:.18s}
+  .sw::after{content:"";position:absolute;top:1px;left:1px;width:11px;height:11px;border-radius:50%;background:var(--dimmer);transition:.18s}
+  .conv[aria-pressed="true"] .sw{border-color:var(--self2)} .conv[aria-pressed="true"] .sw::after{left:16px;background:var(--self2);box-shadow:0 0 7px rgba(143,208,230,.8)}
+  .pbar{position:relative;width:100%;height:5px;background:rgba(20,40,45,.12);border-radius:3px;overflow:hidden}
+  .pbar>i{position:absolute;inset:0 100% 0 0;background:linear-gradient(90deg,var(--good),#e0b54a 80%,#d6453f);transition:right .08s linear}
+
+  .dock{position:fixed;left:0;right:0;bottom:0;z-index:10;padding:14px 24px 18px;background:linear-gradient(0deg,rgba(244,247,249,.72),rgba(244,247,249,.36) 70%,rgba(244,247,249,0))}
+  .tcenter{display:flex;justify-content:center;align-items:center;gap:14px;margin-bottom:14px}
+  .recBtn,.playBtn{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;cursor:pointer;border-radius:11px;padding:12px 22px;transition:.16s;background:rgba(255,255,255,.4);border:1px solid var(--line);color:var(--ink)}
+  .recBtn .rd{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--ink)}
+  .recBtn{background:var(--self);border-color:var(--self);color:#fff} .recBtn .rd{border-color:#fff}
+  .recBtn[aria-pressed="true"]{color:#d6453f;border-color:#d6453f;background:rgba(214,69,63,.06)} .recBtn[aria-pressed="true"] .rd{background:#d6453f;border-color:#d6453f;animation:blink 1s infinite}
+  .overdub{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+  .odToggle{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;border-radius:9px;padding:8px 14px;background:rgba(255,255,255,.4);border:1px solid var(--line);color:var(--ink)}
+  .odToggle[aria-pressed="true"]{border-color:var(--ink);background:rgba(0,0,0,.05)}
+  .odRow{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .odLen{font-family:var(--mono);font-size:12px;opacity:.7}
+  .odLayers{list-style:none;margin:8px 0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .odLayers li{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px}
+  .odLayers li.muted{opacity:.4}
+  .playBtn{color:var(--acc);border-color:var(--acc);background:rgba(31,143,132,.08)}
+  .playBtn[disabled]{color:var(--dimmer);border-color:var(--line);background:transparent;cursor:default}
+  .saveline{display:flex;justify-content:center;align-items:center;gap:9px;margin:-6px 0 12px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--acc)}
+  .saveline[hidden]{display:none}
+  .saveline .ok{font-weight:600}
+  .reveal{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);background:rgba(255,255,255,.4);border:1px solid var(--line);border-radius:7px;padding:4px 9px;cursor:pointer;transition:.16s}
+  .reveal:hover{color:var(--acc);border-color:var(--acc)}
+  .vtune .vtrow{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .vtune select{font-family:var(--mono);font-size:10px;padding:4px 7px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.45);color:var(--ink)}
+  .vt{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase}
+  .vt input[type=range]{width:62px}
+  .vt b{min-width:22px;text-align:right;color:var(--dim);font-size:10px}
+  /* fixed-width readout column → live values (Sung/Choir/Hz) changing or flickering never reflow the
+     Key/Scale/Ensemble groups to the right (kills the jitter); content stays on one line. */
+  .rocol{flex:0 0 360px;width:360px;min-width:360px}
+  .readout .r{white-space:nowrap}
+  .sung{display:inline-block;min-width:34px} .hz{display:inline-block;min-width:52px}
+  .readout .harm{display:inline-block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+  @keyframes blink{50%{opacity:.3}}
+
+  .lower{display:flex;align-items:flex-end;gap:18px 30px;flex-wrap:wrap}
+  .readout{font-family:var(--mono)}
+  .readout .r{display:flex;align-items:baseline;gap:9px;margin-bottom:2px}
+  .readout .lbl{font-size:10px;letter-spacing:.2em;color:var(--dimmer);width:52px;text-transform:uppercase}
+  .readout .sung{font-size:24px;font-weight:600;color:var(--self);min-width:62px}
+  .readout .hz{font-size:10px;color:var(--dim)}
+  .readout .harm{font-size:13px;font-weight:500;color:var(--ink)}
+  .mcRow{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .mcRow .mcKey{width:20px;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .mcRow select{flex:1;min-width:0;font-size:11px;padding:2px 4px}
+  .tuning{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dimmer);text-transform:uppercase;margin-top:5px}
+  .tuning .lbl{width:52px}
+  .cents{position:relative;width:120px;height:13px;border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.3)}
+  .centerline{position:absolute;left:50%;top:2px;bottom:2px;width:1px;background:var(--dim)}
+  .needle{position:absolute;top:1px;bottom:1px;width:3px;border-radius:2px;background:var(--acc);left:50%;transform:translateX(-50%);transition:left .07s,background .25s}
+  .tuning b{color:var(--ink);min-width:34px}
+  .meter{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dimmer);margin-top:7px}
+  .bar{position:relative;width:120px;height:3px;background:rgba(20,40,45,.12);border-radius:2px;overflow:hidden}
+  .bar>i{position:absolute;inset:0 100% 0 0;background:linear-gradient(90deg,var(--acc),var(--self2));transition:right .12s linear}
+
+  .group{display:flex;flex-direction:column;gap:7px}
+  .group>.cap{font-family:var(--mono);font-size:10px;letter-spacing:.22em;color:var(--dimmer);text-transform:uppercase}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .chip{font-family:var(--mono);font-size:11px;color:var(--dim);background:rgba(255,255,255,.32);border:1px solid var(--line);border-radius:7px;padding:7px 10px;cursor:pointer;transition:.16s;user-select:none}
+  .chip:hover{border-color:var(--acc);color:var(--ink)}
+  .chip:active,.toggle:active,.harm:active,.conv:active,.recBtn:active,.playBtn:active,.reveal:active,.ptab:active,.odToggle:active,.newtake:active{transform:scale(.97)}
+  .chip[aria-pressed="true"]{color:#fff;background:var(--ink);border-color:var(--ink);font-weight:600}
+  .chip.key[aria-pressed="true"]{background:var(--self2);border-color:var(--self2);color:#0c2730}
+  .toggle{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);background:rgba(255,255,255,.32);border:1px solid var(--line);border-radius:7px;padding:7px 11px;cursor:pointer;transition:.16s}
+  .toggle[aria-pressed="true"]{color:var(--acc);border-color:var(--acc);background:rgba(31,143,132,.1)}
+  .harm{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);background:rgba(255,255,255,.32);border:1px solid var(--line);border-radius:9px;padding:9px 14px;cursor:pointer;transition:.18s}
+  .harm[aria-pressed="true"]{color:var(--acc);border-color:var(--acc);background:rgba(31,143,132,.12)}
+  .harm[aria-pressed="true"] .sw{border-color:var(--acc)} .harm[aria-pressed="true"] .sw::after{left:16px;background:var(--acc);box-shadow:0 0 7px rgba(31,143,132,.6)}
+  /* secondary mode switches (Free/Solo/Exciter): one tier below the primary Harmonize when off; full accent when on */
+  .harm.sub{font-size:10px;padding:8px 12px} .harm.sub:not([aria-pressed="true"]){color:var(--dimmer);border-color:var(--hair)}
+  /* Task 3.3: Advanced disclosure — dev/research controls hidden by default; main row stays the perform surface */
+  .advtoggle{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dimmer);background:transparent;border:1px solid var(--hair);border-radius:9px;padding:8px 12px;cursor:pointer;transition:.16s}
+  .advtoggle:hover{color:var(--ink);border-color:var(--line)}
+  .advtoggle[aria-expanded="true"]{color:var(--acc);border-color:var(--acc)}
+  .advrow{flex-basis:100%;width:100%;display:none;align-items:flex-end;gap:18px 30px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px dashed var(--hair)}
+  .advrow.open{display:flex}
+  #spread{width:118px}
+
+  .scorepanel{display:none;margin-top:12px} body.hastake .scorepanel{display:block}
+  .scorehead{display:flex;align-items:center;gap:16px;margin-bottom:9px}
+  .scorehead .t{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dimmer);text-transform:uppercase}
+  #score{width:100%;height:92px;display:block;border:1px solid var(--hair);border-radius:10px;background:rgba(255,255,255,.42)}
+  .transport2{display:flex;align-items:center;gap:18px;margin-top:10px;flex-wrap:wrap}
+  .parts{display:flex;gap:6px}
+  .ptab{font-family:var(--mono);font-size:11px;color:var(--dim);background:rgba(255,255,255,.32);border:1px solid var(--line);border-radius:7px;padding:7px 12px;cursor:pointer;transition:.16s}
+  .ptab[aria-pressed="true"]{border-color:var(--ink);color:#fff;background:var(--ink);font-weight:600}
+  .newtake{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);background:rgba(255,255,255,.32);border:1px solid var(--line);border-radius:9px;padding:8px 13px;cursor:pointer}
+  .out{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dimmer);display:flex;align-items:center;gap:8px}
+  .out b{color:var(--acc)}
+
+  .hlabel{position:fixed;z-index:8;pointer-events:none;transform:translate(-50%,-100%);text-align:center;transition:opacity .2s}
+  .hlabel .n{font-size:21px;font-weight:500;color:var(--labelink);line-height:1}
+  .hlabel .nt{font-family:var(--mono);font-size:11px;color:#46535b;margin-top:5px;letter-spacing:.08em}
+  .hlabel.off{opacity:.4} .hlabel.you .n{font-weight:600}
+  .hlabel.soon{opacity:.45} .hlabel.soon .n{color:var(--dimmer)} .hlabel.soon .nt{color:var(--acc);letter-spacing:.14em;text-transform:uppercase;font-size:10px}
+  .hlabel .xn{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--acc);margin-left:5px;vertical-align:super;letter-spacing:0}
+
+  .modelbadge{position:fixed;right:18px;bottom:16px;z-index:11;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);background:rgba(252,253,254,.5);border:1px solid var(--hair);border-radius:100px;padding:5px 11px;display:flex;align-items:center;gap:7px;backdrop-filter:blur(8px)}
+  .modelbadge .d{width:6px;height:6px;border-radius:50%;background:var(--dimmer)}
+  .modelbadge.ok .d{background:var(--good);box-shadow:0 0 6px rgba(47,163,122,.6)}
+  .modelbadge.fb .d{background:#e0a23a}
+  /* one-time discoverability hint (Task 3.4): heads are clickable / keys 1–5 toggle voices */
+  .starthint{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:12;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);background:var(--panel);border:1px solid var(--hair);border-radius:100px;padding:8px 15px;backdrop-filter:blur(11px);box-shadow:0 10px 34px rgba(20,40,45,.10);opacity:0;transition:opacity .6s;pointer-events:none}
+  .starthint.show{opacity:1}
+
+  @media (max-width:900px){ .panel{display:none} }
+  @media (prefers-reduced-motion: reduce){ .dot{box-shadow:none}
+    .chip:active,.toggle:active,.harm:active,.conv:active,.recBtn:active,.playBtn:active,.reveal:active,.ptab:active,.odToggle:active,.newtake:active,input[type=range]:active::-webkit-slider-thumb{transform:none} }
+</style>
+<!-- Space Grotesk bundled locally (Task 3.2: exhibition reliability — no Google Fonts CDN dependency) -->
+<link href="/app/assets/font.css" rel="stylesheet">
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="labels"></div>
+  <div class="modelbadge" id="modelBadge"><span class="d"></span>HEAD · loading…</div>
+  <div class="starthint" id="startHint">Click a head to toggle a voice&nbsp;·&nbsp;keys 1–5</div>
+
+  <div class="top">
+    <div class="brand"><div class="name">SOLO&nbsp;CHOIR</div><div class="sub">a choir of one</div></div>
+    <div class="spacer"></div>
+    <div class="stat">
+      <span>KEY&nbsp;<b id="statKey">C major</b></span>
+      <span class="pill" id="liveLat"><span class="dot"></span>LIVE&nbsp;·&nbsp;12&nbsp;MS</span>
+      <span class="pill" id="statEngine"><span class="dot"></span>ENGINE&nbsp;·&nbsp;ACTIVE</span>
+    </div>
+  </div>
+
+  <button class="panelTab" id="panelTab" title="Show Voice panel" aria-label="Show Voice panel"><span class="dot"></span>Voice&nbsp;›</button>
+  <aside class="panel" id="voicePanel">
+    <h3><span>Voice&nbsp;·&nbsp;轉換</span><span style="display:flex;align-items:center;gap:8px"><span class="badge">Beatrice v2</span><button class="panelClose" id="panelClose" title="Collapse panel" aria-label="Collapse panel">‹</button></span></h3>
+    <div class="field"><label>Your model</label><select id="modelSel"></select></div>
+    <div class="field"><label>Input device <button class="devrefresh" id="devRefresh" title="Re-scan audio devices (hot-plug)" aria-label="Re-scan audio devices">↻</button></label><select id="inDev"><option>— no devices —</option></select></div>
+    <div class="field"><div class="slabel">Input level <b id="inLvlV">−∞ dB</b></div><div class="pbar"><i id="inBar"></i></div></div>
+    <div class="field"><label>Output device</label><select id="outDev"><option>— no devices —</option></select></div>
+    <div class="field"><label>MIDI keyboard <button class="devrefresh" id="midiRefresh" title="Re-scan MIDI devices (hot-plug)" aria-label="Re-scan MIDI devices">↻</button></label><select id="midiDev"><option value="">— not connected —</option></select></div>
+    <div class="field"><label>MIDI harmony mode</label><select id="midiMode"><option value="chord">A · Chord-hold (play the notes)</option><option value="key">B · White key → custom chord</option></select></div>
+    <div class="field" id="midiChordEditor" style="display:none"><label>Mode B chords · white keys</label><div id="midiChordRows"></div></div>
+    <div class="field"><div class="slabel">Pitch · formant-preserving <b id="pitchV">0 st</b></div><input type="range" id="pitch" min="-12" max="12" value="0" step="1"></div>
+    <div class="field"><div class="slabel">Output gain <b id="outGV">+0 dB</b></div><input type="range" id="outG" min="-12" max="12" value="0" step="1"></div>
+    <div class="field"><div class="slabel">Noise gate <b id="gateV">−48 dB</b></div><input type="range" id="gate" min="-70" max="-20" value="-48" step="1"></div>
+    <button class="conv" id="convBtn" aria-pressed="true"><span class="sw"></span>Convert</button>
+  </aside>
+
+  <div class="dock">
+    <div class="tcenter">
+      <button class="recBtn" id="recBtn" aria-pressed="false"><span class="rd"></span>Record</button>
+      <button class="playBtn" id="playBtn" disabled>▶&nbsp;&nbsp;Play</button>
+    </div>
+    <div class="saveline" id="saveLine" hidden>
+      <span class="ok">✓</span><span id="saveName">Saved</span>
+      <button class="reveal" id="revealBtn">Reveal</button>
+      <button class="reveal" id="renderBtn" hidden>Render SATB</button>
+      <span id="renderStat" class="ok" hidden></span>
+      <button class="reveal" id="renderReveal" hidden>Reveal SATB</button>
+      <button class="reveal" id="exportMidiBtn" hidden>Export MIDI</button>
+      <span id="midiStat" class="ok" hidden></span>
+      <button class="reveal" id="midiReveal" hidden>Reveal MIDI</button>
+      <button class="reveal" id="arrangeBtn" hidden>Arrange</button>
+      <span id="arrangeStat" class="ok" hidden></span>
+      <button class="reveal" id="arrangePlay" hidden>Play arrangement</button>
+    </div>
+    <div class="overdub" id="overdubPanel">
+      <button class="odToggle" id="odToggle" aria-pressed="false">＋ Overdub · 疊錄</button>
+      <div class="odBody" id="odBody" hidden>
+        <div class="odRow">
+          <button class="recBtn" id="odRecBtn" aria-pressed="false"><span class="rd"></span>Record layer</button>
+          <button class="playBtn" id="odPlayBtn">▶&nbsp;&nbsp;Loop</button>
+          <span class="odLen" id="odLen">—</span>
+        </div>
+        <ol class="odLayers" id="odLayers"></ol>
+        <div class="odRow">
+          <button class="reveal" id="odExportBtn">Export</button>
+          <button class="reveal" id="odClearBtn">Clear all</button>
+        </div>
+      </div>
+    </div>
+    <div class="lower">
+      <div class="rocol">
+        <div class="readout">
+          <div class="r"><span class="lbl">Sung</span><span class="sung" id="roSung">—</span><span class="hz" id="roHz"></span></div>
+          <div class="r"><span class="lbl" id="roHarmLbl">Choir</span><span class="harm" id="roHarm">—</span></div>
+          <div class="r"><span class="lbl">Held</span><span class="harm" id="midiChord">—</span></div>
+        </div>
+        <div class="tuning" id="tuneRow"><span class="lbl" id="tuneLbl">Tuning</span><div class="cents" id="tuneBar"><div class="centerline"></div><div class="needle" id="needle"></div></div><b id="centsV">0¢</b></div>
+        <div class="meter"><span>OUT</span><div class="bar"><i id="meterFill"></i></div></div>
+      </div>
+      <div class="group"><span class="cap">Key</span><div class="chips" id="keyChips"></div></div>
+      <div class="group"><span class="cap">Scale</span><div class="chips">
+        <button class="toggle" id="scaleMaj" aria-pressed="true">Major</button>
+        <button class="toggle" id="scaleMin" aria-pressed="false">Minor</button>
+      </div></div>
+      <div class="group"><span class="cap">Space · 殿堂</span><input type="range" id="space" min="0" max="100" value="0"></div>
+      <button class="harm" id="harmBtn" aria-pressed="true"><span class="sw"></span>Harmonize</button>
+      <button class="harm sub" id="freeBtn" aria-pressed="true" title="free harmony: the interval bends to fit the auto-inferred chord (instead of a fixed parallel interval)"><span class="sw"></span>Free</button>
+      <button class="harm sub" id="soloBtn" aria-pressed="false" title="low-latency SOLO: You + one converted voice, small buffers (~46ms on the aggregate device) — vs the full choir"><span class="sw"></span>Solo</button>
+      <button class="harm sub" id="exciterBtn" aria-pressed="true" title="Exciter (R channel) = the choir radiating from the body. Turn off to mute R for learn/monitoring — bone-conduction (L) is unaffected."><span class="sw"></span>Exciter</button>
+      <button class="advtoggle" id="advToggle" aria-expanded="false" aria-controls="advRow" title="Per-voice tuning + study logging (advanced)">Advanced&nbsp;⌄</button>
+      <!-- Task 3.3: dev/research controls tucked behind a disclosure so the main row is the performance surface -->
+      <div class="advrow" id="advRow">
+        <div class="group vtune"><span class="cap">Voice · tune</span>
+          <div class="vtrow">
+            <select id="vtPart" title="part to tune"></select>
+            <span class="vt">iv<input type="range" id="vtIv" min="-9" max="9" step="1"><b id="vtIvV">0</b></span>
+            <span class="vt">oct<input type="range" id="vtOct" min="-2" max="2" step="1"><b id="vtOctV">0</b></span>
+            <span class="vt">fmt<input type="range" id="vtFmt" min="-2" max="2" step="0.5"><b id="vtFmtV">0</b></span>
+          </div>
+        </div>
+        <div class="harm" id="studyCtl" title="Study (子) logging: who is practising (subject) and through which delivery channel — written to recordings/practice_log.csv with each practice attempt." style="gap:8px;cursor:default">
+          <span>Study</span>
+          <input id="studySubject" placeholder="subject" autocomplete="off" style="width:62px;background:transparent;border:none;border-bottom:1px solid var(--line);color:var(--ink);font:inherit;text-transform:none;letter-spacing:0;padding:1px 2px">
+          <select id="studyChannel" style="background:transparent;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;text-transform:none;letter-spacing:0;padding:2px 4px">
+            <option value="bone">bone</option><option value="headphone">headphone</option><option value="speaker">speaker</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="scorepanel">
+      <div class="scorehead"><span class="t">Take 01 · transcribed</span><span class="t" id="scoreMeta"></span></div>
+      <canvas id="score"></canvas>
+      <div class="transport2">
+        <div class="parts">
+          <button class="ptab" data-p="melody" aria-pressed="false">Melody</button>
+          <button class="ptab" data-p="harmony" aria-pressed="false">Choir</button>
+          <button class="ptab" data-p="both" aria-pressed="true">All</button>
+        </div>
+        <button class="newtake" id="newTake">↺ New take</button>
+        <div class="out">OUTPUT&nbsp;→&nbsp;<b>Bone-conduction</b></div>
+      </div>
+    </div>
+  </div>
+
+<!-- three.js + GLTFLoader bundled locally (Task 3.2: no CDN → no blank-stage risk if the network is down at the exhibition) -->
+<script src="/app/assets/three.min.js"></script>
+<script src="/app/assets/GLTFLoader.js"></script>
+<script>
+/* ===== 3D HEAD MODEL =================================================
+   For Claude Code / pywebview: swap MODEL_URL to a LOCAL file, e.g.
+       const MODEL_URL = "./assets/head.glb";
+   (a local file removes any CORS/CDN dependency). If the model can't
+   load for any reason, the app falls back to the procedural glass head.
+   MODEL_ROT_Y / MODEL_TILT let you face the head toward the camera (+Z).
+===================================================================== */
+const MODEL_URL  = "/app/assets/head.glb";  // real head bust (see app/assets/CREDITS.md), served by app/shell.py. Set "" → procedural fallback head.
+const MODEL_ROT_Y = 0;      // radians, if the face points the wrong way
+const MODEL_TILT  = 0;      // radians, x-axis nod
+const MODEL_TARGET_H = 4.4; // scale the whole head+neck bust to this height (head portion ≈ 1/3 of screen)
+// crop the bust to "shoulders and up": glass fades out below CROP_Y0 (world Y), fully solid above CROP_Y1
+const CROP_Y0 = 0.30, CROP_Y1 = 1.00;
+
+const NOTES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const MAJOR=[0,2,4,5,7,9,11], MINOR=[0,2,3,5,7,8,10];
+const parts=[
+  {name:'Bass', steps:-4, octave:-1, model:'jvs', speaker:47, formant:0, x:-3.0, color:0x4f74c4, on:true },
+  {name:'Tenor',steps:-2, octave:0,  model:'jvs', speaker:69, formant:0, x:-1.5, color:0x2f9d92, on:true },
+  {name:'You',  steps: 0, octave:0,  x: 0.0, color:0xdff1fb, on:false, you:true},   // choir launches --no-you → You head starts dim (honest); click it / Solo turns You on live
+  {name:'Alto', steps: 2, octave:0,  model:'female', speaker:0, formant:0, x: 1.5, color:0x6478d8, on:true},
+  {name:'Sop',  steps: 4, octave:0,  model:'jvs', speaker:61, formant:0, x: 3.0, color:0x9a7bd0, on:true},
+];
+const state={ keyRoot:0,minor:false,harmonize:true,convert:true,pitch:0, part:'both',
+  recording:false, hasTake:false, playing:false, ensemble:1, spread:0.35, autoChord:true, lowlat:false, exciter:true,   // Task 2.2: chord-aware (voice-leading) harmony is the default
+  subject:'', channel:'bone' };   // (子) study: per-attempt independent variables logged with each practice attempt
+const scl=()=>state.minor?MINOR:MAJOR;
+const midiName=m=>{const r=Math.round(m);return NOTES[((r%12)+12)%12]+(Math.floor(r/12)-1);};
+const midiHz=m=>440*Math.pow(2,(m-69)/12);
+function diatonicShift(midi,steps){const sc=scl(),root=state.keyRoot;const pc=((Math.round(midi)-root)%12+12)%12;let idx=0,best=99;
+  for(let i=0;i<sc.length;i++){const d=Math.min(((pc-sc[i])%12+12)%12,((sc[i]-pc)%12+12)%12);if(d<best){best=d;idx=i;}}
+  const bo=Math.floor((Math.round(midi)-root)/12);let a=bo*sc.length+idx+steps;const oct=Math.floor(a/sc.length),w=((a%sc.length)+sc.length)%sc.length;return root+oct*12+sc[w];}
+
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setSize(innerWidth,innerHeight); renderer.setClearColor(0x000000,0);
+document.getElementById('stage').appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+const CAM_R = 8;       // camera orbit radius (closer → bigger heads)
+const TARGET_X = 0;    // choir centered (the left Voice panel is collapsible instead of shifting the row)
+const FACE_K = 0.18; // each head turns toward the center (yaw = -FACE_K*x); You (x=0) faces straight forward
+const camera=new THREE.PerspectiveCamera(55,innerWidth/innerHeight,0.1,100); camera.position.set(TARGET_X,1.5,CAM_R);
+const rootG=new THREE.Group(); scene.add(rootG);
+
+function glowTex(hex){const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d');const col='#'+hex.toString(16).padStart(6,'0');
+  const gr=g.createRadialGradient(64,64,0,64,64,64);gr.addColorStop(0,col);gr.addColorStop(.25,col);gr.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=gr;g.beginPath();g.arc(64,64,64,0,7);g.fill();return new THREE.CanvasTexture(c);}
+
+function proceduralHeadGeo(seg){const g=new THREE.SphereGeometry(0.5,seg,seg),p=g.attributes.position,v=new THREE.Vector3();
+  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i);let sx=0.84,sy=1.12,sz=0.90;v.set(v.x*sx,v.y*sy,v.z*sz);
+    const u=v.y/(0.5*sy);if(u<0){const t=Math.min(1,-u);v.x*=(1-0.28*t*t);v.z*=(v.z>0?(1-0.14*t*t):(1-0.30*t*t));}
+    if(v.z>0)v.z*=0.94; else v.z*=1.03; p.setXYZ(i,v.x,v.y,v.z);}
+  g.computeVertexNormals();return g;}
+const HEAD_LO=proceduralHeadGeo(20);          // used for ensemble ghosts (cheap)
+const neckGeo=new THREE.CylinderGeometry(0.15,0.205,0.42,28,1,true);
+const shoulderGeo=(()=>{const g=new THREE.SphereGeometry(0.5,40,28),p=g.attributes.position,v=new THREE.Vector3();
+  for(let i=0;i<p.count;i++){v.fromBufferAttribute(p,i);v.set(v.x*1.42,v.y*0.46,v.z*0.82);p.setXYZ(i,v.x,v.y,v.z);}g.computeVertexNormals();return g;})();
+
+// normalize an arbitrary loaded head geometry: center at origin, scale to target height, face +Z
+function normalizeHeadGeo(geo){
+  geo=geo.clone();
+  geo.rotateY(MODEL_ROT_Y); geo.rotateX(MODEL_TILT);
+  geo.computeBoundingBox(); const bb=geo.boundingBox;
+  const c=new THREE.Vector3(); bb.getCenter(c); geo.translate(-c.x,-c.y,-c.z);
+  const size=new THREE.Vector3(); bb.getSize(size); const s=MODEL_TARGET_H/(size.y||1); geo.scale(s,s,s);
+  geo.computeVertexNormals(); return geo;
+}
+
+function glassMat(hex,side,f0,f1){return new THREE.ShaderMaterial({uniforms:{uColor:{value:new THREE.Color(hex)},uOp:{value:0.5},uF0:{value:(f0!==undefined?f0:0.1)},uF1:{value:(f1!==undefined?f1:0.95)}},
+  vertexShader:'varying vec3 vN;varying vec3 vV;varying float vY;void main(){vec4 wp=modelMatrix*vec4(position,1.0);vY=wp.y;vec4 mv=modelViewMatrix*vec4(position,1.0);vN=normalize(normalMatrix*normal);vV=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',
+  fragmentShader:'uniform vec3 uColor;uniform float uOp;uniform float uF0;uniform float uF1;varying vec3 vN;varying vec3 vV;varying float vY;void main(){float f=pow(1.0-abs(dot(normalize(vN),normalize(vV))),2.0);float fade=smoothstep(uF0,uF1,vY);float a=(0.04+f*0.95)*uOp*fade;gl_FragColor=vec4(mix(uColor,vec3(1.0),0.3)*(0.65+f*1.25),a);}',
+  transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,side:side||THREE.FrontSide});}
+
+function makeBust(hex, headGeo, isModel){
+  const grp=new THREE.Group();
+  const cs=isModel?1.7:1;                              // glow scale, matched to the larger model head
+  // crop to shoulders-and-up: fade the bust out below shoulder height (see CROP_Y0/CROP_Y1)
+  const shellMat=isModel?glassMat(hex,THREE.FrontSide,CROP_Y0,CROP_Y1):glassMat(hex);
+  const shell=new THREE.Mesh(headGeo,shellMat); shell.position.y=1.42; grp.add(shell);
+  let wire=null, neckMat=null, shMat=null;
+  if(!isModel){
+    // procedural head keeps its wireframe + inner lattice + neck + shoulders
+    wire=new THREE.Mesh(headGeo,new THREE.MeshBasicMaterial({color:hex,wireframe:true,transparent:true,opacity:0.12,blending:THREE.AdditiveBlending,depthWrite:false})); wire.position.y=1.42; wire.scale.setScalar(1.006); grp.add(wire);
+    const inner=new THREE.Mesh(HEAD_LO,new THREE.MeshBasicMaterial({color:hex,wireframe:true,transparent:true,opacity:0.08,blending:THREE.AdditiveBlending,depthWrite:false})); inner.position.y=1.42; inner.scale.setScalar(0.8); grp.add(inner);
+    const neck=new THREE.Mesh(neckGeo,glassMat(hex,THREE.DoubleSide)); neck.position.y=0.82; grp.add(neck); neckMat=neck.material;
+    const sh=new THREE.Mesh(shoulderGeo,glassMat(hex,THREE.DoubleSide)); sh.position.y=0.5; grp.add(sh); shMat=sh.material;
+  }
+  // model mode: head shell + core glow + ensemble halo only (LeePerrySmith already includes its own neck)
+  const core=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex(hex),color:hex,transparent:true,opacity:0.25,blending:THREE.AdditiveBlending,depthWrite:false})); core.scale.set(1.1*cs,1.3*cs,1); core.position.y=1.42; grp.add(core);
+  // ensemble ×N: a faint outer diffuse halo (size/intensity = spread) instead of sphere-wireframe ghosts — never covers the face
+  const halo=new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex(hex),color:hex,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false})); halo.scale.set(2.0*cs,2.2*cs,1); halo.position.set(0,1.42,-0.3); grp.add(halo);
+  grp.scale.setScalar(0.82);
+  grp.userData={shellMat,wire,core,neckMat,shMat,halo,glow:cs};
+  return grp;
+}
+
+const pickables=[]; const heads=[];
+const labelsEl=document.getElementById('labels');
+let started=false;
+let LABEL_Y=2.05*0.82;   // vertical offset of the floating label above each head (set per-mode in init)
+function init(headGeo, isModel, badge){
+  if(started)return; started=true;
+  LABEL_Y = isModel ? (1.42+MODEL_TARGET_H/2)*0.82+0.18 : 2.05*0.82;  // clear the taller model head
+  parts.forEach(pt=>{
+    const grp=makeBust(pt.color, headGeo, isModel); grp.position.x=pt.x; rootG.add(grp);
+    pickables.push({mesh:grp.userData.shell || grp.children[0], grp, part:pt}); heads.push({grp,part:pt});
+    const lab=document.createElement('div'); lab.className='hlabel'+(pt.you?' you':'')+(pt.soon?' soon':'')+(pt.on?'':' off');
+    lab.innerHTML='<div class="n">'+pt.name+'<sup class="xn" data-xn></sup></div><div class="nt" data-note>'+(pt.soon?'coming soon':'—')+'</div>';
+    labelsEl.appendChild(lab); pt._lab=lab; pt._note=lab.querySelector('[data-note]'); pt._xn=lab.querySelector('[data-xn]');
+  });
+  // store shell mesh ref for picking
+  heads.forEach((h,i)=>{ pickables[i].mesh=h.grp.children[0]; });
+  const mb=document.getElementById('modelBadge');
+  mb.className='modelbadge '+(isModel?'ok':'fb'); mb.innerHTML='<span class="d"></span>'+badge;
+  tick();
+}
+
+/* ---- attempt to load the .glb, else fall back to the procedural head ---- */
+(function loadHead(){
+  const proc=()=>init(proceduralHeadGeo(48), false, 'HEAD · procedural');
+  if(typeof THREE==='undefined'){ return; }
+  if(!MODEL_URL){ proc(); return; }                       // empty MODEL_URL → use the smooth procedural head
+  if(typeof THREE.GLTFLoader!=='function'){ proc(); return; }
+  let done=false; const fb=()=>{ if(!done){done=true; proc();} };
+  const to=setTimeout(fb, 9000); // network too slow → fallback
+  try{
+    new THREE.GLTFLoader().load(MODEL_URL, gltf=>{
+      if(done)return; done=true; clearTimeout(to);
+      // pick the LARGEST mesh (skips small parts like separate eyeballs) and bake its node transform
+      gltf.scene.updateMatrixWorld(true);
+      let src=null,best=-1;
+      gltf.scene.traverse(o=>{ if(o.isMesh&&o.geometry&&o.geometry.attributes.position){const c=o.geometry.attributes.position.count; if(c>best){best=c;src=o;}} });
+      if(src){ const g=src.geometry.clone(); g.applyMatrix4(src.matrixWorld); init(normalizeHeadGeo(g), true, 'HEAD · model'); }
+      else proc();
+    }, undefined, ()=>{ clearTimeout(to); fb(); });
+  }catch(e){ clearTimeout(to); fb(); }
+})();
+
+const phrase=[0,2,4,2,0,4,5,7,5,4,7,9,7,5,4,2,0,-1];   // still used by the Record→take demo (step 5)
+let curMidi=null;   // live sung MIDI from telemetry (null = unvoiced)
+const degToMidi=deg=>{const sc=scl(),o=Math.floor(deg/sc.length),w=((deg%sc.length)+sc.length)%sc.length;return 60+state.keyRoot+o*12+sc[w]+state.pitch;};
+
+const $=id=>document.getElementById(id);
+const keyChips=$('keyChips');
+NOTES.forEach((n,i)=>{const b=document.createElement('button');b.className='chip key';b.textContent=n;b.setAttribute('aria-pressed',i===state.keyRoot?'true':'false');
+  b.onclick=()=>{state.keyRoot=i;[...keyChips.children].forEach((c,j)=>c.setAttribute('aria-pressed',j===i?'true':'false'));refresh();};keyChips.appendChild(b);});
+function togglePart(pt){ if(pt.soon)return; pt.on=!pt.on; pt._lab.classList.toggle('off',!pt.on); }   // You is now toggleable too; soon parts are blocked
+function toggleHarmonize(){state.harmonize=!state.harmonize;$('harmBtn').setAttribute('aria-pressed',state.harmonize?'true':'false');}
+function toggleFree(){state.autoChord=!state.autoChord;$('freeBtn').setAttribute('aria-pressed',state.autoChord?'true':'false');}
+function toggleSolo(){ state.lowlat=!state.lowlat; $('soloBtn').setAttribute('aria-pressed',state.lowlat?'true':'false');
+  // reflect the engine's You: Solo relaunches WITHOUT --no-you (You + 1 voice → You on); choir uses --no-you (You off).
+  const _y=parts.find(p=>p.you); if(_y){ _y.on=state.lowlat; if(_y._lab)_y._lab.classList.toggle('off',!_y.on); }
+  try{ if(window.pywebview&&pywebview.api&&pywebview.api.set_lowlat) pywebview.api.set_lowlat(state.lowlat); }catch(e){} }
+function toggleExciter(){ state.exciter=!state.exciter; $('exciterBtn').setAttribute('aria-pressed',state.exciter?'true':'false');
+  try{ if(window.pywebview&&pywebview.api&&pywebview.api.exciter) pywebview.api.exciter(state.exciter); }catch(e){} }
+$('scaleMaj').onclick=()=>{state.minor=false;$('scaleMaj').setAttribute('aria-pressed','true');$('scaleMin').setAttribute('aria-pressed','false');refresh();};
+$('scaleMin').onclick=()=>{state.minor=true;$('scaleMin').setAttribute('aria-pressed','true');$('scaleMaj').setAttribute('aria-pressed','false');refresh();};
+$('harmBtn').onclick=toggleHarmonize;
+$('freeBtn').onclick=toggleFree;
+$('soloBtn').onclick=toggleSolo;
+$('exciterBtn').onclick=toggleExciter;
+// Task 3.3: Advanced disclosure toggle (Voice·tune + Study)
+{ const at=$('advToggle'); if(at) at.onclick=()=>{ const r=$('advRow'); if(!r)return; const open=r.classList.toggle('open'); at.setAttribute('aria-expanded',open?'true':'false'); at.innerHTML='Advanced&nbsp;'+(open?'⌃':'⌄'); }; }
+$('studySubject').oninput=e=>{state.subject=e.target.value.trim();};   // (子) study IVs logged per attempt
+$('studyChannel').value=state.channel; $('studyChannel').onchange=e=>{state.channel=e.target.value;};
+$('convBtn').onclick=()=>{state.convert=!state.convert;$('convBtn').setAttribute('aria-pressed',state.convert?'true':'false');
+  // ENGINE pill is now telemetry-driven (real subprocess state), not this local boolean; only the
+  // latency capsule dims when you stop converting.
+  $('liveLat').classList.toggle('off',!state.convert);};
+$('pitch').oninput=e=>{state.pitch=+e.target.value;$('pitchV').textContent=(state.pitch>0?'+':'')+state.pitch+' st';};
+$('outG').oninput=e=>$('outGV').textContent=(e.target.value>0?'+':'')+e.target.value+' dB';
+$('gate').oninput=e=>$('gateV').textContent=e.target.value+' dB';
+function refresh(){$('statKey').textContent=NOTES[state.keyRoot]+' '+(state.minor?'minor':'major');}
+refresh();
+// Task 3.4: show the head/keys hint once per browser, then fade out (localStorage-gated).
+try{ if(!localStorage.getItem('sc_hint_v1')){ const _h=$('startHint');
+  if(_h){ requestAnimationFrame(()=>_h.classList.add('show')); setTimeout(()=>_h.classList.remove('show'),6500); localStorage.setItem('sc_hint_v1','1'); } } }catch(e){}
+
+// collapsible Voice panel — collapse to hand the full width to the choir (Bass stays clickable)
+function setPanel(open){$('voicePanel').classList.toggle('collapsed',!open);$('panelTab').classList.toggle('show',!open);}
+$('panelClose').onclick=()=>setPanel(false);
+$('panelTab').onclick=()=>setPanel(true);
+
+
+let take={melody:[],parts:[],dur:0}, playT=0;
+let recCap=null;   // {t0, samples:[{t,m}]} — live pitch contour captured while recording (m=null=unvoiced)
+function activeHarm(){return parts.filter(p=>!p.you&&p.on);}
+// turn the captured pitch contour into note blocks: round to nearest semitone, merge consecutive
+// equal pitches into one block, drop ultra-short blips (an unvoiced frame breaks the current run).
+function segmentMelody(samples){const out=[];let cur=null;
+  for(const s of samples){const m=(s.m==null)?null:Math.round(s.m);
+    if(m==null){if(cur){out.push(cur);cur=null;}continue;}
+    if(cur&&cur.m===m){cur.d=s.t-cur.t;}else{if(cur)out.push(cur);cur={t:s.t,d:0,m};}}
+  if(cur)out.push(cur);
+  return out.filter(n=>n.d>=0.06).map(n=>({t:n.t,d:Math.max(n.d,0.08),m:n.m}));}
+// build the take from what was actually sung (telemetry), not the old hard-coded phrase. Choir lines
+// = the melody shifted by each active voice's diatonic interval (same pitch logic as the audio).
+function buildTake(){const s=recCap?recCap.samples:[];
+  take.melody=segmentMelody(s);
+  take.parts=activeHarm().map(p=>({color:p.color,notes:take.melody.map(n=>({t:n.t,d:n.d,m:diatonicShift(n.m,p.steps)}))}));
+  take.dur=(s.length?s[s.length-1].t:0)||1;}
+$('recBtn').onclick=()=>{const r=$('recBtn');
+  if(!state.recording){state.recording=true;state.playing=false;r.setAttribute('aria-pressed','true');r.lastChild.textContent='Stop';
+    {const sl=$('saveLine');if(sl)sl.hidden=true;}   // clear the previous "Saved ✓" when a new take starts
+    recCap={t0:clock.elapsedTime,samples:[]};        // start capturing the live pitch contour for the score
+    window.__solochoir_play&&window.__solochoir_play(false); window.__solochoir_record&&window.__solochoir_record(true);}
+  else{state.recording=false;r.setAttribute('aria-pressed','false');r.lastChild.textContent='Record';
+    window.__solochoir_record&&window.__solochoir_record(false);
+    buildTake();state.hasTake=true;document.body.classList.add('hastake');playT=0;$('playBtn').disabled=false;
+    $('scoreMeta').textContent=NOTES[state.keyRoot]+(state.minor?' minor':' major')+' · You + '+activeHarm().length+' voice(s)'+(state.ensemble>1?' ×'+state.ensemble:'');setPart('both');drawScore(0);}};
+$('playBtn').onclick=()=>{if(!state.hasTake)return;state.playing=!state.playing;if(state.playing&&playT>=take.dur)playT=0;$('playBtn').innerHTML=state.playing?'❚❚&nbsp;&nbsp;Pause':'▶&nbsp;&nbsp;Play';
+  window.__solochoir_play&&window.__solochoir_play(state.playing);};
+$('newTake').onclick=()=>{state.hasTake=false;state.playing=false;state.practice=false;state.practicePart=null;try{pywebview.api.play_file&&pywebview.api.play_file('');}catch(e){}clearPartTabs();document.body.classList.remove('hastake');$('playBtn').disabled=true;$('playBtn').innerHTML='▶&nbsp;&nbsp;Play';
+  window.__solochoir_play&&window.__solochoir_play(false);};
+// ===== Manual overdub (separate transport; never touches Record/Play above) =====
+const od={mode:false,rec:false,play:false,n:0,muted:new Set()};
+function odSendMute(){ try{pywebview.api.od_mute&&pywebview.api.od_mute([...od.muted]);}catch(e){} }
+function odRenderLayers(){ const ol=$('odLayers'); if(!ol)return; ol.innerHTML='';
+  for(let i=0;i<od.n;i++){ const li=document.createElement('li'); const m=od.muted.has(i); if(m)li.className='muted';
+    const lab=document.createElement('span'); lab.textContent='Layer '+(i+1); li.appendChild(lab);
+    const mb=document.createElement('button'); mb.className='reveal'; mb.textContent=m?'Unmute':'Mute';
+    mb.onclick=()=>{ m?od.muted.delete(i):od.muted.add(i); odSendMute(); odRenderLayers(); };
+    const sb=document.createElement('button'); sb.className='reveal'; sb.textContent='Solo';
+    sb.onclick=()=>{ od.muted=new Set([...Array(od.n).keys()].filter(j=>j!==i)); odSendMute(); odRenderLayers(); };
+    const db=document.createElement('button'); db.className='reveal'; db.textContent='Delete';
+    db.onclick=()=>{ try{pywebview.api.od_delete&&pywebview.api.od_delete(i);}catch(e){} od.muted.delete(i); };
+    li.append(mb,sb,db); ol.appendChild(li); } }
+{ const t=$('odToggle'); if(t) t.onclick=()=>{ od.mode=!od.mode; t.setAttribute('aria-pressed',od.mode); $('odBody').hidden=!od.mode;
+    try{pywebview.api.od_enter&&pywebview.api.od_enter(od.mode);}catch(e){}
+    if(!od.mode){ od.rec=od.play=false; const r=$('odRecBtn'),p=$('odPlayBtn');
+      if(r){r.setAttribute('aria-pressed',false);r.lastChild.textContent='Record layer';} if(p)p.innerHTML='▶&nbsp;&nbsp;Loop'; } }; }
+{ const r=$('odRecBtn'); if(r) r.onclick=()=>{ od.rec=!od.rec; r.setAttribute('aria-pressed',od.rec);
+    r.lastChild.textContent=od.rec?'Stop':'Record layer'; try{pywebview.api.od_record&&pywebview.api.od_record(od.rec);}catch(e){} }; }
+{ const p=$('odPlayBtn'); if(p) p.onclick=()=>{ od.play=!od.play; p.innerHTML=od.play?'❚❚&nbsp;&nbsp;Stop':'▶&nbsp;&nbsp;Loop';
+    try{pywebview.api.od_play&&pywebview.api.od_play(od.play);}catch(e){} }; }
+{ const e=$('odExportBtn'); if(e) e.onclick=()=>{ try{pywebview.api.od_export&&pywebview.api.od_export();}catch(x){} }; }
+{ const c=$('odClearBtn'); if(c) c.onclick=()=>{ try{pywebview.api.od_clear&&pywebview.api.od_clear();}catch(x){} od.muted.clear(); }; }
+window.onOverdubSaved=function(d){ if(d&&d.od_saved){ const e=$('odExportBtn'); if(e){e.textContent='Saved ✓'; setTimeout(()=>{e.textContent='Export';},2000);} } };
+function odTelemetry(t){ if(!t||!od.mode||typeof t.od_count!=='number')return;
+  if(t.od_count!==od.n){ od.n=t.od_count; odRenderLayers(); }
+  const len=t.od_len_s||0, tt=t.od_t||0, e=$('odLen'); if(e) e.textContent= len? (tt.toFixed(1)+' / '+len.toFixed(1)+'s') : '—'; }
+const partsOn=new Set();   // Track A: part tabs that are ON (multi-select You/Bass/Tenor/Alto/Sop); their SUM plays
+let _attempt=null;   // Phase 4: running stats for the current practice attempt (one harmony part, continuous)
+function flushAttempt(){ const a=_attempt; _attempt=null;
+  if(!a||a.voiced<1.0) return;   // ignore trivially short attempts
+  try{ pywebview.api.log_practice&&pywebview.api.log_practice({ part:a.part, key:NOTES[state.keyRoot],
+    scale:state.minor?'minor':'major', voiced_s:a.voiced, match_pct:a.matched/a.voiced,
+    mean_abs_cents:a.absC/a.voiced, on_target_s:a.matched, subject:state.subject, channel:state.channel }); }catch(e){} }
+function lightTabs(){ const tabs=[...document.querySelectorAll('.ptab[data-stem]')];
+  document.querySelectorAll('.ptab').forEach(b=>{
+    if(b.dataset.stem) b.setAttribute('aria-pressed', partsOn.has(b.dataset.p)?'true':'false');
+    else if(b.dataset.all) b.setAttribute('aria-pressed', (tabs.length>0&&partsOn.size===tabs.length)?'true':'false');
+    else b.setAttribute('aria-pressed', (partsOn.size===0&&b.dataset.p===state.part)?'true':'false'); }); }
+function _playSel(){   // play the SUM of the on parts; target feedback ONLY when exactly one HARMONY part is on
+  state.part=null; state.practice=true;
+  const only=partsOn.size===1?[...partsOn][0]:null;
+  state.practicePart=(only&&only!=='you')?(parts.find(q=>q.name&&q.name.toLowerCase()===only)||null):null;
+  lightTabs(); drawScore(playT);
+  const paths=[...document.querySelectorAll('.ptab[data-stem]')].filter(b=>partsOn.has(b.dataset.p)).map(b=>b.dataset.stem);
+  try{pywebview.api.play_mix&&pywebview.api.play_mix(paths);}catch(e){}
+  window.__solochoir_play&&window.__solochoir_play(true); state.playing=true;
+  const pb=$('playBtn'); if(pb){pb.disabled=false; pb.innerHTML='❚❚&nbsp;&nbsp;Pause';} }
+function selectTake(p){   // Melody / Choir / Both — the in-memory take (radio; pre-render basic playback)
+  partsOn.clear(); state.part=p; state.practice=false; state.practicePart=null;
+  lightTabs(); drawScore(playT);
+  window.__solochoir_part&&window.__solochoir_part(p); }
+function togglePartTab(name){ if(partsOn.has(name)) partsOn.delete(name); else partsOn.add(name);
+  if(partsOn.size===0){ selectTake('both'); return; } _playSel(); }      // nothing on → back to the take
+function selectAll(){ const tabs=[...document.querySelectorAll('.ptab[data-stem]')];
+  if(tabs.length&&partsOn.size===tabs.length){ selectTake('both'); return; }   // already all on → toggle All off → back to take
+  partsOn.clear(); tabs.forEach(b=>partsOn.add(b.dataset.p)); if(partsOn.size) _playSel(); }
+const setPart=selectTake;   // back-compat alias (buildTake / keyboard call setPart('both'))
+document.querySelectorAll('.ptab').forEach(b=>b.onclick=()=>selectTake(b.dataset.p));   // static Melody/Choir/Both (pre-render)
+
+const cv=$('score'),ctx=cv.getContext('2d');
+function sizeScore(){const r=cv.getBoundingClientRect();if(!r.width)return;cv.width=r.width*devicePixelRatio;cv.height=r.height*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);}
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+function hexC(h){return '#'+h.toString(16).padStart(6,'0');}
+function drawScore(ph){if(!state.hasTake)return;sizeScore();const W=cv.width/devicePixelRatio,H=cv.height/devicePixelRatio;ctx.clearRect(0,0,W,H);
+  let all=take.melody.map(n=>n.m);take.parts.forEach(p=>p.notes.forEach(n=>all.push(n.m)));if(!all.length)return;
+  const lo=Math.min(...all)-2,hi=Math.max(...all)+2,span=hi-lo;const pad=10,x0=pad,x1=W-pad,y0=H-pad,y1=pad;
+  const tx=t=>x0+(t/take.dur)*(x1-x0),ty=m=>y0+((m-lo)/span)*(y1-y0);
+  ctx.strokeStyle='rgba(20,40,45,0.08)';ctx.lineWidth=1;for(let m=Math.ceil(lo);m<=hi;m++){if(((m%12)+12)%12===state.keyRoot){ctx.beginPath();ctx.moveTo(x0,ty(m));ctx.lineTo(x1,ty(m));ctx.stroke();}}
+  const dn=(arr,col,show)=>{if(!show)return;arr.forEach(n=>{const x=tx(n.t),w=Math.max(6,(n.d/take.dur)*(x1-x0)-3),y=ty(n.m),lit=state.playing&&ph>=n.t&&ph<n.t+n.d;
+    ctx.fillStyle=col;ctx.globalAlpha=lit?1:0.55;rr(x,y-5,w,10,4);ctx.fill();ctx.globalAlpha=1;});};
+  if(state.part!=='melody')take.parts.forEach(p=>dn(p.notes,hexC(p.color),true));
+  dn(take.melody,'#8fd0e6',state.part!=='harmony');
+  if(state.playing){ctx.strokeStyle='rgba(31,42,50,0.55)';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(tx(ph),y1);ctx.lineTo(tx(ph),y0);ctx.stroke();}}
+
+const ray=new THREE.Raycaster(),mouse=new THREE.Vector2();
+let tAz=0,tEl=0,az=0,el=0,drag=false,px=0,py=0,moved=0,hovered=null;
+const onUI=e=>e.target.closest('.dock,.panel,.top,.modelbadge');
+function pickAt(cx,cy){if(!pickables.length)return null;mouse.x=(cx/innerWidth)*2-1;mouse.y=-(cy/innerHeight)*2+1;ray.setFromCamera(mouse,camera);const hit=ray.intersectObjects(pickables.map(p=>p.mesh),false);return hit.length?pickables.find(p=>p.mesh===hit[0].object):null;}
+addEventListener('pointerdown',e=>{if(onUI(e))return;drag=true;px=e.clientX;py=e.clientY;moved=0;});
+addEventListener('pointerup',e=>{drag=false;if(onUI(e))return;if(moved<6&&!state.playing){const p=pickAt(e.clientX,e.clientY);if(p)togglePart(p.part);}});   // clicking You toggles You (Harmonize is the button)
+addEventListener('pointermove',e=>{
+  if(drag){moved+=Math.abs(e.clientX-px)+Math.abs(e.clientY-py);tAz+=(e.clientX-px)*0.004;tEl+=(e.clientY-py)*0.002;px=e.clientX;py=e.clientY;tEl=Math.max(-0.08,Math.min(0.3,tEl));return;}
+  if(onUI(e)){hovered=null;document.body.style.cursor='';return;}
+  tAz=(e.clientX/innerWidth-0.5)*0.22;tEl=(e.clientY/innerHeight-0.5)*0.08;
+  hovered=(!state.playing)?pickAt(e.clientX,e.clientY):null; document.body.style.cursor=hovered?'pointer':'';});
+
+const tmpV=new THREE.Vector3();
+function placeLabels(){parts.forEach(pt=>{const h=heads.find(x=>x.part===pt);if(!h)return;h.grp.getWorldPosition(tmpV);tmpV.y+=LABEL_Y;tmpV.project(camera);
+  pt._lab.style.left=((tmpV.x*0.5+0.5)*innerWidth)+'px';pt._lab.style.top=((-tmpV.y*0.5+0.5)*innerHeight)+'px';});}
+
+const clock=new THREE.Clock();
+let g={};parts.forEach(p=>g[p.name]=0.12);
+let inLvl=0, lastLatMs=-1, lastRtf=-1;
+function tick(){
+  const dt=clock.getDelta(),t=clock.elapsedTime;
+  const RAW=window.__telemetry||null;
+  // live mic telemetry is usable when NOT playing, OR in practice mode (sing against a soloed target)
+  const T=(!state.playing||state.practice)?RAW:null;
+  const voiced=!!(T&&T.voiced);
+  if(state.recording&&recCap)   // side-record the sung pitch (per frame) → real score on Stop
+    recCap.samples.push({t:clock.elapsedTime-recCap.t0,m:(voiced&&state.convert)?T.midi:null});
+  if(state.playing){
+    // Track A: the playhead follows the engine's REAL loop position (exact sync) when reported,
+    // else falls back to its own clock. take.dur == the engine's real take length (set in onSaved).
+    if(RAW&&typeof RAW.play_t==='number'&&RAW.play_t>=0){ playT=RAW.play_t; }
+    else { playT+=dt; if(playT>=take.dur)playT=0; }
+    drawScore(playT);
+    if(state.practice){   // ear-trainer: show YOUR live sung pitch (to match against the playing target)
+      curMidi=(voiced&&state.convert)?T.midi:null;
+      if(curMidi!=null){$('roSung').textContent=midiName(curMidi);$('roHz').textContent=Math.round(T.f0)+' Hz';}
+      else{$('roSung').textContent='—';$('roHz').textContent='';}
+    } else {              // normal take playback: show the take's transcribed note under the playhead
+      const inM=take.melody.find(n=>playT>=n.t&&playT<n.t+n.d); if(inM){$('roSung').textContent=midiName(inM.m);$('roHz').textContent=Math.round(midiHz(inM.m))+' Hz';}
+    }
+  } else {
+    curMidi=(voiced&&state.convert)?T.midi:null;   // real sung pitch from telemetry (no demo loop)
+    if(curMidi!=null){$('roSung').textContent=midiName(curMidi);$('roHz').textContent=Math.round(T.f0)+' Hz';
+      const tv=(T&&T.voices)||[];const hs=tv.map(v=>v.part+' '+midiName(v.midi));$('roHarm').textContent=(state.harmonize&&hs.length)?hs.join('   '):'—';}   // honest names from engine (Task 1.2), not JS-derived
+    else{$('roSung').textContent='—';$('roHz').textContent='';$('roHarm').textContent='—';}
+  }
+
+  // INPUT LEVEL from real telemetry.level (mic RMS), smoothed; idle→empty when not singing/playing
+  const lvlTgt=T?Math.max(0,Math.min(1,T.level)):0;
+  inLvl+=(lvlTgt-inLvl)*Math.min(1,dt*8);
+  $('inBar').style.right=(100-Math.round(inLvl*100))+'%';
+  $('inLvlV').textContent=inLvl<0.01?'−∞ dB':(Math.round(20*Math.log10(inLvl))+' dB');
+
+  // Phase 2 ear-trainer (note-match): in practice mode the feedback is "did you hit the TARGET NOTE"
+  // (octave-folded), NOT a twitchy cents needle. Target = the soloed part's diatonic note off the
+  // recorded melody at the current loop position (same pitch logic the engine rendered the stem with).
+  if(state.practice && state.practicePart){
+    $('tuneRow').style.display=''; $('tuneBar').style.display='none'; $('tuneLbl').textContent='Match'; $('roHarmLbl').textContent='Target';
+    const mN=voiced?take.melody.find(n=>playT>=n.t&&playT<n.t+n.d):null;
+    const tgt=mN?diatonicShift(mN.m, state.practicePart.steps):null;
+    if(tgt!=null){
+      let e=T.midi-tgt; e-=12*Math.round(e/12); const ec=e*100;          // octave-folded cents to target
+      const matched=Math.abs(ec)<40;                                     // wide zone = "got the note" (calm; not chasing cents)
+      $('roHarm').textContent=midiName(tgt);
+      $('roSung').style.color=matched?'var(--good)':'';                  // your note turns green when you hit it
+      $('centsV').textContent=matched?'✓':(ec>0?'♯ high':'♭ low');       // 3 calm states + a quiet direction hint
+      $('centsV').style.color=matched?'var(--good)':'var(--acc)';
+      if(state.playing){ const nm=state.practicePart.name.toLowerCase(); // Phase 4: accumulate this attempt's on-target stats
+        if(!_attempt||_attempt.part!==nm){ flushAttempt(); _attempt={part:nm,voiced:0,matched:0,absC:0}; }
+        _attempt.voiced+=dt; _attempt.absC+=Math.abs(ec)*dt; if(matched)_attempt.matched+=dt; }
+    } else { $('roHarm').textContent='—'; $('roSung').style.color=''; $('centsV').textContent='—'; $('centsV').style.color=''; }
+  } else {
+    // live / non-practice: the chromatic cents tuner was removed (twitchy + no fixed reference for solo
+    // a cappella). The whole row is hidden; Sung / Choir / level carry the live readout.
+    if(_attempt)flushAttempt();                                          // Phase 4: left single-part practice → log the attempt
+    $('tuneRow').style.display='none'; $('roHarmLbl').textContent='Choir'; $('roSung').style.color='';
+  }
+
+  // LIVE capsule: real engine mouth-to-ear latency from telemetry (§6.4)
+  // LIVE pill: real mouth-to-ear latency + per-block RTF (from telemetry.rtf). Watch RTF climb as
+  // voices are added — amber ≥0.7, red ≥0.9 (approaching the real-time limit → live ≤ ~3 parts).
+  if(T&&T.latency_ms>0){const ms=Math.round(T.latency_ms);const rtf=(T.rtf!=null?+T.rtf:0);
+    if(ms!==lastLatMs||Math.abs(rtf-lastRtf)>=0.01){lastLatMs=ms;lastRtf=rtf;
+      const col=rtf>=0.9?'#d6453f':(rtf>=0.7?'#c98a2e':'var(--acc)');
+      $('liveLat').innerHTML='<span class="dot"></span>LIVE&nbsp;·&nbsp;'+ms+'&nbsp;MS&nbsp;·&nbsp;'
+        +'<b style="color:'+col+'">RTF&nbsp;'+rtf.toFixed(2)+'</b>';}}
+
+  const breath=reduced?0:Math.sin(t*0.55)*0.06;
+  const yaw=reduced?0:Math.sin(t*0.16)*0.08;
+
+  parts.forEach(pt=>{const hh=heads.find(x=>x.part===pt);if(!hh)return;const h=hh.grp;
+    let active;
+    if(state.playing){ if(pt.you) active=state.part!=='harmony'&&take.melody.some(n=>playT>=n.t&&playT<n.t+n.d);
+                       else active=pt.on&&state.part!=='melody'&&take.parts.some(P=>P.color===pt.color&&P.notes.some(n=>playT>=n.t&&playT<n.t+n.d)); }
+    else active=voiced && state.convert && pt.on && (pt.you || state.harmonize);   // You independent; harmony needs Harmonize
+    const target=pt.on?(active?(pt.you?0.7:0.6):(pt.you?0.18:0.28)):0.0;           // off → dark
+    g[pt.name]+=(target-g[pt.name])*Math.min(1,dt*2.5);
+    const hov=hovered&&hovered.part===pt;
+    const e=g[pt.name]+(pt.on||pt.you?breath:0)+(hov?0.25:0);
+    h.rotation.y=-FACE_K*pt.x+yaw;
+    const on=pt.on;   // You uses pt.on like every other voice now
+    const cs=h.userData.glow;
+    const ens=state.ensemble, haloOn=on&&active&&ens>1;
+    h.userData.shellMat.uniforms.uOp.value=(on?0.42:0.14)+e*0.55;
+    if(h.userData.neckMat) h.userData.neckMat.uniforms.uOp.value=(on?0.42:0.14)+e*0.55;
+    if(h.userData.shMat) h.userData.shMat.uniforms.uOp.value=(on?0.42:0.14)+e*0.55;
+    h.userData.core.material.opacity=((on?0.18:0.03)+e*0.4+(haloOn?0.10+0.04*ens:0))*(cs>1?0.55:1);
+    h.userData.core.scale.set((1.1+e*0.4+(haloOn?0.12*ens:0))*cs,(1.3+e*0.5+(haloOn?0.12*ens:0))*cs,1);
+    if(h.userData.wire) h.userData.wire.material.opacity=(on?0.1:0.05)+e*0.1;
+    // ensemble ×N: brighten core + a faint outer diffuse halo (spread = size/intensity). no face-covering ghosts.
+    const halo=h.userData.halo;
+    const haloTgt=haloOn?(0.05+0.13*state.spread)*(0.55+e)*(1+(ens-2)*0.16):0;
+    halo.material.opacity+=(haloTgt-halo.material.opacity)*Math.min(1,dt*4);
+    const hs=(2.0+state.spread*1.6+(ens-1)*0.2)*cs;
+    halo.scale.set(hs,hs*1.08,1);
+    if(pt.soon)return;   // blocked part: keep the static "coming soon" label, no live note/×N
+    pt._xn.textContent=(ens>1&&on)?('×'+ens):'';
+    if(pt.you) pt._note.textContent=(state.convert&&curMidi!=null)?midiName(curMidi):'—';
+    else { const _tv=(T&&T.voices)||[]; const _mv=_tv.find(v=>v.part===pt.name);   // honest per-head name from engine (Task 1.2)
+           pt._note.textContent=_mv?midiName(_mv.midi):'—'; }
+  });
+
+  const meterE=Math.max(...parts.map(p=>g[p.name]))+breath; $('meterFill').style.right=(100-Math.round(Math.max(0,Math.min(1,meterE))*100))+'%';
+
+  placeLabels();
+  az+=(tAz-az)*0.05;el+=(tEl-el)*0.05;
+  camera.position.x=TARGET_X+Math.sin(az)*CAM_R;camera.position.z=Math.cos(az)*CAM_R;camera.position.y=1.5+el*2.0;
+  camera.lookAt(TARGET_X,1.15,0);
+  renderer.render(scene,camera);requestAnimationFrame(tick);
+}
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);drawScore(playT);});
+
+/* ===== §6.2 control / telemetry bridge (pywebview js_api) =====================
+   Plumbing only. The UI still runs its demo loop — step 3 swaps demo → live by
+   reading window.__telemetry here. No-op in a plain browser (no window.pywebview). */
+(function(){
+  // engine → UI : Python calls window.onTelemetry(t) ~30/s with the §2 telemetry dict
+  window.__telemetry=null; window.__telemetryCount=0;
+  window.onTelemetry=function(t){ window.__telemetry=t; window.__telemetryCount++; try{odTelemetry(t);}catch(e){}
+    // watchdog: the pill reflects the REAL engine subprocess state (not a local boolean). Dead → red
+    // 'STOPPED' + reason + a manual Reconnect button; recovered → restore.
+    if(t){ const dead=t.engine_alive===false; const pill=$('statEngine'); if(pill){
+      pill.classList.toggle('off',dead);
+      pill.innerHTML='<span class="dot"></span>ENGINE&nbsp;·&nbsp;'+(dead?'STOPPED':'ACTIVE');
+      let rc=$('reconnectBtn');
+      if(dead && !rc){ rc=document.createElement('button'); rc.id='reconnectBtn'; rc.className='reveal';
+        rc.textContent='Reconnect'; rc.style.marginLeft='10px'; rc.style.pointerEvents='auto';
+        rc.onclick=()=>{ try{pywebview.api.reconnect&&pywebview.api.reconnect();}catch(e){} };
+        pill.after(rc);
+        if(t.stop_reason){ const r=document.createElement('span'); r.id='stopReason'; r.className='stat';
+          r.style.color='#d6453f'; r.textContent=t.stop_reason; rc.after(r); } }
+      else if(!dead && rc){ rc.remove(); const sr=$('stopReason'); if(sr) sr.remove(); } } } };
+  // engine → UI : a finalized take landed on disk → show "Saved ✓ <name>" + a Reveal button
+  window.onSaved=function(d){ if(!d||!d.saved)return; const el=$('saveLine'); if(!el)return;
+    { const ok=el.querySelector('.ok'); if(ok){ok.textContent='✓';ok.style.color='';} const rb=$('revealBtn'); if(rb) rb.hidden=false; }   // recover from a prior 'Save failed'
+    if(d.dur>0&&take&&take.melody&&take.melody.length){ take.dur=d.dur; drawScore(playT); }  // Track A: real take length → playhead & notes share the audio timeline
+    $('saveName').textContent='Saved  '+String(d.saved).split('/').pop()+(d.stems?'  (+stems)':'');
+    el.dataset.path=d.saved; el.hidden=false;
+    { const rb=$('renderBtn'); if(rb){ rb.hidden=!d.stems; rb.dataset.stems=d.stems||''; } }
+    { const st=$('renderStat'); if(st) st.hidden=true; }      // clear any prior SATB status
+    { const rv=$('renderReveal'); if(rv) rv.hidden=true; }
+    { const mb=$('exportMidiBtn'); if(mb){ mb.hidden=!d.stems; mb.dataset.stems=d.stems||''; } }
+    { const ms=$('midiStat'); if(ms) ms.hidden=true; }        // clear any prior MIDI status
+    { const mr=$('midiReveal'); if(mr) mr.hidden=true; }
+    { const ab=$('arrangeBtn'); if(ab){ ab.hidden=!d.stems; ab.dataset.stems=d.stems||''; } }
+    { const as=$('arrangeStat'); if(as) as.hidden=true; }     // clear any prior arrange status
+    { const ap=$('arrangePlay'); if(ap) ap.hidden=true; } };
+  window.onSaveFailed=function(d){ const el=$('saveLine'); if(!el)return;   // Task 1.4: honest failure state
+    el.hidden=false; const ok=el.querySelector('.ok'); if(ok){ok.textContent='✕';ok.style.color='#d6453f';}
+    $('saveName').textContent='Save failed'+(d&&d.save_failed?': '+d.save_failed:'');
+    const rb=$('revealBtn'); if(rb) rb.hidden=true;   // no file on disk → no Reveal (Play still works: in-memory take)
+    el.dataset.path=''; };
+  { const rb=$('revealBtn'); if(rb) rb.onclick=()=>{ const p=$('saveLine').dataset.path;
+      if(p&&window.pywebview&&pywebview.api&&pywebview.api.reveal) pywebview.api.reveal(p); }; }
+  { const rb=$('renderBtn'); if(rb) rb.onclick=()=>{ const p=rb.dataset.stems;
+      if(p&&window.pywebview&&pywebview.api&&pywebview.api.render_satb) pywebview.api.render_satb(p); }; }
+  // Track A ear-trainer: after a render, expose per-part solo buttons. Each plays one isolated stem
+  // (harmony-only, that part soloed) so a learner can sing along; the live tuning needle keeps working
+  // because the engine still analyses the mic during playback. 'Take' returns to the in-memory mix.
+  function partOf(path){ const f=String(path).split('/').pop().replace(/\.wav$/i,''); const i=f.indexOf('_satb_'); return i<0?f:f.slice(i+6); }
+  // Phase 3 — per-part practice tabs live in the SAME row as Melody/Choir/Both (added after a render).
+  // Clicking a part tab solos that stem and enters practice (target = that part) — handled in setPart().
+  function addPartTabs(stems, youPath){ const row=document.querySelector('.parts'); if(!row) return;
+    row.querySelectorAll('.ptab[data-stem],.ptab[data-all]').forEach(b=>b.remove()); partsOn.clear();   // fresh render
+    row.querySelectorAll('.ptab:not([data-stem]):not([data-all])').forEach(b=>b.style.display='none');  // hide Melody/Choir/Both
+    const mk=(name,stem)=>{ const b=document.createElement('button'); b.className='ptab'; b.dataset.p=name; b.dataset.stem=stem; b.setAttribute('aria-pressed','false');
+      b.textContent=name.replace(/^\w/,c=>c.toUpperCase()); b.onclick=()=>togglePartTab(name); row.appendChild(b); };
+    if(youPath) mk('you', youPath);
+    (Array.isArray(stems)?stems:[]).forEach(s=>mk(partOf(s).toLowerCase(), s));
+    const all=document.createElement('button'); all.className='ptab'; all.dataset.all='1'; all.textContent='All'; all.setAttribute('aria-pressed','false'); all.onclick=()=>selectAll(); row.appendChild(all);
+    lightTabs(); }
+  function clearPartTabs(){ partsOn.clear(); const row=document.querySelector('.parts'); if(!row)return;
+    row.querySelectorAll('.ptab[data-stem],.ptab[data-all]').forEach(b=>b.remove());
+    row.querySelectorAll('.ptab:not([data-stem]):not([data-all])').forEach(b=>b.style.display=''); }
+  window.onRenderStatus=function(d){ if(!d)return; const s=$('renderStat'), rv=$('renderReveal');
+    if(d.state==='rendering'){ s.hidden=false; s.textContent='Rendering…'; rv.hidden=true; }
+    else if(d.state==='done'){ s.hidden=false; s.textContent='SATB ✓'; rv.hidden=false; rv.dataset.path=d.mix||''; addPartTabs(d.stems, d.you); }
+    else { s.hidden=false; s.textContent='Render failed'; rv.hidden=true; } };
+  { const rv=$('renderReveal'); if(rv) rv.onclick=()=>{ const p=rv.dataset.path;
+      if(p&&window.pywebview&&pywebview.api&&pywebview.api.reveal) pywebview.api.reveal(p); }; }
+  { const mb=$('exportMidiBtn'); if(mb) mb.onclick=()=>{ const p=mb.dataset.stems;
+      if(p&&window.pywebview&&pywebview.api&&pywebview.api.export_midi) pywebview.api.export_midi(p); }; }
+  window.onMidiStatus=function(d){ if(!d)return; const s=$('midiStat'), rv=$('midiReveal');
+    if(d.state==='exporting'){ s.hidden=false; s.textContent='Exporting…'; rv.hidden=true; }
+    else if(d.state==='done'){ s.hidden=false; s.textContent='MIDI ✓'; rv.hidden=false; rv.dataset.path=d.midi||''; }
+    else { s.hidden=false; s.textContent='Export failed'; rv.hidden=true; } };
+  // Auto-arranger: arrange the take's melody into a voice-led SATB wav (server/arrange.py), then play it.
+  { const ab=$('arrangeBtn'); if(ab) ab.onclick=()=>{ const p=ab.dataset.stems;
+      if(p&&window.pywebview&&pywebview.api&&pywebview.api.arrange_take) pywebview.api.arrange_take(p); }; }
+  window.onArrangeStatus=function(d){ if(!d)return; const s=$('arrangeStat'), pl=$('arrangePlay');
+    if(!s||!pl)return;
+    if(d.state==='arranging'){ s.hidden=false; s.textContent='Arranging…'; pl.hidden=true; }
+    else if(d.state==='done'){ s.hidden=false; s.textContent='Arranged ✓'; pl.hidden=false; pl.dataset.path=d.arranged||''; pl.dataset.playing='0'; pl.textContent='Play arrangement'; }
+    else { s.hidden=false; s.textContent='Arrange failed'; pl.hidden=true; } };
+  { const pl=$('arrangePlay'); if(pl) pl.onclick=()=>{ const p=pl.dataset.path; if(!p)return;
+      const playing=pl.dataset.playing==='1';
+      try{ if(window.pywebview&&pywebview.api){
+        if(!playing){ if(pywebview.api.play_file)pywebview.api.play_file(p); if(pywebview.api.play)pywebview.api.play(true);
+          pl.dataset.playing='1'; pl.textContent='Stop'; }
+        else { if(pywebview.api.play)pywebview.api.play(false); pl.dataset.playing='0'; pl.textContent='Play arrangement'; }
+      }}catch(e){} }; }
+  { const mr=$('midiReveal'); if(mr) mr.onclick=()=>{ const p=mr.dataset.path;
+      if(p&&window.pywebview&&pywebview.api&&pywebview.api.reveal) pywebview.api.reveal(p); }; }
+
+  // UI → engine : assemble the §2 control contract and push it to Python
+  function controlState(){
+    return { convert:state.convert, you:(parts.find(p=>p.you)||{}).on===true,
+      key:state.keyRoot, scale:state.minor?'minor':'major',
+      intervals:parts.filter(p=>!p.you&&p.on).map(p=>p.steps), harmonize:state.harmonize,
+      pitch:state.pitch, gain:+$('outG').value, gate:+$('gate').value, reverb:(+$('space').value)/100,
+      auto_chord:state.autoChord===true,   // free chord-aware harmony (interval bends to fit the auto-inferred chord)
+      // SATB per-part state → engine (on / interval / octave / formant / speaker), matched by part
+      voices:parts.filter(p=>!p.you&&!p.soon).map(p=>({part:p.name, on:p.on, interval:p.steps,
+        octave:p.octave, formant:p.formant, speaker:p.speaker})) };
+  }
+  function send(){ try{ if(window.pywebview&&pywebview.api&&pywebview.api.set_control) pywebview.api.set_control(controlState()); }catch(e){} }
+  window.__solochoir_controlState=controlState;   // for tests / step 3
+  window.__solochoir_sendControl=send;
+  // per-voice tuning: pick a harmony part, adjust its interval / octave / formant live (esp. Sop,
+  // which can go sharp when sung high → nudge interval down / formant negative by ear).
+  (function(){ const sel=$('vtPart'); if(!sel) return;
+    parts.filter(p=>!p.you&&!p.soon).forEach(p=>{const o=document.createElement('option');o.value=o.textContent=p.name;sel.appendChild(o);});
+    const cur=()=>parts.find(p=>p.name===sel.value)||{};
+    const sgn=v=>(v>0?'+':'')+v;
+    function load(){const p=cur();
+      $('vtIv').value=p.steps;   $('vtIvV').textContent=sgn(p.steps);
+      $('vtOct').value=p.octave; $('vtOctV').textContent=sgn(p.octave);
+      $('vtFmt').value=p.formant;$('vtFmtV').textContent=sgn(p.formant); }
+    sel.value='Tenor'; sel.onchange=load; load();
+    $('vtIv').oninput =e=>{const p=cur();p.steps=+e.target.value;  $('vtIvV').textContent=sgn(p.steps);  send(); drawScore(playT);};
+    $('vtOct').oninput=e=>{const p=cur();p.octave=+e.target.value; $('vtOctV').textContent=sgn(p.octave); send();};
+    $('vtFmt').oninput=e=>{const p=cur();p.formant=+e.target.value;$('vtFmtV').textContent=sgn(p.formant); send();};
+  })();
+  // §6.5 transport: tell the engine to record the live mix / play it back (no live mic → no feedback)
+  window.__solochoir_record=on=>{try{if(window.pywebview&&pywebview.api&&pywebview.api.record)pywebview.api.record(!!on);}catch(e){}};
+  window.__solochoir_play=on=>{try{if(window.pywebview&&pywebview.api&&pywebview.api.play)pywebview.api.play(!!on);}catch(e){}};
+  // part tab → which stem the engine plays back ('harmony' tab == the choir stem)
+  window.__solochoir_part=p=>{const part=(p==='harmony')?'choir':p;try{if(window.pywebview&&pywebview.api){
+    if(pywebview.api.play_file)pywebview.api.play_file('');           // Track A: leave solo-stem mode → play the take
+    if(pywebview.api.set_part)pywebview.api.set_part(part);}}catch(e){}};
+  // re-send on any relevant control change (setTimeout 0 = after the existing handler updates state)
+  ['convBtn','scaleMaj','scaleMin','harmBtn','freeBtn'].forEach(id=>{const el=$(id);if(el)el.addEventListener('click',()=>setTimeout(send,0));});
+  ['pitch','outG','gate','space'].forEach(id=>{const el=$(id);if(el)el.addEventListener('input',()=>setTimeout(send,0));});
+  [keyChips].forEach(el=>{if(el)el.addEventListener('click',()=>setTimeout(send,0));});
+  addEventListener('pointerup',()=>setTimeout(send,0));   // head on/off + harmonize via head click
+  // keyboard: number keys 1–5 toggle the voices in panel order (1 Bass · 2 Tenor · 3 You · 4 Alto · 5 Sop),
+  // same path as clicking a head (togglePart → send). Ignored while typing in a field or during playback.
+  addEventListener('keydown',e=>{
+    if(/^(INPUT|SELECT|TEXTAREA)$/.test((e.target||{}).tagName)||e.metaKey||e.ctrlKey||e.altKey)return;
+    const i='12345'.indexOf(e.key); if(i<0||state.playing)return;
+    togglePart(parts[i]); send();
+  });
+
+  // device routing: list REAL devices, selecting one re-launches the engine on it
+  function populateDevices(){
+    try{
+      if(!(window.pywebview&&pywebview.api&&pywebview.api.list_devices))return;
+      pywebview.api.list_devices().then(d=>{
+        const fill=(sel,list,cur)=>{ if(!sel)return; sel.innerHTML='';
+          const L=list||[]; if(!L.length){const o=document.createElement('option');o.textContent='— no devices —';sel.appendChild(o);return;}   // Task 3.5: honest empty state, not stale fakes
+          L.forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;if(n===cur)o.selected=true;sel.appendChild(o);}); };
+        fill($('inDev'), d.inputs, d.in_name); fill($('outDev'), d.outputs, d.out_name);
+      });
+    }catch(e){}
+  }
+  function applyDevices(){ try{ if(window.pywebview&&pywebview.api&&pywebview.api.set_devices) pywebview.api.set_devices($('inDev').value,$('outDev').value); }catch(e){} }
+  ['inDev','outDev'].forEach(id=>{const el=$(id);if(el)el.addEventListener('change',applyDevices);});
+  // hot-plug: re-enumerate devices when a dropdown is opened (mousedown) or ↻ is clicked — no restart needed
+  ['inDev','outDev'].forEach(id=>{const el=$(id);if(el)el.addEventListener('mousedown',populateDevices);});
+  { const dr=$('devRefresh'); if(dr) dr.addEventListener('click',()=>{dr.classList.add('spin');populateDevices();setTimeout(()=>dr.classList.remove('spin'),300);}); }
+
+  // model selection: list paraphernalia_data_* models, selecting one re-launches the engine on it
+  function populateModels(){
+    try{
+      if(!(window.pywebview&&pywebview.api&&pywebview.api.list_models))return;
+      pywebview.api.list_models().then(d=>{ const sel=$('modelSel'); if(!sel)return; sel.innerHTML='';
+        (d.models||[]).forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;if(n===d.current)o.selected=true;sel.appendChild(o);}); });
+    }catch(e){}
+  }
+  function applyModel(){ try{ if(window.pywebview&&pywebview.api&&pywebview.api.set_model) pywebview.api.set_model($('modelSel').value); }catch(e){} }
+  { const el=$('modelSel'); if(el){ el.addEventListener('change',applyModel); el.addEventListener('mousedown',populateModels); } }
+
+  // MIDI input: list real MIDI ports; selecting one (re)opens it in the bridge. Held chord
+  // is pushed live via window.onMidi. No device → "— not connected —", rest of UI unchanged.
+  function populateMidi(){
+    try{
+      if(!(window.pywebview&&pywebview.api&&pywebview.api.list_midi))return;
+      pywebview.api.list_midi().then(d=>{
+        const sel=$('midiDev'); if(sel){ const cur=d.connected||''; sel.innerHTML='';
+          const o0=document.createElement('option');o0.value='';o0.textContent='— not connected —';if(!cur)o0.selected=true;sel.appendChild(o0);
+          (d.devices||[]).forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;if(n===cur)o.selected=true;sel.appendChild(o);}); }
+        const m=$('midiMode'); if(m&&d.mode)m.value=d.mode;
+      });
+    }catch(e){}
+  }
+  function applyMidi(){ try{ if(window.pywebview&&pywebview.api&&pywebview.api.set_midi_device) pywebview.api.set_midi_device($('midiDev').value); }catch(e){} }
+  { const el=$('midiDev'); if(el){ el.addEventListener('change',applyMidi); el.addEventListener('mousedown',populateMidi); } }
+  { const mr=$('midiRefresh'); if(mr) mr.addEventListener('click',()=>{mr.classList.add('spin');populateMidi();setTimeout(()=>mr.classList.remove('spin'),300);}); }
+  function updateMidiEditorVis(){ const mm=$('midiMode'), ed=$('midiChordEditor'); if(ed) ed.style.display=(mm&&mm.value==='key')?'':'none'; }
+  { const mm=$('midiMode'); if(mm) mm.addEventListener('change',()=>{ try{ if(window.pywebview&&pywebview.api&&pywebview.api.set_midi_mode) pywebview.api.set_midi_mode(mm.value); }catch(e){} updateMidiEditorVis(); }); }
+  // Mode B custom-chord editor: 7 white-key slots, each root + quality; saved + persisted on change.
+  function saveMidiChords(){ try{ const rows=$('midiChordRows'); if(!rows)return;
+    const slots=[...rows.children].map(r=>({pc:+r.dataset.pc, root:+r.querySelector('.mcRoot').value, quality:r.querySelector('.mcQual').value}));
+    if(window.pywebview&&pywebview.api&&pywebview.api.set_midi_chords) pywebview.api.set_midi_chords(slots); }catch(e){} }
+  function loadMidiChords(){ try{
+    if(!(window.pywebview&&pywebview.api&&pywebview.api.get_midi_chords))return;
+    pywebview.api.get_midi_chords().then(d=>{
+      const NN=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      const rows=$('midiChordRows'); if(!rows)return; rows.innerHTML='';
+      (d.slots||[]).forEach(s=>{
+        const row=document.createElement('div'); row.className='mcRow'; row.dataset.pc=s.pc;
+        const lbl=document.createElement('span'); lbl.className='mcKey'; lbl.textContent=NN[s.pc];
+        const rootSel=document.createElement('select'); rootSel.className='mcRoot';
+        NN.forEach((n,i)=>{const o=document.createElement('option');o.value=i;o.textContent=n;if(i===s.root)o.selected=true;rootSel.appendChild(o);});
+        const qSel=document.createElement('select'); qSel.className='mcQual';
+        (d.qualities||[]).forEach(q=>{const o=document.createElement('option');o.value=o.textContent=q;if(q===s.quality)o.selected=true;qSel.appendChild(o);});
+        rootSel.onchange=saveMidiChords; qSel.onchange=saveMidiChords;
+        row.appendChild(lbl); row.appendChild(rootSel); row.appendChild(qSel); rows.appendChild(row);
+      });
+    });
+  }catch(e){} }
+  window.onMidi=function(d){ if(!d)return; const c=$('midiChord'); if(!c)return;
+    const NN=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const nm=m=>NN[((m%12)+12)%12]+(Math.floor(m/12)-1);
+    c.textContent=(d.notes&&d.notes.length)?d.notes.map(nm).join(' '):'—'; };
+
+  // NOTE: no initial send() — the engine starts from its launch flags (== 3b baseline);
+  // control is pushed only when the user actually changes something.
+  if(window.pywebview){ populateDevices(); populateModels(); populateMidi(); loadMidiChords(); updateMidiEditorVis(); }
+  else addEventListener('pywebviewready',()=>{populateDevices();populateModels();populateMidi();loadMidiChords();updateMidiEditorVis();});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>v3 lab</title>
+<style>
+  :root{
+    --bg:#0e1014; --panel:#161a21; --line:#242a35; --fg:#d7dde6; --dim:#7a8494;
+    --acc:#5ec9a8; --warn:#e0b35a; --err:#e06a6a; --mono:"SF Mono",ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,"PingFang TC",sans-serif}
+  header{display:flex;align-items:center;gap:10px;padding:14px 20px;
+         border-bottom:1px solid var(--line)}
+  header h1{font-size:15px;margin:0;letter-spacing:.4px}
+  #dot{width:9px;height:9px;border-radius:50%;background:var(--dim)}
+  #dot.on{background:var(--acc);box-shadow:0 0 8px var(--acc)}
+  header .sub{color:var(--dim);font-size:12px}
+  main{display:grid;grid-template-columns:300px 1fr;gap:0;height:calc(100vh - 49px)}
+  #cfg{padding:16px 20px;border-right:1px solid var(--line);overflow-y:auto}
+  fieldset{border:1px solid var(--line);border-radius:8px;margin:0 0 14px;padding:10px 12px}
+  legend{color:var(--dim);font-size:11px;letter-spacing:.1em;padding:0 6px}
+  label{display:block;color:var(--dim);font-size:12px;margin:8px 0 2px}
+  select,input[type=text],input[type=number]{
+    width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+    border-radius:6px;padding:5px 8px;font:13px var(--mono)}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  .row{display:flex;gap:8px;align-items:center}
+  .row .v{font:12px var(--mono);color:var(--acc);min-width:44px;text-align:right}
+  .chk{display:flex;gap:8px;align-items:center;margin-top:8px;color:var(--fg);font-size:13px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:12px}
+  .seg button{flex:1;background:none;border:0;color:var(--dim);padding:6px;cursor:pointer;font-size:13px}
+  .seg button.on{background:var(--panel);color:var(--acc)}
+  #go{width:100%;padding:12px;border:0;border-radius:8px;font-size:15px;font-weight:600;
+      cursor:pointer;background:var(--acc);color:#08120e;margin-top:4px}
+  #go.stop{background:var(--err);color:#fff}
+  #right{display:flex;flex-direction:column;min-width:0}
+  #stat{display:grid;grid-template-columns:repeat(9,1fr);gap:1px;background:var(--line);
+        border-bottom:1px solid var(--line)}
+  .cell{background:var(--panel);padding:10px 14px}
+  .cell .k{color:var(--dim);font-size:11px;letter-spacing:.08em}
+  .cell .n{font:20px var(--mono);margin-top:2px}
+  .cell .n.warn{color:var(--warn)}
+  #log{flex:1;overflow-y:auto;padding:12px 16px;font:12px/1.7 var(--mono);
+       white-space:pre-wrap;word-break:break-all}
+  #log .hl{color:var(--acc)}
+  #log .warn{color:var(--warn)}
+  #log .cmd{color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <div id="dot"></div><h1>Solo Choir · v3 lab</h1>
+  <span class="sub">live_v3 引擎實驗台——Stop＝收官報表（mic dump＋命題一）</span>
+</header>
+<main>
+  <div id="cfg">
+    <div class="seg">
+      <button id="mLive" class="on" onclick="setMode('live')">live</button>
+      <button id="mFile" onclick="setMode('file')">file 重放</button>
+    </div>
+
+    <fieldset id="fsDev"><legend>DEVICES</legend>
+      <label>輸入（mic）</label><select id="inDev"><option value="">系統預設</option></select>
+      <label>輸出</label><select id="outDev"><option value="">系統預設</option></select>
+      <label>out-map（upper,lower；空＝立體聲混合）</label>
+      <input type="text" id="outMap" placeholder="例：0,1">
+      <label>dry-ch（配 out-map；空＝乾聲不出）</label>
+      <input type="number" id="dryCh" placeholder="">
+    </fieldset>
+
+    <fieldset id="fsFile" style="display:none"><legend>FILE</legend>
+      <label>輸入 wav 路徑</label>
+      <input type="text" id="fileIn" placeholder="out/loopback_0730/seg_take.wav">
+    </fieldset>
+
+    <fieldset><legend>ENGINE</legend>
+      <label>key（auto 只適合大調音階即興；<b style="color:var(--warn)">唱真歌一律填整數</b>——keydet 在真歌會鎖垃圾調，07-30 已判死）</label>
+      <input type="text" id="key" value="auto">
+      <label>lag <span class="v" id="lagV">0.60s</span></label>
+      <div class="row"><input type="range" id="lag" min="0.3" max="1.2" step="0.05" value="0.6"></div>
+      <label>gain <span class="v" id="gainV">1.5</span></label>
+      <div class="row"><input type="range" id="gain" min="0" max="4" step="0.1" value="1.5"></div>
+      <label>表現層 expr-gain（0＝舊固定顫音）<span class="v" id="exprV">1.0</span></label>
+      <div class="row"><input type="range" id="expr" min="0" max="2" step="0.1" value="1.0"></div>
+      <div class="chk"><input type="checkbox" id="ant"><label for="ant" style="margin:0">預感模式（anticipate）</label></div>
+      <label>進階參數（原樣傳給 live_v3；低延遲實驗：--hop-ms 100 --bound-ms 450 配 lag 0.35）</label>
+      <div class="row"><input type="text" id="extra" placeholder="--hop-ms 100 --bound-ms 450"></div>
+    </fieldset>
+
+    <fieldset><legend>REHEARSE（緊檔 v1）</legend>
+      <label>排練檔（含 lead 的 *_notes.json）</label>
+      <select id="reh"><option value="">關（腦即興）</option></select>
+      <label>r̂ 速度先驗（譜tick/實tick）</label>
+      <input type="number" id="rehRate" value="1.0" step="0.05">
+    </fieldset>
+
+    <button id="go" onclick="go()">Start</button>
+  </div>
+
+  <div id="right">
+    <div id="stat">
+      <div class="cell"><div class="k">IN</div><div class="n" id="sIn">–</div></div>
+      <div class="cell"><div class="k">TICKS</div><div class="n" id="sTicks">–</div></div>
+      <div class="cell"><div class="k">UPPER</div><div class="n" id="sU">–</div></div>
+      <div class="cell"><div class="k">LOWER</div><div class="n" id="sL">–</div></div>
+      <div class="cell"><div class="k">MARGIN</div><div class="n" id="sMg">–</div></div>
+      <div class="cell"><div class="k">STARVED</div><div class="n" id="sSt">–</div></div>
+      <div class="cell"><div class="k">BRAIN p95<br>(預算187)</div><div class="n" id="sBr">–</div></div>
+      <div class="cell"><div class="k">HOP p95<br>(預算150)</div><div class="n" id="sHp">–</div></div>
+      <div class="cell"><div class="k">IO 丟失<br>(入/出)</div><div class="n" id="sIo">–</div></div>
+    </div>
+    <div id="log"></div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let running = false, mode = "live";
+
+function setMode(m){
+  mode = m;
+  $("mLive").classList.toggle("on", m === "live");
+  $("mFile").classList.toggle("on", m === "file");
+  $("fsDev").style.display = m === "live" ? "" : "none";
+  $("fsFile").style.display = m === "file" ? "" : "none";
+}
+for (const [id, out, fmt] of [["lag","lagV",v=>(+v).toFixed(2)+"s"],
+                              ["gain","gainV",v=>(+v).toFixed(1)],
+                              ["expr","exprV",v=>(+v).toFixed(1)]])
+  $(id).oninput = e => $(out).textContent = fmt(e.target.value);
+
+function setRunning(on){
+  running = on;
+  $("dot").classList.toggle("on", on);
+  $("go").textContent = on ? "Stop" : "Start";
+  $("go").classList.toggle("stop", on);
+}
+
+async function go(){
+  if (running) { await fetch("/stop", {method:"POST", body:"{}"}); return; }
+  const cfg = {mode, key: $("key").value.trim() || "auto",
+               lag: +$("lag").value, gain: +$("gain").value,
+               expr_gain: +$("expr").value, anticipate: $("ant").checked,
+               rehearse: $("reh").value || null, reh_rate: +$("rehRate").value,
+               in_name: $("inDev").value || null, out_name: $("outDev").value || null,
+               out_map: $("outMap").value.trim() || null,
+               dry_ch: $("dryCh").value === "" ? null : +$("dryCh").value,
+               extra: $("extra").value.trim() || null,
+               file_in: $("fileIn").value.trim() || null};
+  const r = await (await fetch("/start", {method:"POST", body: JSON.stringify(cfg)})).json();
+  if (r.err) addLine("⚠ " + r.err, "warn"); else setRunning(true);
+}
+
+const log = $("log");
+function addLine(t, cls){
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = t;
+  log.appendChild(d);
+  while (log.childNodes.length > 600) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+const RE = /in\s+([\d.]+)s \| ticks (\d+) \| U (\S+) L (\S+) \| margin\s+(.+?) \| starved ([\d.]+)s(?: \| brain (\d+)ms hop (\d+)ms)?(?: \| io (\d+)\/(\d+))?/;
+function onLine(t){
+  if (t.startsWith("__state__")) { setRunning(t.includes("starting")); return; }
+  const m = t.match(RE);
+  if (m){
+    $("sIn").textContent = m[1] + "s"; $("sTicks").textContent = m[2];
+    $("sU").textContent = m[3]; $("sL").textContent = m[4];
+    $("sMg").textContent = m[5].trim(); $("sSt").textContent = m[6] + "s";
+    $("sSt").classList.toggle("warn", +m[6] > 0.5);
+    if (m[7] !== undefined){
+      $("sBr").textContent = m[7] + "ms"; $("sHp").textContent = m[8] + "ms";
+      $("sBr").classList.toggle("warn", +m[7] > 170);
+      $("sHp").classList.toggle("warn", +m[8] > 140);
+    }
+    if (m[9] !== undefined){
+      $("sIo").textContent = m[9] + "/" + m[10];
+      $("sIo").classList.toggle("warn", +m[9] + +m[10] > 0);
+    }
+    return;                       // 狀態列不進 console，太吵
+  }
+  const cls = t.startsWith("$") ? "cmd"
+    : /^(mic level|rehearse:|anticipation|\[keydet\]|\[rehearse\]|mic dump|wrote)/.test(t) ? "hl"
+    : t.includes("⚠") ? "warn" : "";
+  addLine(t, cls);
+}
+
+new EventSource("/events").onmessage = e => onLine(JSON.parse(e.data));
+fetch("/state").then(r=>r.json()).then(s=>setRunning(s.running));
+fetch("/devices").then(r=>r.json()).then(ds=>{
+  for (const d of ds){
+    if (d.in > 0) $("inDev").add(new Option(`${d.name}（${d.in}in）`, d.name));
+    if (d.out > 0) $("outDev").add(new Option(`${d.name}（${d.out}out）`, d.name));
+  }});
+fetch("/rehearse-files").then(r=>r.json()).then(fs=>{
+  for (const f of fs) $("reh").add(new Option(f, f));
+});
+</script>
+</body>
+</html>

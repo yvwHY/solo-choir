@@ -1,0 +1,149 @@
+<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Solo Choir — roll</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;touch-action:none;
+    font-family:ui-monospace,Menlo,monospace;color:#3a4654;background:#EEF2F7}   /* cool white */
+  #c{display:block;width:100vw;height:100vh;position:relative;z-index:0}
+  #hint{position:fixed;left:0;right:0;bottom:18px;text-align:center;font-size:12px;letter-spacing:.12em;
+    color:#8493a6;pointer-events:none}
+  #err{position:fixed;inset:0;display:none;place-items:center;text-align:center;padding:24px;font-size:14px;white-space:pre-line;color:#475569}
+  #tools{position:fixed;top:10px;left:0;right:0;display:flex;justify-content:center;gap:6px;z-index:2}
+  #tools button{font:12px ui-monospace,Menlo,monospace;color:#5b6b80;background:rgba(255,255,255,.6);border:1px solid #d3dbe6;border-radius:7px;padding:6px 10px}
+  #tools button[aria-pressed=true]{color:#fff;background:#56657a;border-color:#56657a}
+  #start{position:fixed;inset:0;z-index:3;display:grid;place-items:center;align-content:center;gap:10px;
+    text-align:center;background:rgba(238,242,247,.86);color:#3f4d5e;font-size:15px;line-height:1.7;
+    letter-spacing:.04em;transition:opacity .5s;pointer-events:auto;cursor:pointer}
+  #start span{font-size:12px;opacity:.7}
+  #start.hide{opacity:0;pointer-events:none}
+</style></head><body>
+<canvas id=c></canvas>
+<div id=tools></div>
+<div id=hint>swipe ↑↓ play · tap add/del · drag tail = length</div>
+<div id=err></div>
+<div id=start>🔊 turn off silent mode<br>tap to start<br><span>then swipe up to play</span></div>
+<script src="./score-codec.js"></script>
+<script>
+const COL={Melody:"#56657a",Sop:"#54b89c",Alto:"#9a86d4",Tenor:"#e2867f",Bass:"#6f9bd8"};  // slate lead + balanced soft quartet (gallery palette)
+const VOICES=ScoreCodec.VOICES;
+const cv=document.getElementById('c'), ctx=cv.getContext('2d');
+let SCORE=null, PPS=140, playhead=0, lo=48, hi=72, DUR=1, W=0,H=0,dpr=1;
+const LEAD=0.6;   // silent lead-in: rest position sits this many seconds BEFORE the first note (no auto-trigger)
+function fit(){ dpr=Math.min(devicePixelRatio||1,2); W=innerWidth; H=innerHeight; cv.width=W*dpr; cv.height=H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); }
+const seqOf=v=>v==="Melody"?SCORE.melody:SCORE.voices[v];
+function bounds(){ let L=127,Hh=0,d=0; for(const v of VOICES) for(const n of seqOf(v)){ L=Math.min(L,n.midi);Hh=Math.max(Hh,n.midi);d=Math.max(d,n.start+n.dur);} if(Hh<L){L=48;Hh=72;} lo=L-2;hi=Hh+2;DUR=Math.max(d,1); }
+const X=m=>20+(m-lo)/(hi-lo)*(W-40);            // pitch → x
+const Y=t=>H/2 + (t-playhead)*PPS;              // time → y (now-line at H/2)
+function drawSeq(notes,col,thick){ if(!notes||!notes.length)return;            // studio-style coloured contour line + dots (vertical)
+  const ns=[...notes].sort((a,b)=>a.start-b.start);
+  ctx.strokeStyle=col; ctx.lineWidth=thick; ctx.lineJoin="round"; ctx.lineCap="round";
+  let i=0;
+  while(i<ns.length){ let n=ns[i]; ctx.beginPath(); ctx.moveTo(X(n.midi),Y(n.start)); ctx.lineTo(X(n.midi),Y(n.start+n.dur));
+    while(i+1<ns.length && Math.abs(ns[i+1].start-(ns[i].start+ns[i].dur))<0.05){       // connect contiguous notes
+      i++; n=ns[i]; ctx.lineTo(X(n.midi),Y(n.start)); ctx.lineTo(X(n.midi),Y(n.start+n.dur)); }
+    ctx.stroke(); i++; }
+  ctx.fillStyle=col; ns.forEach(n=>{ const act=playhead>=n.start&&playhead<n.start+n.dur;   // dot at start (bigger when under the reader) + tail handle
+    ctx.beginPath(); ctx.arc(X(n.midi),Y(n.start), act?4.5:3, 0,7); ctx.fill();
+    ctx.beginPath(); ctx.arc(X(n.midi),Y(n.start+n.dur), 3, 0,7); ctx.fill(); }); }
+function draw(){ ctx.clearRect(0,0,W,H);                                       // transparent → the beige-white paper (CSS) shows through
+  ctx.strokeStyle="rgba(60,80,110,.09)"; ctx.lineWidth=1;                       // faint vertical guide columns at each used pitch
+  const cols=new Set(); for(const v of VOICES) for(const n of seqOf(v)) cols.add(n.midi);
+  cols.forEach(m=>{ const x=Math.round(X(m))+0.5; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); });
+  ctx.strokeStyle="rgba(90,110,140,.34)"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();  // reader line (now)
+  for(const v of VOICES) drawSeq(seqOf(v), COL[v], v==="Melody"?3.5:2.5); }
+function boot(){ const h=location.hash.replace(/^#/,"");   // base64url → no decodeURIComponent
+  if(!h){ showErr("No card data."); return; }
+  ScoreCodec.decodeScore(h).then(s=>{ SCORE=s; fit(); bounds(); playhead=-LEAD; draw(); })
+    .catch(e=>showErr("Couldn't read this card.\n"+e)); }
+function showErr(m){ const e=document.getElementById('err'); e.style.display="grid"; e.textContent=m; }
+addEventListener('resize',()=>{ if(SCORE){ fit(); draw(); } });
+boot();
+addEventListener('pointerdown',()=>{ const s=document.getElementById('start'); if(s)s.classList.add('hide'); },{once:true});  // fade the start hint on first touch
+</script>
+<script>
+// ===== bidirectional scrub: scroll position ↔ timeline; up-drag = forward, down-drag = reverse =====
+let drag=null, vel=0, coastRAF=0;
+function setPH(p){ playhead=Math.max(-LEAD,Math.min(DUR,p)); draw(); }
+function onPointerDown(e){ cancelAnimationFrame(coastRAF); vel=0;
+  const h=hitNote(e.clientX,e.clientY);                                                   // grab a note's tail → resize length
+  if(h && nearTail(h.note,e.clientX,e.clientY)) drag={mode:'resize',voice:h.voice,note:h.note,moved:false};
+  else drag={mode:'scrub',y:e.clientY,t:e.timeStamp,ph:playhead,_ly:e.clientY,_lt:e.timeStamp};
+  cv.setPointerCapture&&cv.setPointerCapture(e.pointerId); }
+function onPointerMove(e){ if(!drag)return;
+  if(drag.mode==='resize'){ drag.moved=true; drag.note.dur=Math.max(0.08, timeFromY(e.clientY)-drag.note.start); draw(); return; }
+  const prev=playhead; setPH(drag.ph - (e.clientY-drag.y)/PPS);             // finger up (dy<0) → advance time
+  const ddt=Math.max(1,e.timeStamp-drag._lt); vel=-(e.clientY-drag._ly)/PPS/(ddt/1000);  // playhead-sec per real sec
+  drag._ly=e.clientY; drag._lt=e.timeStamp;
+  if(window.onCross) window.onCross(prev,playhead); }
+function onPointerUp(e){ if(!drag)return; const d=drag; drag=null;
+  if(d.mode==='resize'){ d.moved ? afterEdit() : onTap(e.clientX,e.clientY); return; }    // tail-drag = length; tail-tap = delete
+  if(Math.abs((d._ly??e.clientY)-d.y)<8 && (e.timeStamp-d.t)<250){ onTap(e.clientX,e.clientY); return; }   // tap = add/delete
+  let last=performance.now();                                              // else inertial coast from release velocity
+  (function coast(now){ const dt=(now-last)/1000; last=now; vel*=Math.pow(0.94,dt*60);
+    if(Math.abs(vel)<0.02||playhead<=-LEAD||playhead>=DUR){ draw(); return; }
+    const prev=playhead; setPH(playhead+vel*dt); if(window.onCross) window.onCross(prev,playhead);
+    coastRAF=requestAnimationFrame(coast); })(performance.now()); }
+cv.addEventListener('pointerdown',onPointerDown); addEventListener('pointermove',onPointerMove); addEventListener('pointerup',onPointerUp);
+</script>
+<script src="./sf/WebAudioFontPlayer.js"></script>
+<script src="./sf/choir.js"></script>
+<script>
+// ===== choir soundfont (WebAudioFont, GM 52 Choir Aahs) =====
+// sustain model: each voice HOLDS its current note (whose head crossed the now-line) until that voice's
+// next note's head crosses — works in both scrub directions; a stopped finger holds (up to HOLD_MAX).
+let AC=null, player=null, PRESET=null, audioReady=false;
+const PRESET_VAR="_tone_0520_Aspirin_sf2_file";
+const HOLD=60, FADE=0.25;         // HOLD = loop length so a note never self-ends mid-scrub (idle cap 60s); FADE = soft tail on note-end
+const active={};                  // voice -> {note, env, g} currently sounding
+function ensureAudio(){ if(audioReady)return;
+  try{ AC=new (window.AudioContext||window.webkitAudioContext)();                   // create INSIDE the gesture — iOS only unlocks reliably then
+    player=new WebAudioFontPlayer(); PRESET=window[PRESET_VAR];
+    AC.resume(); const b=AC.createBuffer(1,1,22050),s=AC.createBufferSource(); s.buffer=b; s.connect(AC.destination); s.start(0);  // unlock
+    player.loader.decodeAfterLoading(AC,PRESET_VAR); audioReady=true;                // decode now; the 'tap to start' tap gives it time before the swipe
+  }catch(e){} }
+['pointerdown','touchend','click'].forEach(ev=>addEventListener(ev,ensureAudio));   // 'tap to start' gesture: create + unlock + decode
+function trigger(midi,gain){ if(!audioReady)return; if(AC.state==='suspended')AC.resume();
+  player.queueWaveTable(AC, AC.destination, PRESET, AC.currentTime, midi, 0.5, gain); }   // one-shot (note-add preview, Task 6)
+function voiceNoteAt(v,p){ const ns=seqOf(v);                                  // the note this voice should sound at playhead p
+  for(let i=0;i<ns.length;i++){ const n=ns[i], next=ns[i+1], end=next?next.start:(n.start+n.dur);
+    if(n.start<=p && p<end) return n; }
+  return null; }
+function startHeld(midi,gain){ const g=AC.createGain(); g.gain.value=gain; g.connect(AC.destination);   // own gain → controllable fade
+  const env=player.queueWaveTable(AC, g, PRESET, AC.currentTime, midi, HOLD, 1.0); return {env,g}; }
+function stopHeld(a){ if(!a)return; const t=AC.currentTime;                    // soft release so each note's tail fades out
+  try{ a.g.gain.cancelScheduledValues(t); a.g.gain.setValueAtTime(Math.max(0.0001,a.g.gain.value),t); a.g.gain.linearRampToValueAtTime(0.0001,t+FADE); }catch(e){}
+  try{ a.env.cancel(t+FADE+0.05); }catch(e){} }
+// each voice rings while the playhead is INSIDE its current note → audio length == the visual note length,
+// regardless of scrub speed; on leaving (playhead reaches the tail / next note) the old note fades out.
+function updateSustain(){ if(!audioReady||!SCORE)return; if(AC.state==='suspended')AC.resume();
+  for(const v of VOICES){ const g=v==="Melody"?0.6:0.4, want=voiceNoteAt(v,playhead), a=active[v];
+    if((a&&a.note)!==want){ stopHeld(a); active[v]= want ? {note:want, ...startHeld(want.midi,g)} : null; } } }
+window.onCross=function(prev,cur){ updateSustain(); };
+</script>
+<script>
+// ===== minimal editing: tap empty = add (active voice, scale-snapped), tap note = delete,
+//       drag a note's tail = change its length. Every edit re-encodes into the URL (#) — still shareable. =====
+let activeVoice="Melody";
+{ const t=document.getElementById('tools');
+  [["Melody","Mel"],["Sop","S"],["Alto","A"],["Tenor","T"],["Bass","B"]].forEach(([v,lbl])=>{
+    const b=document.createElement('button'); b.textContent=lbl; b.setAttribute('aria-pressed', v===activeVoice);
+    b.onclick=()=>{ activeVoice=v; [...t.children].forEach(c=>c.setAttribute('aria-pressed', c===b)); };
+    t.appendChild(b); }); }
+const MAJ=[0,2,4,5,7,9,11];
+function snapScale(m){ const r=(SCORE.key&&SCORE.key.root)|0; let best=m,bd=99;
+  for(let s=m-6;s<=m+6;s++){ if(MAJ.includes((((s-r)%12)+12)%12)&&Math.abs(s-m)<bd){bd=Math.abs(s-m);best=s;} } return best; }
+const pitchFromX=x=>Math.round(lo+(x-20)/(W-40)*(hi-lo));
+const timeFromY =y=>playhead+(y-H/2)/PPS;
+function hitNote(x,y){ if(!SCORE)return null; let best=null,bd=14;
+  for(const v of VOICES) for(const n of seqOf(v)){ const ny0=Y(n.start),ny1=Y(n.start+n.dur),nx=X(n.midi);
+    const onSeg=(y>=Math.min(ny0,ny1)-6&&y<=Math.max(ny0,ny1)+6), d=onSeg?Math.abs(x-nx):Math.hypot(x-nx,y-(ny0+ny1)/2);
+    if(d<bd){bd=d;best={voice:v,note:n};} } return best; }
+function nearTail(n,x,y){ return Math.abs(x-X(n.midi))<16 && Math.abs(y-Y(n.start+n.dur))<16; }
+function afterEdit(){ bounds(); draw(); ScoreCodec.encodeScore(SCORE).then(p=>history.replaceState(null,"","#"+p)); }
+function onTap(x,y){ if(!SCORE)return; const h=hitNote(x,y);
+  if(h){ const s=seqOf(h.voice), i=s.indexOf(h.note); if(i>=0){ s.splice(i,1); afterEdit(); } return; }   // delete
+  if(ScoreCodec.noteCount(SCORE)>=300) return;                                                            // cap guard
+  const t=Math.max(0,timeFromY(y)); if(t>30) return;
+  const midi=snapScale(pitchFromX(x)), note={start:t,dur:0.4,midi};                                       // add to active voice
+  (activeVoice==="Melody"?SCORE.melody:SCORE.voices[activeVoice]).push(note); ensureAudio(); trigger(midi,0.5); afterEdit(); }
+</script></body></html>

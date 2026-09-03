@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<!-- Lightweight Solo Choir UI: NO WebGL / NO three.js / NO animation loop. Pure HTML+CSS, telemetry
+     as text updated at the bridge's push rate (~12Hz). Purpose: remove the GUI's CPU draw so it stops
+     competing with the real-time audio engine (--pump) for cores → kills the contention crackle.
+     Same bridge contract as solo_choir_ui_v10.html (set_control / record / play / onTelemetry). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Solo Choir (lite)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #0f1419; color: #d7e0e8;
+         display: flex; flex-direction: column; gap: 18px; padding: 28px 32px; min-height: 100vh; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #6f8597; margin: 0; }
+  .note { font-size: 96px; font-weight: 200; line-height: 1; letter-spacing: -.02em; }
+  .note .flat { color: #5b6b78; font-size: 40px; vertical-align: super; }
+  .row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .stat { font-variant-numeric: tabular-nums; font-size: 13px; color: #8aa0b0; }
+  .stat b { color: #cfe0ec; font-weight: 600; }
+  .bar { height: 8px; background: #1d2730; border-radius: 5px; overflow: hidden; width: 240px; }
+  .bar > i { display: block; height: 100%; width: 0%; background: #4db6ac; transition: width .08s linear; }
+  .cents { width: 240px; height: 10px; background: #1d2730; border-radius: 5px; position: relative; }
+  .cents > i { position: absolute; top: -2px; width: 3px; height: 14px; background: #e0a44d; left: 50%; transition: left .08s linear; }
+  .cents::after { content:""; position:absolute; left:50%; top:0; bottom:0; width:1px; background:#33414c; }
+  fieldset { border: 1px solid #22303a; border-radius: 10px; padding: 14px 16px; }
+  legend { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #6f8597; padding: 0 6px; }
+  label { font-size: 14px; color: #c2d2de; user-select: none; }
+  select { background: #161e25; color: #d7e0e8; border: 1px solid #2a3a45; border-radius: 7px; padding: 6px 10px; font-size: 14px; }
+  .voice { display: inline-flex; align-items: center; gap: 7px; margin-right: 16px; font-size: 15px; }
+  .voice input { width: 17px; height: 17px; accent-color: #4db6ac; }
+  button { background: #1c2730; color: #d7e0e8; border: 1px solid #2f4250; border-radius: 8px;
+           padding: 9px 18px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #243340; }
+  button.on { background: #b5443a; border-color: #c4544a; color: #fff; }
+  button.play.on { background: #3a7a4a; border-color: #469356; }
+  #saved { font-size: 12px; color: #6f8597; min-height: 16px; }
+  .dim { opacity: .5; }
+</style>
+</head>
+<body>
+  <h1>Solo Choir · lite</h1>
+
+  <div>
+    <div class="note" id="note">—</div>
+    <div class="row" style="margin-top:10px">
+      <div class="cents"><i id="centsMark"></i></div>
+      <span class="stat" id="centsTxt">0¢</span>
+      <span class="stat"><b id="hz">—</b> Hz</span>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <span class="stat">level</span><div class="bar"><i id="level"></i></div>
+      <span class="stat">RTF <b id="rtf">—</b></span>
+      <span class="stat">latency <b id="lat">—</b> ms</span>
+    </div>
+  </div>
+
+  <fieldset>
+    <legend>Key</legend>
+    <div class="row">
+      <label>Root <select id="key"></select></label>
+      <label>Scale
+        <select id="scale"><option value="major">major</option><option value="minor">minor</option></select>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Voices (choir)</legend>
+    <div class="row" id="voices"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Take</legend>
+    <div class="row">
+      <button id="rec">● Record</button>
+      <button id="play" class="play">▶ Play</button>
+      <span id="saved"></span>
+    </div>
+  </fieldset>
+
+<script>
+  const NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+  const api = () => (window.pywebview && window.pywebview.api) || null;
+
+  // ---- controls ----
+  const keySel = document.getElementById('key');
+  NAMES.forEach((n,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=n; keySel.appendChild(o); });
+  function sendControl(p){ const a=api(); if(a) a.set_control(p); }
+  keySel.onchange = ()=> sendControl({ key: parseInt(keySel.value,10) });
+  document.getElementById('scale').onchange = (e)=> sendControl({ scale: e.target.value });
+
+  // voice toggles — mirror the engine's CHOIR_VOICES defaults (Bass/Tenor/Sop on, Alto off)
+  const PARTS = [["Bass",true],["Tenor",true],["Alto",false],["Sop",true]];
+  const voicesEl = document.getElementById('voices');
+  const state = {};
+  PARTS.forEach(([part,on])=>{
+    state[part]=on;
+    const w=document.createElement('label'); w.className='voice';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=on;
+    cb.onchange=()=>{ state[part]=cb.checked;
+      sendControl({ voices: PARTS.map(([p])=>({part:p, on:state[p]})) }); };
+    w.appendChild(cb); w.appendChild(document.createTextNode(part));
+    voicesEl.appendChild(w);
+  });
+
+  // record / play
+  let recOn=false, playOn=false;
+  const recBtn=document.getElementById('rec'), playBtn=document.getElementById('play');
+  recBtn.onclick=()=>{ recOn=!recOn; recBtn.classList.toggle('on',recOn);
+    recBtn.textContent=recOn?'■ Stop':'● Record'; const a=api(); if(a) a.record(recOn); };
+  playBtn.onclick=()=>{ playOn=!playOn; playBtn.classList.toggle('on',playOn);
+    playBtn.textContent=playOn?'■ Stop':'▶ Play'; const a=api(); if(a) a.play(playOn); };
+
+  // ---- telemetry (text only; cheap) ----
+  const $=(id)=>document.getElementById(id);
+  window.onTelemetry = (t)=>{
+    if(!t) return;
+    if(t.voiced && t.midi>0){
+      const m=Math.round(t.midi), pc=((m%12)+12)%12, oct=Math.floor(m/12)-1, nm=NAMES[pc];
+      $('note').innerHTML = nm.replace('#','<span class="flat">♯</span>') + '<span class="flat">'+oct+'</span>';
+      $('hz').textContent = t.f0.toFixed(1);
+      $('centsTxt').textContent = (t.cents>0?'+':'')+t.cents+'¢';
+      $('centsMark').style.left = (50 + Math.max(-50,Math.min(50,t.cents))/1)+'%';
+      $('note').classList.remove('dim');
+    } else {
+      $('note').classList.add('dim');
+    }
+    $('level').style.width = Math.min(100,(t.level||0)*180)+'%';
+    if(t.rtf!=null) $('rtf').textContent = t.rtf.toFixed(2);
+    if(t.latency_ms!=null) $('lat').textContent = Math.round(t.latency_ms);
+  };
+  window.onSaved = (d)=>{ if(d&&d.saved) $('saved').textContent = 'Saved ✓ '+d.saved.split('/').pop()+' ('+d.dur+'s)'; };
+</script>
+</body>
+</html>

@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solo Choir — Studio</title>
+<style>
+  :root{
+    --canvas:#e3e8f0; --tint:#f6f8fb; --surface:#ffffff; --line:#e3e8ef; --ink:#1e2733; --muted:#64748b;
+    --accent:#2563eb; --warn:#f59e0b;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--canvas);color:var(--ink);font-family:var(--sans)}
+  body{display:flex;flex-direction:column;position:relative}   /* flat clean surface — no animated gradient */
+  .editor,.status{position:relative;z-index:1}
+  .topbar{position:relative;z-index:3}   /* above .editor/.guide so the settings popover isn't covered */
+  .topbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .topbar .title{font-family:var(--mono);font-size:12px;letter-spacing:.10em;color:var(--muted);margin-right:8px;
+    border:1px solid var(--line);border-radius:6px;padding:5px 9px;background:var(--tint)}
+  /* group controls by the 5-step flow (mirrors the guide bar) so flex-wrap breaks BETWEEN groups, not mid-group */
+  .topbar .grp{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .topbar .sep{align-self:stretch;width:1px;background:var(--line);margin:2px 0}
+  /* linear step flow: show only the current step's controls (driven by .topbar[data-active]) */
+  .topbar{position:relative}
+  .topbar .grp[data-step]{display:none}
+  .topbar[data-active="rec"] .grp[data-step="rec"],
+  .topbar[data-active="arr"] .grp[data-step="arr"],
+  .topbar[data-active="edit"] .grp[data-step="edit"],
+  .topbar[data-active="render"] .grp[data-step="render"],
+  .topbar[data-active="listen"] .grp[data-step="listen"]{display:flex}
+  .next{color:#fff;background:var(--accent);border-color:var(--accent);font-weight:600}   /* step-forward CTA */
+  .next:hover:not(:disabled){color:#fff;background:#1d4ed8;border-color:#1d4ed8}
+  .gear{margin-left:auto;font-size:15px;line-height:1;padding:6px 10px}
+  .settings{position:absolute;top:calc(100% + 6px);right:16px;z-index:6;display:flex;align-items:center;gap:10px;flex-wrap:wrap;max-width:92vw;
+    background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 10px 30px rgba(40,60,100,.14)}
+  .settings[hidden]{display:none}
+  .guide span[data-step].done,.guide span[data-step].on{cursor:pointer}
+  .guide span[data-step].cur{outline:2px solid var(--accent);outline-offset:1px}
+  button{font-family:var(--sans);font-size:13px;color:var(--ink);background:#fff;border:1px solid var(--line);
+         border-radius:8px;padding:8px 14px;cursor:pointer;transition:.12s}
+  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button:active:not(:disabled){background:rgba(0,112,243,.07);border-color:var(--accent);color:var(--accent);transform:scale(.97)}
+  button:disabled{opacity:.4;cursor:default}
+  button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .snaplbl{font-family:var(--mono);font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+  .snaplbl select{font-family:var(--mono);font-size:12px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:6px;padding:5px 6px;cursor:pointer}
+  .hint{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:4px}
+  .micsel{font-family:var(--mono);font-size:12px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:6px;padding:5px 6px;cursor:pointer;max-width:190px}
+  .vsel{font-family:var(--mono);font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:7px}
+  .vsel label{display:inline-flex;align-items:center;gap:2px;cursor:pointer;color:var(--ink)}
+  #grid{cursor:crosshair}
+  /* flat: clean white editor card so the harmony lines read crisply */
+  .editor{flex:1;margin:20px 24px;border:1px solid var(--line);border-radius:12px;
+          position:relative;overflow:hidden;background:var(--surface);
+          box-shadow:0 1px 3px rgba(30,41,59,.05)}
+  #grid{width:100%;height:100%;display:block}
+  .legend{position:absolute;top:12px;left:14px;display:flex;gap:14px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .legend i{display:inline-block;width:12px;height:2px;vertical-align:middle;margin-right:5px}
+  .legend span{cursor:pointer}  .legend span:hover{color:var(--ink)}
+  .guide{display:flex;gap:6px;align-items:center;padding:7px 16px;font-family:var(--mono);font-size:11px;
+         color:var(--muted);background:var(--surface);border-bottom:1px solid var(--line);
+         position:relative;z-index:2;box-shadow:0 6px 10px -6px rgba(30,41,59,.16)}   /* lift the header above the work area */
+  .guide span[data-step]{padding:3px 9px;border-radius:999px;background:var(--canvas)}
+  .guide span[data-step].on{background:var(--accent);color:#fff;font-weight:bold}
+  .guide span[data-step].done{color:var(--accent)}
+  .guidetip{margin-left:8px;color:var(--ink)}
+  .status{border-top:1px solid var(--line);padding:8px 20px;font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--surface)}
+  .status b{color:var(--ink);font-weight:normal}
+  @media (prefers-reduced-motion: reduce){
+    body::before,body::after{animation:none}
+    button:active:not(:disabled){transform:none}
+  }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <span class="title">SOLO CHOIR · STUDIO</span>
+    <div class="grp" data-step="rec">
+      <button id="btnRec">● Record</button>
+      <select id="inDev" class="micsel" title="microphone / input device"></select>
+    </div>
+    <div class="grp" data-step="arr">
+      <button id="btnArr" disabled>Arrange</button>
+      <label class="snaplbl">style
+        <select id="styleSel"><option value="choral">Choral</option><option value="pad">Pad</option><option value="thirds">Thirds</option></select>
+      </label>
+    </div>
+    <div class="grp" data-step="edit">
+      <button id="btnPlay" disabled>♪ Preview</button>
+      <span class="vsel" id="vsel">voices
+        <label><input type="checkbox" data-v="Sop" checked>S</label>
+        <label><input type="checkbox" data-v="Alto" checked>A</label>
+        <label><input type="checkbox" data-v="Tenor" checked>T</label>
+        <label><input type="checkbox" data-v="Bass" checked>B</label>
+      </span>
+      <label class="snaplbl">snap
+        <select id="snapMode"><option value="scale">scale</option><option value="free">free</option><option value="chord">chord</option></select>
+      </label>
+      <span class="hint">drag · ⌫=delete · dbl=split · ⇧=connect · ⌘Z=undo</span>
+      <button id="btnToRender" class="next">Render →</button>
+    </div>
+    <div class="grp" data-step="render">
+      <select id="inst" class="micsel" title="render sound" style="max-width:90px"><option value="voice">voice</option><option value="piano">piano</option><option value="female">female</option></select>
+      <label class="snaplbl" title="choir-blend: thicken each part into a small section (still your own voice)"><input id="ensChk" type="checkbox" checked> choir</label>
+      <button id="btnRender" disabled>↑ Render</button>
+    </div>
+    <div class="grp" data-step="listen">
+      <button id="btnCard" disabled title="share via QR — the audience takes the recording home (after render) or an interactive score card">◫ QR</button>
+      <button id="btnMix" disabled title="reveal the final mix wav in Finder">Export Mix</button>
+      <button id="btnMidi" disabled>Export MIDI</button>
+      <span id="renderOut" class="vsel" style="display:none">result</span>
+    </div>
+    <!-- player lives OUTSIDE the step groups: it must be visible right after Record ("play to check"),
+         while the listen-step group is still hidden. It manages its own display. -->
+    <audio id="player" controls preload="none" style="display:none;height:30px;vertical-align:middle"></audio>
+    <button id="gearBtn" class="gear" title="setup: output device · re-record settings">⚙</button>
+    <div class="settings" id="settingsPanel" hidden>
+      <select id="outDev" class="micsel" title="output device for re-record backing (pick headphones)"></select>
+      <button id="btnDevs" title="re-scan audio devices (after plugging headphones/mic)">↻</button>
+      <label class="snaplbl" title="re-record guide (backing) volume">guide
+        <input id="bgVol" type="range" min="0" max="100" value="25" style="width:64px;vertical-align:middle">
+      </label>
+      <label class="snaplbl" title="re-record alignment: advance(+)/delay(-) your take in ms to fix latency">align
+        <input id="alignMs" type="number" min="-100" max="400" step="10" value="100" style="width:50px">
+      </label>
+    </div>
+  </div>
+  <div class="guide" id="guide">
+    <span data-step="rec">① Record</span><span data-step="arr">② Arrange</span><span data-step="edit">③ Edit</span><span data-step="render">④ Render</span><span data-step="listen">⑤ Listen · Re-record · Export</span>
+    <span class="guidetip" id="guidetip"></span>
+  </div>
+
+  <div class="editor">
+    <div class="legend">
+      <span data-v="Melody" title="click to preview solo"><i style="background:#1a1a1a"></i>Melody</span>
+      <span data-v="Sop" title="click to preview solo"><i style="background:#16a34a"></i>Sop</span>
+      <span data-v="Alto" title="click to preview solo"><i style="background:#9333ea"></i>Alto</span>
+      <span data-v="Tenor" title="click to preview solo"><i style="background:#dc2626"></i>Tenor</span>
+      <span data-v="Bass" title="click to preview solo"><i style="background:#2563eb"></i>Bass</span>
+    </div>
+    <canvas id="grid"></canvas>
+  </div>
+
+  <div class="status" id="status">starting…</div>
+
+  <!-- QR card overlay (shown by Make card; click to close) -->
+  <div id="cardBox"><div class="inner">
+    <div class="qrTabs"><button id="qrRec">♪ recording</button><button id="qrCard">◫ score card</button></div>
+    <img id="cardImg" alt="QR code — scan with a phone"><div class="cap" id="cardCap"></div></div></div>
+  <style>
+    #cardBox{position:fixed;inset:0;z-index:50;display:none;place-items:center;background:rgba(10,15,20,.5)}
+    #cardBox.show{display:grid}
+    #cardBox .inner{background:#fff;border-radius:14px;padding:20px;text-align:center;box-shadow:0 16px 50px rgba(0,0,0,.35);cursor:pointer}
+    #cardBox img{width:300px;height:300px;display:block}   /* QRs are supersampled (>=600px) and
+       smooth-DOWNscaled — pixelated upscaling made module rows uneven ("crooked QR", 2026-07-07) */
+    #cardBox .cap{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:12px;
+      max-width:300px;word-break:break-all;line-height:1.6}
+    #cardBox .cap b{color:var(--ink)}
+    #cardBox .qrTabs{display:flex;gap:6px;margin-bottom:14px}
+    #cardBox .qrTabs button{flex:1;font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+      color:var(--muted);background:var(--canvas);border:1px solid var(--line);border-radius:999px;padding:7px 0}
+    #cardBox .qrTabs button.on{color:#fff;background:var(--accent);border-color:var(--accent);font-weight:600}
+    #cardBox .qrTabs button:disabled{opacity:.4;cursor:default}
+  </style>
+  <script src="/web/roll/score-codec.js"></script>
+
+<script>
+  const $ = id => document.getElementById(id);
+  function setStatus(html){ $('status').innerHTML = html; }
+
+  // guide flow: highlight the current step + a one-line tip. steps progress rec→arr→edit→render→listen.
+  const GUIDE_STEPS=['rec','arr','edit','render','listen'];
+  // singing guide (measured limits, 2026-07-06): soft singing leaves NO acoustic trace at syllable
+  // boundaries; sub-0.1s syllables have too few pitch frames; a pitch sung between two semitones
+  // quantises to either. Full voice + clear syllables + decisive pitches = accurate scores.
+  const GUIDE_TIP={rec:'pick a mic, then ● Record — sing out (not soft), separate each syllable, land pitches cleanly',
+    arr:'press Arrange to harmonise into SATB',
+    edit:'(optional) drag notes to shape the harmony · then ④',
+    render:'choose voice / piano / female and ↑ Render',
+    listen:'▶ mix to hear it · ● to re-record a part · Export Mix/MIDI'};
+  // linear step flow: only the current step's toolbar controls show; the guide bar is the spine.
+  let _maxStep=0;
+  function setActiveStep(step){ const tb=document.querySelector('.topbar'); if(tb) tb.dataset.active=step;   // each step has its own control group
+    document.querySelectorAll('#guide [data-step]').forEach(el=>el.classList.toggle('cur', el.dataset.step===step)); }
+  function updateGuide(step){
+    const i=GUIDE_STEPS.indexOf(step); _maxStep=Math.max(_maxStep, i);
+    GUIDE_STEPS.forEach((s,j)=>{ const el=document.querySelector(`#guide [data-step="${s}"]`); if(!el) return;
+      el.classList.toggle('on', j===i); el.classList.toggle('done', j<i); });
+    const tip=$('guidetip'); if(tip) tip.textContent = GUIDE_TIP[step]||'';
+    setActiveStep(step);
+  }
+  document.querySelectorAll('#guide [data-step]').forEach(el=>el.addEventListener('click',()=>{   // click a reached step to revisit its controls
+    if(GUIDE_STEPS.indexOf(el.dataset.step) <= _maxStep) setActiveStep(el.dataset.step); }));   // revisit any reached step (forward = each step's own action)
+  { const g=$('gearBtn'), p=$('settingsPanel'); if(g&&p) g.addEventListener('click',()=>{ p.hidden=!p.hidden; }); }
+  { const n=$('btnToRender'); if(n) n.addEventListener('click',()=>updateGuide('render')); }   // Edit → advance to Render (Edit has no auto-trigger)
+  setActiveStep('rec');   // initial view (boot() also calls updateGuide('rec'))
+
+  // ===== C1: draw the score as coloured pitch-contour lines (read-only) =====
+  const COL={Melody:'#1a1a1a',Sop:'#16a34a',Alto:'#9333ea',Tenor:'#dc2626',Bass:'#2563eb'};
+  const PADL=46,PADR=20,PADT=42,PADB=30;
+  const cv=$('grid'), ctx=cv.getContext('2d');
+  let view={t0:0,t1:8,midLo:48,midHi:72}, W=0,H=0;
+  function fitCanvas(){ const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+    W=r.width; H=r.height; cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0); }
+  function X(t){ return PADL+(t-view.t0)/(view.t1-view.t0)*(W-PADL-PADR); }
+  function Y(m){ return PADT+(view.midHi-m)/(view.midHi-view.midLo)*(H-PADT-PADB); }
+  function bounds(sc){ let lo=127,hi=0,t1=0;
+    const all=[sc.melody,...Object.values(sc.voices)].flat();
+    for(const n of all){ lo=Math.min(lo,n.midi); hi=Math.max(hi,n.midi); t1=Math.max(t1,n.start+n.dur); }
+    if(!isFinite(lo)||hi<lo){lo=48;hi=72;}
+    return {t0:0, t1:Math.max(t1+0.3,2), midLo:lo-2, midHi:hi+2}; }
+  function gridlines(){ ctx.lineWidth=1; ctx.font='10px ui-monospace,Menlo,monospace';
+    for(let m=Math.ceil(view.midLo);m<=view.midHi;m++){ const y=Y(m);
+      ctx.strokeStyle=(m%12===0)?'rgba(0,0,0,.12)':'rgba(0,0,0,.045)';
+      ctx.beginPath(); ctx.moveTo(PADL,y); ctx.lineTo(W-PADR,y); ctx.stroke();
+      if(m%12===0){ ctx.fillStyle='rgba(0,0,0,.4)'; ctx.fillText('C'+(Math.floor(m/12)-1),6,y+3); } }
+    ctx.fillStyle='rgba(0,0,0,.35)';
+    for(let t=0;t<=view.t1;t++){ const x=X(t);
+      ctx.strokeStyle='rgba(0,0,0,.045)'; ctx.beginPath(); ctx.moveTo(x,PADT); ctx.lineTo(x,H-PADB); ctx.stroke();
+      ctx.fillText(t+'s',x-6,H-PADB+16); } }
+  function drawLine(notes,col,thick){ if(!notes||!notes.length)return;
+    ctx.strokeStyle=col; ctx.lineWidth=thick; ctx.lineJoin='round';
+    let i=0;                                                  // connect only CONTIGUOUS notes; a time gap breaks the line
+    while(i<notes.length){ ctx.beginPath(); let n=notes[i]; ctx.moveTo(X(n.start),Y(n.midi)); ctx.lineTo(X(n.start+n.dur),Y(n.midi));
+      while(i+1<notes.length && Math.abs(notes[i+1].start-(notes[i].start+notes[i].dur))<0.012){
+        i++; n=notes[i]; ctx.lineTo(X(n.start),Y(n.midi)); ctx.lineTo(X(n.start+n.dur),Y(n.midi)); }
+      ctx.stroke(); i++; }
+    ctx.fillStyle=col; notes.forEach(n=>{ ctx.beginPath(); ctx.arc(X(n.start),Y(n.midi),3,0,7); ctx.fill(); }); }
+  const MAJ=[0,2,4,5,7,9,11];
+  let snapMode='scale', drag=null, hover=null, selected=null, undoStack=[], focus=null;
+  // faint bands at the current chord's tones (guidance/highlight); behind the grid + lines
+  function chordBands(){ const sc=window.__score; if(!sc||!sc.chords) return;
+    const half=(H-PADT-PADB)/(view.midHi-view.midLo)/2;
+    ctx.fillStyle='rgba(37,99,235,.05)';
+    sc.chords.forEach(c=>{ const r=sc.key.root, pcs=[0,2,4].map(k=>(r+MAJ[(c.degree+k)%7])%12);
+      const x0=X(c.start), x1=X(c.end);
+      for(let m=Math.ceil(view.midLo); m<=Math.floor(view.midHi); m++)
+        if(pcs.includes(((m%12)+12)%12)) ctx.fillRect(x0, Y(m)-half, x1-x0, half*2); }); }
+  function draw(){ fitCanvas(); ctx.clearRect(0,0,W,H);
+    const sc=window.__score; if(!sc) return;
+    chordBands(); gridlines();
+    const A=n=>(!focus||focus===n)?1:0.13;                 // focus: the active voice full, others dimmed
+    ctx.globalAlpha=A('Bass');   drawLine(sc.voices.Bass,COL.Bass,2);
+    ctx.globalAlpha=A('Tenor');  drawLine(sc.voices.Tenor,COL.Tenor,2);
+    ctx.globalAlpha=A('Alto');   drawLine(sc.voices.Alto,COL.Alto,2);
+    ctx.globalAlpha=A('Sop');    drawLine(sc.voices.Sop,COL.Sop,2);
+    ctx.globalAlpha=A('Melody'); drawLine(sc.melody,COL.Melody,3);
+    ctx.globalAlpha=1;
+    if(drag){ const x=X(drag.mode==='resize'? drag.note.start+drag.note.dur : drag.note.start), y=Y(drag.note.midi);
+      ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.beginPath(); ctx.arc(x,y,6,0,7); ctx.stroke();
+      ctx.lineWidth=1; ctx.strokeStyle='rgba(0,0,0,.55)'; ctx.beginPath(); ctx.arc(x,y,6,0,7); ctx.stroke(); }
+    if(hover && !drag){ const n=hover.note, y=Y(n.midi), x0=X(n.start), x1=X(n.start+n.dur), col=COL[hover.voice]||'#000';
+      ctx.strokeStyle=col; ctx.globalAlpha=.22; ctx.lineWidth=9; ctx.lineCap='round';   // halo over the hovered note's span
+      ctx.beginPath(); ctx.moveTo(x0,y); ctx.lineTo(x1,y); ctx.stroke();
+      ctx.globalAlpha=1; ctx.lineCap='butt';
+      const s=hover.end?5.5:4; ctx.fillStyle='#fff'; ctx.strokeStyle='rgba(0,0,0,.55)'; ctx.lineWidth=1;   // resize handle = the note's END
+      ctx.fillRect(x1-s,y-s,2*s,2*s); ctx.strokeRect(x1-s,y-s,2*s,2*s); }
+    if(selected && seqOf(selected.voice).indexOf(selected.note)>=0){ const sn=selected.note;   // selection ring (⌫ deletes)
+      ctx.strokeStyle='rgba(0,0,0,.6)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(X(sn.start),Y(sn.midi),5.5,0,7); ctx.stroke(); }
+    if(playheadT!=null){ const x=X(playheadT); ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(x,PADT); ctx.lineTo(x,H-PADB); ctx.stroke(); } }
+  function fitView(){ const sc=window.__score; if(sc) view=bounds(sc); }
+  window.__draw=draw;
+  window.__fit=()=>{ fitView(); draw(); };
+  window.addEventListener('resize', ()=>{ if(window.__score) window.__fit(); });
+
+  // ===== C2: drag a note's pitch with snap (free / scale / chord-tone) =====
+  const NN2=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  function inScale(m,root){ return MAJ.includes((((m-root)%12)+12)%12); }
+  function chordPCs(t){ const sc=window.__score, c=(sc.chords||[]).find(c=>c.start<=t&&t<c.end);
+    if(!c) return null; const r=sc.key.root; return [0,2,4].map(k=>(r+MAJ[(c.degree+k)%7])%12); }
+  function snapMidi(m,t){ if(snapMode==='free') return m;
+    if(snapMode==='chord'){ const ct=chordPCs(t); if(ct){ for(let d=0;d<12;d++) for(const s of [m-d,m+d])
+      if(ct.includes((((s)%12)+12)%12)) return s; } }
+    let best=m,bd=99; for(let s=m-6;s<=m+6;s++) if(inScale(s,window.__score.key.root)&&Math.abs(s-m)<bd){bd=Math.abs(s-m);best=s;}
+    return best; }
+  function invY(my){ return view.midHi-(my-PADT)/(H-PADT-PADB)*(view.midHi-view.midLo); }
+  function seqOf(v){ const sc=window.__score; return v==='Melody'? sc.melody : sc.voices[v]; }
+  function hit(mx,my){ const sc=window.__score; if(!sc) return null; let best=null,bd=11;
+    const lists = focus ? {[focus]: seqOf(focus)}            // focused → only that voice is hit-testable (edit through overlaps)
+                        : {Melody:sc.melody, Bass:sc.voices.Bass, Tenor:sc.voices.Tenor, Alto:sc.voices.Alto, Sop:sc.voices.Sop};
+    for(const v in lists) lists[v].forEach((n,i)=>{ const onSeg=(mx>=X(n.start)-6 && mx<=X(n.start+n.dur)+6);
+      const dd = onSeg? Math.abs(my-Y(n.midi)) : Math.hypot(mx-X(n.start),my-Y(n.midi));
+      if(dd<bd){ bd=dd; best={voice:v,note:n,idx:i}; } });
+    return best; }
+  // ----- note operations: delete / split (break) / join (connect) -----
+  function snapshot(){ return JSON.parse(JSON.stringify(window.__score)); }
+  function pushUndo(){ undoStack.push(snapshot()); if(undoStack.length>60) undoStack.shift(); }
+  function undo(){ if(!undoStack.length) return; window.__score=undoStack.pop(); selected=null; hover=null; draw(); setStatus('undo'); }
+  function delNote(sel){ if(!sel) return; const seq=seqOf(sel.voice), i=seq.indexOf(sel.note); if(i<0) return;
+    pushUndo(); seq.splice(i,1); window.__dirty=true; selected=null; hover=null; draw(); setStatus('deleted <b>'+sel.voice+'</b> note'); }
+  function splitNote(h,t){ const seq=seqOf(h.voice), n=seq[h.idx], GAP=0.05,
+      c=Math.min(Math.max(t, n.start+0.05), n.start+n.dur-0.05-GAP); if(c<=n.start) return;
+    pushUndo(); seq.splice(h.idx,1,                           // leave a GAP so the line visibly breaks
+      {start:n.start, dur:c-n.start, midi:n.midi, edited:true},
+      {start:c+GAP, dur:(n.start+n.dur)-(c+GAP), midi:n.midi, edited:true});
+    window.__dirty=true; selected=null; draw(); setStatus('split <b>'+h.voice+'</b> (line broken)'); }
+  function joinNext(h){ const seq=seqOf(h.voice), a=seq[h.idx], b=seq[h.idx+1]; if(!b) return;
+    pushUndo(); a.dur=Math.max(0.05, b.start-a.start); a.edited=true;   // close the gap → lines CONNECT; both notes + pitches kept
+    window.__dirty=true; selected=null; draw(); setStatus('connected <b>'+h.voice+'</b> to next (pitches kept)'); }
+  // ===== C3: also drag onset (horizontal) + duration (right edge) — independent rhythm =====
+  function invT(x){ return view.t0 + (x-PADL)/(W-PADL-PADR)*(view.t1-view.t0); }
+  function noteName(m){ return NN2[((m%12)+12)%12]+(Math.floor(m/12)-1); }
+  function nearEnd(n,mx,my){ return Math.abs(mx-X(n.start+n.dur))<10 && Math.abs(my-Y(n.midi))<10; }
+  cv.addEventListener('mousedown', e=>{ const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left, my=e.clientY-r.top, h=hit(mx,my); if(!h) return;
+    if(e.shiftKey){ joinNext(h); return; }         // ⇧-click = join with next
+    selected={voice:h.voice, note:h.note};          // click selects; ⌫/Delete removes the selected note
+    // edge → resize duration; otherwise 'pick' (axis decided on first move: pitch vs time)
+    drag={voice:h.voice, note:h.note, mode: nearEnd(h.note,mx,my)?'resize':'pick', x0:mx, y0:my, s0:h.note.start, undo:snapshot(), pushed:false};
+    draw(); });
+  cv.addEventListener('dblclick', e=>{ const r=cv.getBoundingClientRect();   // double-click = split here
+    const h=hit(e.clientX-r.left, e.clientY-r.top); if(h) splitNote(h, invT(e.clientX-r.left)); });
+  window.addEventListener('keydown', e=>{
+    if((e.metaKey||e.ctrlKey) && (e.key==='z'||e.key==='Z')){ e.preventDefault(); undo(); return; }
+    if((e.key==='Backspace'||e.key==='Delete') && selected){ e.preventDefault(); delNote(selected); } });
+  window.addEventListener('mousemove', e=>{ if(!drag) return; const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left, my=e.clientY-r.top, n=drag.note;
+    if(drag.mode==='pick' && (Math.abs(mx-drag.x0)>4 || Math.abs(my-drag.y0)>4))
+      drag.mode = Math.abs(mx-drag.x0)>Math.abs(my-drag.y0) ? 'time' : 'pitch';
+    function commit(){ if(!drag.pushed){ undoStack.push(drag.undo); drag.pushed=true; window.__dirty=true; } }
+    if(drag.mode==='pitch'){ const m=snapMidi(Math.round(invY(my)), n.start);
+      if(m!==n.midi){ commit(); n.midi=m; n.edited=true; previewNote(m); setStatus(drag.voice+' → <b>'+noteName(m)+'</b>'); draw(); } }
+    else if(drag.mode==='time'){ const dt=(mx-drag.x0)/(W-PADL-PADR)*(view.t1-view.t0), ns=Math.max(0, drag.s0+dt);
+      if(ns!==n.start){ commit(); n.start=ns; n.edited=true; setStatus(drag.voice+' onset → <b>'+ns.toFixed(2)+'s</b>'); draw(); } }
+    else if(drag.mode==='resize'){ const nd=Math.max(0.05, invT(mx)-n.start);
+      if(nd!==n.dur){ commit(); n.dur=nd; n.edited=true; setStatus(drag.voice+' length → <b>'+nd.toFixed(2)+'s</b>'); draw(); } } });
+  window.addEventListener('mouseup', ()=>{ if(drag){ drag=null; draw(); } });
+  cv.addEventListener('mousemove', e=>{ if(drag) return; const r=cv.getBoundingClientRect();
+    const mx=e.clientX-r.left, my=e.clientY-r.top, h=hit(mx,my);
+    const nh = h ? {note:h.note, voice:h.voice, end:nearEnd(h.note,mx,my)} : null;
+    cv.style.cursor = nh ? (nh.end?'ew-resize':'move') : 'crosshair';
+    const changed = (!!nh!==!!hover) || (nh&&hover&&(nh.note!==hover.note||nh.end!==hover.end));
+    hover=nh; if(changed) draw(); });
+  cv.addEventListener('mouseleave', ()=>{ if(hover){ hover=null; if(!drag) draw(); } });
+  { const s=$('snapMode'); if(s) s.addEventListener('change', ()=>{ snapMode=s.value; }); }
+
+  // ===== C4: vowel ("ahh") synth preview — legato + playhead; full mix or a single voice =====
+  let AC=null, master=null, playing=false, oscs=[], playTimer=0, playheadT=null, playStartT=0, raf=0;
+  const FORMANTS=[[730,1.0],[1090,0.55],[2440,0.22]];   // "ah" formants: [freq Hz, relative amp]
+  function ac(){ if(!AC){ AC=new (window.AudioContext||window.webkitAudioContext)();
+      master=AC.createDynamicsCompressor(); master.connect(AC.destination); }
+    if(AC.state==='suspended') AC.resume(); return AC; }
+  function voiceNote(midi,when,dur,gain){ const c=ac(), d=Math.max(0.08,dur);   // sawtooth through 3 formant bandpasses = a vowel
+    const src=c.createOscillator(); src.type='sawtooth'; src.frequency.value=440*2**((midi-69)/12);
+    const env=c.createGain();
+    env.gain.setValueAtTime(0.0001,when); env.gain.exponentialRampToValueAtTime(gain,when+0.03);   // soft attack
+    env.gain.setValueAtTime(gain, when+Math.max(0.035,d-0.02)); env.gain.exponentialRampToValueAtTime(0.0001,when+d);  // hold (legato), quick release
+    src.connect(env);
+    FORMANTS.forEach(([f,a])=>{ const bq=c.createBiquadFilter(); bq.type='bandpass'; bq.frequency.value=f; bq.Q.value=7;
+      const fg=c.createGain(); fg.gain.value=a; env.connect(bq); bq.connect(fg); fg.connect(master); });
+    src.start(when); src.stop(when+d+0.04); return src; }
+  function previewNote(midi){ voiceNote(midi, ac().currentTime, 0.3, 0.3); }   // instant vowel while dragging
+  function updatePlayBtn(){ const b=$('btnPlay'); if(b) b.textContent = playing? '■ Stop':'♪ Preview'; }
+  function tickPlayhead(){ if(!playing){ playheadT=null; draw(); return; }
+    playheadT=Math.max(0,(AC?AC.currentTime:0)-playStartT); draw(); raf=requestAnimationFrame(tickPlayhead); }
+  function stopScore(){ oscs.forEach(o=>{try{o.stop();}catch(e){}}); oscs=[]; clearTimeout(playTimer);
+    cancelAnimationFrame(raf); playing=false; playheadT=null; updatePlayBtn(); draw(); }
+  function playSeqs(seqs){ if(!window.__score) return; stopScore();
+    const c=ac(), t0=c.currentTime+0.08, g=Math.min(0.26, 0.5/Math.max(1,seqs.length));
+    seqs.forEach(seq=>seq.forEach((n,i)=>{ const nx=seq[i+1];   // monophonic per voice: play to actual end, but cut at the next onset (overlap → next wins); gaps = silence
+      const d = nx? Math.max(0.03, Math.min(n.dur, nx.start-n.start)) : n.dur;
+      oscs.push(voiceNote(n.midi, t0+n.start, d, g)); }));
+    const end=Math.max(0,...seqs.flat().map(n=>n.start+n.dur));
+    playing=true; playStartT=t0; updatePlayBtn();
+    playTimer=setTimeout(()=>{ playing=false; updatePlayBtn(); }, (end+0.3)*1000);
+    cancelAnimationFrame(raf); raf=requestAnimationFrame(tickPlayhead); }
+  function playScore(){ const sc=window.__score; if(!sc) return; try{$('player').pause();}catch(e){}  // mutex: stop rendered-audio playback
+    playSeqs([sc.melody,...Object.values(sc.voices)]); }
+  function playVoice(name){ const sc=window.__score; if(!sc) return; try{$('player').pause();}catch(e){}
+    const seq = name==='Melody'? sc.melody : (sc.voices[name]||null); if(seq&&seq.length){ playSeqs([seq]); setStatus('preview <b>'+name+'</b> solo'); } }
+  { const b=$('btnPlay'); if(b) b.addEventListener('click', ()=>{ playing? stopScore() : playScore(); }); }
+  { const lg=document.querySelector('.legend'); if(lg) lg.addEventListener('click', e=>{
+      const sp=e.target.closest('span'); if(!sp||!sp.dataset.v) return; const v=sp.dataset.v;
+      focus=(focus===v?null:v); selected=null; draw();   // toggle edit-focus on this voice (others dim + non-editable)
+      setStatus(focus?('editing <b>'+focus+'</b> only · click it again for all'):'all voices editable');
+      playVoice(v); }); }
+
+  // Phase D: Render the EDITED score into the user's own voice + export MIDI
+  { const b=$('btnRender'); if(b) b.addEventListener('click', async ()=>{
+      const a=()=>(window.pywebview&&window.pywebview.api), api=a(); if(!api||!window.__score) return;
+      const parts=[...document.querySelectorAll('#vsel input:checked')].map(c=>c.dataset.v);
+      const inst=$('inst').value, ens=$('ensChk')?$('ensChk').checked:true;
+      b.disabled=true; setStatus('rendering ('+inst+(ens?' · choir':'')+', '+(parts.join('/')||'none')+')… '+(inst==='female'?'(kNN female SATB — ~20s)':(inst==='voice'?'(a few seconds)':'')));
+      try{ await api.set_score(window.__score); const r=await api.render(parts, inst, ens);
+        if(r.error){ setStatus('render error: '+r.error); }
+        else{ const pl=$('player'); pl.src=r.mix_url+'?t='+Date.now(); pl.style.display=''; if(pl.play) pl.play();
+          _replaced=new Set(); showRenderOut(r); updateGuide('listen'); $('btnMix').disabled=false;   // fresh render → no takes yet
+          window.__hasRender=true;   // unlocks the recording take-home tab in the QR overlay
+          setStatus('<b>rendered ✓</b> your choir of '+((r.stems||[]).length)+' voices · ▶ playing'); }
+      }catch(e){ setStatus('render error: '+e); }
+      b.disabled=false; }); }
+
+  // render result: ▶ full mix + per-voice solo-listen (▶) + re-record overdub (●). One re-record at a time.
+  let _rerec=null;             // voice currently re-recording, or null
+  let _replaced=new Set();     // voices replaced by your own re-recorded take (marked with *)
+  function playUrl(u){ try{stopScore();}catch(e){}  // mutex: stop the synth preview
+    const pl=$('player'); pl.src=u+'?t='+Date.now(); pl.style.display=''; pl.play&&pl.play(); }
+  function showRenderOut(r){
+    const box=$('renderOut'); if(!box) return;
+    box.style.display=''; box.innerHTML='result: ';
+    const mix=document.createElement('button'); mix.textContent='▶ mix'; mix.title='play the full mix';
+    mix.style.fontWeight='bold'; mix.style.marginRight='10px'; mix.onclick=()=>playUrl(r.mix_url); box.appendChild(mix);
+    const urls=r.stem_urls||{};
+    for(const v of Object.keys(urls)){
+      const mine=_replaced.has(v);
+      const g=document.createElement('span'); g.style.marginRight='8px'; g.style.whiteSpace='nowrap';
+      const play=document.createElement('button'); play.textContent='▶'+v[0]+(mine?'*':''); play.title='solo '+v+(mine?' (your take)':'');
+      if(mine){ play.style.color='#16a34a'; play.style.fontWeight='bold'; }
+      play.onclick=()=>playUrl(urls[v]);
+      const rec=document.createElement('button'); rec.textContent='●'; rec.title='re-record '+v; rec.style.marginLeft='2px';
+      rec.onclick=()=>toggleRerec(v, rec);
+      g.appendChild(play); g.appendChild(rec);
+      if(mine){ const rv=document.createElement('button'); rv.textContent='↺'; rv.title='revert '+v+' to the rendered version'; rv.style.marginLeft='2px';
+        rv.onclick=()=>revertVoice(v); g.appendChild(rv); }
+      box.appendChild(g);
+    }
+    if(_replaced.size) { const n=document.createElement('span'); n.className='hint'; n.textContent=' *=your take'; box.appendChild(n); }
+  }
+  async function toggleRerec(voice, btn){
+    const api=(window.pywebview&&window.pywebview.api); if(!api) return;
+    if(_rerec && _rerec!==voice) return;                       // one at a time
+    if(!_rerec){                                               // start: audible count-in (backend) then record
+      _rerec='...';                                            // lock against double-clicks during the count-in
+      setStatus('<b>re-record '+voice+'</b> — ♪ counting in (4·3·2·1)… get ready to sing');
+      const g=($('bgVol')? $('bgVol').value/100 : null);
+      const al=($('alignMs')? parseFloat($('alignMs').value)||0 : 0);
+      const r=await api.rerecord_start(voice, $('inDev').value||null, $('outDev').value||null, g, al);
+      if(r.error){ _rerec=null; setStatus('re-record: '+r.error); return; }
+      _rerec=voice; btn.textContent='■'; btn.style.color='#dc2626'; btn.style.fontWeight='bold';
+      setStatus('<b>● re-recording '+voice+'</b> — sing along (backing → '+(($('outDev').value)||'default')+', use headphones) · ■ to stop');
+    } else if(_rerec===voice){                                 // stop
+      btn.textContent='●'; btn.style.color=''; btn.style.fontWeight=''; _rerec=null;
+      setStatus('finishing re-record…');
+      const r=await api.rerecord_stop();
+      if(r.error){ setStatus('re-record: '+r.error); return; }
+      _replaced.add(voice);
+      playUrl(r.mix_url); showRenderOut(r); updateGuide('listen');
+      setStatus('<b>'+voice+' replaced ✓ (▶* = your take · ↺ to revert)</b> · playing the new mix');
+    }
+  }
+  async function revertVoice(v){
+    const api=(window.pywebview&&window.pywebview.api); if(!api||_rerec) return;
+    setStatus('reverting '+v+'…');
+    const r=await api.rerecord_revert(v);
+    if(r.error){ setStatus('revert: '+r.error); return; }
+    _replaced.delete(v); playUrl(r.mix_url); showRenderOut(r);
+    setStatus('<b>'+v+' reverted</b> to the rendered version · ▶ mix');
+  }
+  // Export Mix: reveal the final mix wav in Finder
+  { const b=$('btnMix'); if(b) b.addEventListener('click', async ()=>{
+      const api=(window.pywebview&&window.pywebview.api); if(!api) return;
+      const r=await api.export_mix();
+      setStatus(r.error?('mix export: '+r.error):('<b>mix saved</b> · '+r.mix)); }); }
+  { const b=$('btnMidi'); if(b) b.addEventListener('click', async ()=>{
+      const api=(window.pywebview&&window.pywebview.api); if(!api||!window.__score) return;
+      try{ await api.set_score(window.__score); const r=await api.export_midi();
+        setStatus(r.error?('MIDI error: '+r.error):('<b>MIDI saved</b> · '+r.midi)); }catch(e){ setStatus('MIDI error: '+e); } }); }
+  // ── QR sharing: ONE entry point (btnCard), the overlay switches between the two payloads
+  // (recording take-home needs a render; score card only needs an arrange). Two sibling buttons for
+  // the same "show a QR" intent confused the toolbar — merged 2026-07-07 per ui-ux-pro-max review.
+  const ROLL_BASE = "https://yvwhy.github.io/solo-choir-roll/";   // public GitHub Pages deploy (repo: yvwHY/solo-choir-roll); empty = local origin
+  function qrTab(which){ $('qrRec').classList.toggle('on',which==='rec'); $('qrCard').classList.toggle('on',which==='card'); }
+  async function showQrScoreCard(){
+      if(!window.__score){ setStatus('arrange first'); return; }
+      const N=ScoreCodec.noteCount(window.__score), D=ScoreCodec.durationSec(window.__score);
+      if(D>30 || N>300){ setStatus('card: too long ('+D.toFixed(0)+'s / '+N+' notes) — keep ≤30s / ≤300 notes'); return; }
+      const a=api(); if(!a) return;
+      try{ const payload=await ScoreCodec.encodeScore(window.__score);
+        const url=(ROLL_BASE||(location.origin+"/web/roll/index.html"))+"#"+payload;
+        const r=await a.make_card_qr(url);
+        if(r.error){ setStatus('card: '+r.error); return; }
+        qrTab('card');
+        $('cardImg').src=r.url+'?t='+Date.now();
+        $('cardCap').innerHTML='<b>interactive score card</b> · scan to play';
+        setStatus('<b>card ready</b> · scan the QR'); }
+      catch(e){ setStatus('card error: '+e); } }
+  async function showQrRecording(){
+      const a=api(); if(!(a&&a.make_takeaway_qr)) return;
+      setStatus('making take-home QR…');
+      let r; try{ r=await a.make_takeaway_qr(); }catch(e){ r={error:String(e)}; }
+      if(r.error){ setStatus('take-home: '+r.error); return; }
+      qrTab('rec');
+      $('cardImg').src=r.qr_url+'?t='+Date.now();
+      $('cardCap').innerHTML='<b>join the same Wi-Fi, then scan</b><br>'+r.url;
+      setStatus('<b>take-home ready</b> · scan to download'); }
+  { const b=$('btnCard'); if(b) b.addEventListener('click', async ()=>{
+      $('qrRec').disabled=!window.__hasRender;   // recording take-home exists only after a render
+      $('cardBox').classList.add('show');
+      if(window.__hasRender) await showQrRecording(); else await showQrScoreCard(); }); }
+  { $('qrRec').addEventListener('click', e=>{ e.stopPropagation(); showQrRecording(); });
+    $('qrCard').addEventListener('click', e=>{ e.stopPropagation(); showQrScoreCard(); }); }
+  { const box=$('cardBox'); if(box) box.addEventListener('click', ()=>box.classList.remove('show')); }
+
+  function _fill(sel, names, preferRe, avoidRe){
+    if(!sel) return;
+    const cur=sel.value;
+    sel.innerHTML='';
+    names.forEach(n=>{ const o=document.createElement('option'); o.value=o.textContent=n; sel.appendChild(o); });
+    if(names.includes(cur)) sel.value=cur;                          // keep current choice if still present
+    else {
+      let m = preferRe && names.find(n=>preferRe.test(n));
+      if(!m && avoidRe) m = names.find(n=>!avoidRe.test(n));        // else first NON-virtual (skip BlackHole/NDI)
+      if(m) sel.value=m;
+    }
+  }
+  // refresh device dropdowns (re-scans hardware, so re-plugged headphones/mics show up)
+  async function refreshDevices(){
+    const api=(window.pywebview&&window.pywebview.api); if(!api) return {};
+    const d=await api.list_devices();
+    _fill($('inDev'), d.inputs||[], /usb/i);
+    // out: prefer headphones; never default to a SILENT virtual device (BlackHole/NDI) — pick a real one
+    _fill($('outDev'), d.outputs||[], /head|phone|earbud|airpod|耳/i, /blackhole|ndi/i);
+    return d;
+  }
+  async function boot(){
+    try{
+      const api = window.pywebview && window.pywebview.api;
+      if(!api){ setStatus('pywebview API not available'); return; }
+      await api.ping();
+      const d = await refreshDevices();
+      const sel=$('inDev'), ins=(d.inputs||[]);
+      updateGuide('rec');
+      setStatus(`<b>studio ready</b> · mic: <b>${(sel&&sel.value)||(ins[0]||'none')}</b>`+(d.error?` · audio error: ${d.error}`:''));
+    }catch(e){ setStatus('boot error: ' + e); }
+  }
+  // re-scan when a device dropdown is opened or the ↻ button is pressed, so hot-plugged devices appear
+  ['inDev','outDev'].forEach(id=>{ const el=$(id); if(el) el.addEventListener('mousedown', ()=>refreshDevices()); });
+  { const b=$('btnDevs'); if(b) b.addEventListener('click', async ()=>{ await refreshDevices(); setStatus('audio devices re-scanned · out: <b>'+($('outDev').value||'default')+'</b>'); }); }
+  // B2: Record a hummed melody → Arrange into a score (stored on window.__score; C1 draws it).
+  const api = () => (window.pywebview && window.pywebview.api);
+  let recording=false;
+  $('btnRec').addEventListener('click', async ()=>{
+    const a=api(); if(!a) return;
+    if(!recording){
+      const r=await a.start_record($('inDev').value||null);
+      if(r.error){ setStatus('record error: '+r.error); return; }
+      recording=true; $('btnRec').textContent='■ Stop'; $('btnRec').style.color='#dc2626';
+      $('btnArr').disabled=true; setStatus('● <b>recording…</b> sing out · clear syllables · steady pitches — then press Stop');
+    } else {
+      $('btnRec').disabled=true; setStatus('saving…');
+      let r; try{ r=await a.stop_record(); }catch(e){ r={error:String(e)}; }
+      recording=false; $('btnRec').textContent='● Record'; $('btnRec').style.color=''; $('btnRec').disabled=false;
+      if(r.error){ setStatus('stop error: '+r.error); return; }
+      const pl=$('player'); pl.src=r.url+'?t='+Date.now(); pl.style.display='';
+      setStatus('recorded <b>'+r.seconds+'s</b> · ▶ play to check · then <b>Arrange</b>');
+      $('btnArr').disabled=false; updateGuide('arr');
+    }
+  });
+  // C5: arrange the recorded melody with a STYLE; changing style regenerates (replace + warn on edits)
+  async function arrangeWith(style){ const a=api(); if(!a) return false;
+    $('btnArr').disabled=true; setStatus('arranging ('+style+')…');
+    let sc; try{ sc=await a.arrange(style); }catch(e){ sc={error:String(e)}; }
+    $('btnArr').disabled=false;
+    if(sc.error){ setStatus('arrange error: '+sc.error); return false; }
+    window.__score=sc; window.__style=style; window.__dirty=false; selected=null; hover=null;
+    const KEYS=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    const hv=Object.keys(sc.voices).map(v=>v+':'+sc.voices[v].length).join(' ');
+    setStatus('<b>arranged</b> ('+style+') · key '+KEYS[sc.key.root]+' · melody '+sc.melody.length+' notes · '+hv);
+    $('btnPlay').disabled=false; $('btnRender').disabled=false; $('btnMidi').disabled=false; $('btnCard').disabled=false;
+    updateGuide('edit');   // after Arrange → land on Edit (don't skip straight to Render)
+    if(window.__fit) window.__fit(); return true; }
+  $('btnArr').addEventListener('click', ()=>arrangeWith($('styleSel').value));
+  $('styleSel').addEventListener('change', async ()=>{ const style=$('styleSel').value;
+    if(!window.__score) return;                                   // nothing to regenerate yet
+    if(window.__dirty && !confirm('Regenerate with "'+style+'" will discard your edits. Continue?')){
+      $('styleSel').value = window.__style||'choral'; return; }    // keep edits → revert the select
+    const prev=snapshot(); if(await arrangeWith(style)) undoStack.push(prev); });   // ⌘Z can recover the previous draft
+
+  if(window.pywebview) boot();
+  else window.addEventListener('pywebviewready', boot);
+</script>
+</body>
+</html>

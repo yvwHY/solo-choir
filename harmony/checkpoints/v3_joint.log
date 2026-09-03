@@ -1,0 +1,25 @@
+mode=joint device=mps train=3126 val=170
+/Users/liaoyu-ting/Documents/GS/CA_Term2/FinalProject/SoloChoirCode/260615/voice-changer/harmony/train_v3.py:58: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.blocks = nn.TransformerEncoder(layer, N_LAYERS)
+params: 12.27M  CTX=4096
+step   200  train 0.9181  val 0.7488  [9.9k tok/s]  <- saved
+step   400  train 0.5550  val 0.7033  [9.8k tok/s]  <- saved
+step   600  train 0.7370  val 0.6619  [9.9k tok/s]  <- saved
+step   800  train 0.6141  val 0.6736  [9.9k tok/s]
+step  1000  train 0.6736  val 0.6803  [10.0k tok/s]
+step  1200  train 0.5491  val 0.5004  [10.0k tok/s]  <- saved
+step  1400  train 0.4442  val 0.4564  [9.9k tok/s]  <- saved
+step  1600  train 0.5241  val 0.5939  [9.9k tok/s]
+step  1800  train 0.6973  val 0.4724  [9.9k tok/s]
+step  2000  train 0.2093  val 0.5173  [9.9k tok/s]
+step  2200  train 0.6292  val 0.6099  [9.9k tok/s]
+step  2400  train 0.5095  val 0.4758  [9.9k tok/s]
+step  2600  train 0.4582  val 0.5862  [9.9k tok/s]
+step  2800  train 0.5468  val 0.5346  [9.9k tok/s]
+step  3000  train 0.5172  val 0.5342  [9.9k tok/s]
+step  3200  train 0.4867  val 0.4480  [9.9k tok/s]  <- saved
+step  3400  train 0.2807  val 0.4301  [9.8k tok/s]  <- saved
+step  3600  train 0.4726  val 0.4226  [9.8k tok/s]  <- saved
+step  3800  train 0.4804  val 0.4499  [9.8k tok/s]
+step  4000  train 0.3166  val 0.4917  [9.8k tok/s]
+done. best val 0.4226 (/Users/liaoyu-ting/Documents/GS/CA_Term2/FinalProject/SoloChoirCode/260615/voice-changer/harmony/checkpoints/v3_joint/best.pt)

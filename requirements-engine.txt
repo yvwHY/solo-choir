@@ -1,0 +1,22 @@
+# Engine environment (Python 3.10) — the venv inside the DDSP-SVC 6x checkout.
+# Versions are the ones the piece was performed on. NumPy 2.x here is why this
+# cannot be merged with requirements-app.txt.
+torch==2.13.0
+torchaudio==2.11.0
+torchcrepe==0.0.24
+torchfcpe==0.0.4
+numpy==2.2.6
+scipy==1.15.3
+librosa==0.11.0
+resampy==0.4.3
+numba==0.66.0
+soundfile==0.14.0
+soxr==1.1.0
+sounddevice==0.5.5
+praat-parselmouth==0.4.7
+pyworld==0.3.5
+mediapipe==1.0.0
+opencv-python==5.0.0.93
+PyYAML==6.0.3
+tqdm==4.69.1
+matplotlib==3.10.9

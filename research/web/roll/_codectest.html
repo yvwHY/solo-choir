@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><title>codec test</title>
+<pre id=o>running…</pre>
+<script src="./score-codec.js"></script>
+<script>
+(async () => {
+  const s = { key:{root:9}, melody:[{start:0,dur:.5,midi:69},{start:.5,dur:.5,midi:71},{start:1.0,dur:1.0,midi:72}],
+    voices:{ Sop:[{start:0,dur:.5,midi:76}], Alto:[{start:0,dur:.5,midi:72}],
+             Tenor:[{start:0,dur:.5,midi:69}], Bass:[{start:0,dur:.5,midi:57}] } };
+  const p1 = await ScoreCodec.encodeScore(s);
+  const d  = await ScoreCodec.decodeScore(p1);
+  const p2 = await ScoreCodec.encodeScore(d);          // stability: encode(decode(encode(s))) === encode(s)
+  const ok = p1===p2;
+  document.getElementById('o').textContent =
+    (ok?'PASS':'FAIL')+`  stable=${ok}  payload=${p1.length} chars  notes=${ScoreCodec.noteCount(d)}  dur=${ScoreCodec.durationSec(d).toFixed(2)}s\n`+p1;
+})();
+</script>

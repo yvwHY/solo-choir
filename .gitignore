@@ -1,0 +1,20 @@
+# Models, engine builds and corpora — see models/README.md
+/models/*
+!/models/README.md
+
+# Render cache and session dumps
+harmony/scratchpad/bank_*
+harmony/scratchpad/*_mic.wav
+harmony/scratchpad/*_out.wav
+harmony/scratchpad/*_st.npz
+recordings/
+exports/
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+
+# macOS
+.DS_Store

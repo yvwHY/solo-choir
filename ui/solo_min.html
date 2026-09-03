@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Solo · min</title>
+<link href="/app/assets/font.css" rel="stylesheet">
+<style>
+  :root{
+    --self:#4a93b8; --self2:#8fd0e6; --acc:#1f8f84;
+    /* Text-safe variants of the two accents. The bright ones stay for dots/glow/borders (decorative,
+       no contrast floor); anything that CARRIES STATE uses these. Measured against the darkest
+       stack (voice card over panel over the gradient's bottom): --acc-ink 5.8:1, --self-ink 5.7:1,
+       vs 2.9 / 2.5 for the bright pair — the on/off text was the least readable thing on stage. */
+    --acc-ink:#125a52; --self-ink:#27566f;
+    --ink:#1f2a32; --dim:#39434a; --dimmer:#48535c;
+    --line:rgba(20,40,45,.16); --hair:rgba(20,40,45,.10);
+    --panel:rgba(252,253,254,.45);
+    --mono:ui-monospace,"SF Mono",Menlo,"Cascadia Mono",monospace;
+    --sans:"Space Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--sans);color:var(--ink);min-height:100vh;padding:20px 24px 24px;
+    max-width:1240px;margin:0 auto;
+    background:linear-gradient(180deg,#c6d0d9 0%,#aeb9c4 55%,#9ca8b4 100%);background-attachment:fixed}
+  button{font-family:inherit;cursor:pointer}
+  button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+  /* ── header: brand + live readout ─────────────────────────────── */
+  .top{display:flex;align-items:flex-start;gap:18px;margin-bottom:16px}
+  h1{font-size:15px;font-weight:600;letter-spacing:.3em}
+  .sub{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase;margin-top:6px}
+  .top .grow{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:100px;
+    padding:5px 11px;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--acc-ink);background:rgba(31,143,132,.05);margin-top:2px}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--acc);box-shadow:0 0 7px rgba(31,143,132,.6)}
+  .pill.off{color:var(--dimmer);border-color:var(--line);background:transparent}
+  .pill.off .dot{background:var(--dimmer);box-shadow:none}
+  .readout{display:flex;align-items:center;gap:16px;margin-top:2px}
+  .note{min-width:118px;text-align:right}
+  .note b{font-size:26px;font-weight:600;letter-spacing:.04em;line-height:1}
+  .note .cents{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.12em;margin-top:3px;text-transform:uppercase}
+  .meterwrap{width:120px}
+  .meterwrap label{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--dimmer);text-transform:uppercase;margin-bottom:5px}
+  .meter{height:5px;border-radius:3px;background:rgba(20,40,45,.14);overflow:hidden;position:relative}
+  /* Entrance trigger level: sing past this line and the opening starts (hidden when the mode is off) */
+  .meter u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--acc-ink);display:none}
+  .meter i{display:block;height:100%;width:100%;border-radius:3px;background:var(--self);
+    transform:scaleX(0);transform-origin:left;transition:transform .09s linear}
+
+  /* ── cards ────────────────────────────────────────────────────── */
+  .card{background:var(--panel);border:1px solid var(--hair);border-radius:14px;padding:15px 16px 17px;
+    margin-bottom:14px;backdrop-filter:blur(11px);box-shadow:0 10px 34px rgba(20,40,45,.10)}
+  .card h3{font-family:var(--mono);font-size:10.5px;letter-spacing:.24em;color:var(--dim);text-transform:uppercase;
+    display:flex;justify-content:space-between;align-items:baseline;margin-bottom:13px}
+  .card h3 .hint{font-size:9.5px;letter-spacing:.1em;color:var(--dimmer);text-transform:none}
+  label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dimmer);text-transform:uppercase;margin-bottom:6px}
+  select{width:100%;font-family:var(--mono);font-size:11px;color:var(--ink);background:rgba(255,255,255,.5);
+    border:1px solid var(--line);border-radius:7px;padding:7px 9px;appearance:none;cursor:pointer}
+  input[type=range]{-webkit-appearance:none;width:100%;height:4px;background:rgba(20,40,45,.14);border-radius:3px;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+    background:var(--ink);box-shadow:0 1px 3px rgba(20,40,45,.4);transition:background .15s,transform .12s}
+  input[type=range]:hover::-webkit-slider-thumb{background:var(--acc)}
+  input[type=range]:active::-webkit-slider-thumb{transform:scale(1.18);background:var(--acc)}
+
+  /* ── ensemble: YOU + V1..V4 voice cards ───────────────────────── */
+  .voices{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .voice{border:1px solid var(--line);border-radius:11px;padding:11px 12px 13px;background:rgba(255,255,255,.28);
+    transition:border-color .18s,background .18s}
+  .voice.you{--vc:var(--self);--vc-ink:var(--self-ink);--vglow:rgba(74,147,184,.55)}
+  .voice{--vc:var(--acc);--vc-ink:var(--acc-ink);--vglow:rgba(31,143,132,.55)}
+  .voice.live{border-color:var(--vc)}
+  .vhead{width:100%;display:flex;align-items:center;gap:8px;background:none;border:none;padding:0 0 8px;text-align:left}
+  .vhead .vdot{width:7px;height:7px;border-radius:50%;background:var(--vc);box-shadow:0 0 7px var(--vglow);flex:0 0 auto;transition:.18s}
+  .vhead b{font-size:13px;font-weight:600;letter-spacing:.08em}
+  .vhead .state{margin-left:auto;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.14em;color:var(--vc-ink);text-transform:uppercase}
+  .voice .act{height:4px;border-radius:2px;background:rgba(20,40,45,.12);overflow:hidden;margin-bottom:10px}
+  .voice .act i{display:block;height:100%;width:100%;border-radius:2px;background:var(--vc);
+    transform:scaleX(0);transform-origin:left;transition:transform .09s linear}
+  .voice .vsub{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--dimmer);text-transform:uppercase;margin-bottom:0}
+  .slabel{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+    color:var(--dimmer);text-transform:uppercase;margin-bottom:6px}
+  .slabel b{color:var(--ink);font-weight:600;font-size:12px}
+  .voice.off .act i{background:var(--dimmer)}
+  .voice.off .vdot{background:var(--dimmer);box-shadow:none}
+  .voice.off .vhead .state{color:var(--dimmer)}
+  .voice.off .vsub,.voice.off .slabel,.voice.off input[type=range]{opacity:.45}
+
+  /* ── settings ─────────────────────────────────────────────────── */
+  .row{display:flex;gap:14px;align-items:flex-end}
+  .row>div{flex:1}
+  .modes{display:flex;gap:8px}
+  .modes button{flex:1;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim);background:rgba(255,255,255,.4);border:1px solid var(--line);border-radius:9px;padding:9px;transition:.18s}
+  .modes button[aria-pressed="true"]{color:#fff;background:var(--ink);border-color:var(--ink);font-weight:600}
+  .toggle{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+    background:rgba(255,255,255,.4);border:1px solid var(--line);border-radius:7px;padding:8px 12px;transition:.18s}
+  .toggle[aria-pressed="true"]{color:var(--acc-ink);border-color:var(--acc);background:rgba(31,143,132,.10)}
+  .ab button{padding:8px 14px;flex:0 0 auto}
+  .ab #hShift[aria-pressed="true"]{background:#8a4b1f;border-color:#8a4b1f}   /* baseline ≠ the instrument */
+  .ab-note{font-size:9px;letter-spacing:.1em;color:var(--acc-ink);border:1px solid var(--line);
+    border-radius:4px;padding:1px 4px;margin-left:4px}
+  details{margin-top:14px;border-top:1px solid var(--hair);padding-top:12px}
+  summary{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--dimmer);text-transform:uppercase;cursor:pointer;list-style:none}
+  summary::before{content:"▸ ";color:var(--acc-ink)}
+  details[open] summary::before{content:"▾ "}
+  .fine{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:12px}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <h1>SOLO&nbsp;·&nbsp;MIN</h1>
+      <div class="sub">you + 4 voices · live choir</div>
+    </div>
+    <div class="grow"></div>
+    <div class="readout">
+      <div class="note"><b id="noteName">—</b><div class="cents" id="noteInfo">sing to see pitch</div></div>
+      <div class="meterwrap"><label>Input</label><div class="meter"><i id="inMeter"></i><u id="entMark" title="Entrance: 唱過這條線就開場"></u></div></div>
+    </div>
+    <div class="pill off" id="livePill"><span class="dot"></span><span id="liveTxt">Engine</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Ensemble <span class="hint">click a name to mute · muted voices stay warm</span></h3>
+    <div class="row" style="margin-bottom:13px">
+      <div><div class="slabel"><span>Choir level · V1–V4 against your own voice</span><b id="cgV">+0 dB</b></div>
+        <input type="range" id="cgain" min="-6" max="18" step="1" value="0"></div>
+      <div><div class="slabel"><span>Noise gate · quiet gaps</span><b id="gtV">off</b></div>
+        <input type="range" id="gate" min="0" max="0.03" step="0.002" value="0"
+          title="轉換聲部在安靜時降下來，壓掉模型的底噪；太高會吃掉弱音尾巴"></div>
+    </div>
+    <div class="voices">
+      <div class="voice you" id="cardYou">
+        <button class="vhead" id="dry" aria-pressed="true"><span class="vdot"></span><b>YOU</b><span class="state">on</span></button>
+        <div class="act"><i id="actYou"></i></div>
+        <div class="slabel"><span>level</span><b id="ygV">0 dB</b></div>
+        <input type="range" id="ygain" min="-24" max="6" step="1" value="0"
+          title="乾聲音量——和音被自己蓋掉時把這個往下拉，比推高合唱乾淨（不會放大殘噪）">
+        <div class="vsub">raw mic · not converted</div>
+      </div>
+      <!-- V1..V4 cards are cloned from this template by JS -->
+      <template id="vtpl">
+        <div class="voice">
+          <button class="vhead"><span class="vdot"></span><b></b><span class="state">on</span></button>
+          <div class="act"><i></i></div>
+          <div class="slabel"><span class="sunit">steps</span><b class="sval">0</b></div>
+          <input type="range" min="-9" max="9" step="1" value="0">
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Performance <span class="hint">changed while playing</span></h3>
+    <div class="row" style="margin-bottom:12px">
+      <div style="flex:1.4"><label>Model</label><select id="model"></select></div>
+      <div style="flex:2">
+        <label>Mode</label>
+        <div class="modes">
+          <button id="mFixed" aria-pressed="false">Fixed transpose</button>
+          <button id="mDiatonic" aria-pressed="true">Diatonic (in-key)</button>
+        </div>
+      </div>
+      <div style="flex:0 0 auto">
+        <label>Opening</label>
+        <button class="toggle" id="entrance" aria-pressed="false"
+          title="展演開場：偵測到開唱後，V1–V4 每隔一秒依序淡入；全滿後就是一般即時。安靜幾秒會自己回到開場等下一位；要手動重來就關掉再打開。">Entrance</button>
+      </div>
+    </div>
+    <div class="row" id="keyRow">
+      <div><label>Key</label><select id="key"></select></div>
+      <div><label>Scale</label><select id="scale"><option value="major">Major</option><option value="minor">Minor</option></select></div>
+      <div style="flex:0 0 auto"><button class="toggle" id="free" aria-pressed="false" title="chord-aware harmony">Free</button></div>
+      <div style="flex:0 0 auto" class="abwrap">
+        <label>Harmony timbre <span class="ab-note">A/B</span></label>
+        <div class="modes ab" title="RQ1: does the harmony have to sound like a human voice? Same pitch, same latency — only the timbre changes.">
+          <button id="hVoice" aria-pressed="true">Voice</button>
+          <button id="hShift" aria-pressed="false">Shifter</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Setup <span class="hint">set once · not touched mid-song</span></h3>
+    <div id="err" style="display:none;font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:#a03030;margin:-4px 0 10px"></div>
+    <div class="row" style="margin-bottom:12px">
+      <div><label>Input device</label><select id="inDev"></select></div>
+      <div><label>Output device</label><select id="outDev"></select></div>
+      <div style="flex:0 0 auto"><label>&nbsp;</label><button id="devRescan" title="拔插裝置後重新掃描（免重啟）">↻</button></div>
+      <div><div class="slabel"><span>Output gain</span><b id="ogV">+0 dB</b></div><input type="range" id="ogain" min="0" max="18" step="1" value="0"></div>
+    </div>
+    <div class="row" style="margin-bottom:12px" id="routeRow"
+         title="per-voice output channel on the selected device — one multi-channel device, one clock (F7)">
+      <div style="flex:0 0 auto"><label>Routing</label><button class="toggle" id="routeOn" aria-pressed="false">Route</button></div>
+      <div><label>You</label><select id="chY" disabled></select></div>
+      <div><label>V1</label><select id="chV0" disabled></select></div>
+      <div><label>V2</label><select id="chV1" disabled></select></div>
+      <div><label>V3</label><select id="chV2" disabled></select></div>
+      <div><label>V4</label><select id="chV3" disabled></select></div>
+    </div>
+    <details id="fineWrap">
+      <summary>Fine-tuning · pitch stability</summary>
+      <div class="fine">
+        <div><div class="slabel"><span>Glide</span><b id="glV">0.04</b></div><input type="range" id="glide" min="0" max="0.2" step="0.01" value="0.04"></div>
+        <div><div class="slabel"><span>Hysteresis</span><b id="hyV">1.00</b></div><input type="range" id="hysteresis" min="0.2" max="1.4" step="0.05" value="1.0"></div>
+        <div><div class="slabel"><span>Smooth</span><b id="smV">30</b></div><input type="range" id="smooth" min="6" max="40" step="1" value="30"></div>
+      </div>
+    </details>
+  </div>
+
+<script>
+  const $=id=>document.getElementById(id);
+  const api=()=> (window.pywebview&&window.pywebview.api)||null;
+  function send(d){ const a=api(); if(a&&a.set_control) a.set_control(d); }
+  const NOTES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  NOTES.forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;$('key').appendChild(o);});
+
+  // ── state (defaults mirror solo_shell launch args; replaced by get_state() when the bridge is up)
+  let mode='diatonic';
+  const st={steps:[-2,2,-4,4], intervals:[-5,7,-12,12], on:[true,true,true,true]};
+
+  // ── build the V1..V4 cards from the template
+  const V=[];   // per-voice handles {card, head, state, act, slider, sval, sunit}
+  const tpl=$('vtpl');
+  for(let i=0;i<4;i++){
+    const c=tpl.content.firstElementChild.cloneNode(true);
+    tpl.parentNode.appendChild(c);
+    const v={card:c, head:c.querySelector('.vhead'), state:c.querySelector('.state'),
+             act:c.querySelector('.act i'),
+             slider:c.querySelector('input'), sval:c.querySelector('.sval'), sunit:c.querySelector('.sunit')};
+    c.querySelector('b').textContent='V'+(i+1);
+    v.head.onclick=()=>{ st.on[i]=!st.on[i]; paintVoice(i); send({['on'+(i+1)]:st.on[i]}); };
+    v.slider.oninput=e=>{ const n=+e.target.value;
+      if(mode==='fixed'){ st.intervals[i]=n; send({[i?('interval'+(i+1)):'interval']:n}); }
+      else{ st.steps[i]=n; send({[i?('steps'+(i+1)):'steps']:n}); }
+      v.sval.textContent=fmt(n); };
+    V.push(v);
+  }
+  const fmt=n=>(n>0?'+':'')+n;
+
+  function paintVoice(i){ const v=V[i], on=st.on[i];
+    v.card.classList.toggle('off',!on); v.head.setAttribute('aria-pressed',on);
+    v.state.textContent=on?'on':'muted'; }
+  function paintDry(){ const on=$('dry').getAttribute('aria-pressed')==='true';
+    $('cardYou').classList.toggle('off',!on);
+    $('cardYou').querySelector('.state').textContent=on?'on':'muted'; }
+  function paintSliders(){ const fixed=(mode==='fixed');
+    V.forEach((v,i)=>{ v.slider.min=fixed?-12:-9; v.slider.max=fixed?12:9;
+      const n=fixed?st.intervals[i]:st.steps[i];
+      v.slider.value=n; v.sval.textContent=fmt(n); v.sunit.textContent=fixed?'semitones':'steps'; }); }
+
+  // ── mode / key / toggles
+  function setMode(m,push=true){ mode=m;
+    $('mFixed').setAttribute('aria-pressed',m==='fixed');
+    $('mDiatonic').setAttribute('aria-pressed',m==='diatonic');
+    $('keyRow').style.display=(m==='diatonic')?'':'none';
+    $('fineWrap').style.display=(m==='diatonic')?'':'none';
+    paintSliders();
+    if(!push) return;
+    send(m==='fixed'
+      ?{mode:'fixed',interval:st.intervals[0],interval2:st.intervals[1],interval3:st.intervals[2],interval4:st.intervals[3]}
+      :{mode:'diatonic',key:$('key').value,minor:$('scale').value==='minor',
+        steps:st.steps[0],steps2:st.steps[1],steps3:st.steps[2],steps4:st.steps[3],
+        free:$('free').getAttribute('aria-pressed')==='true',glide:+$('glide').value,
+        hysteresis:+$('hysteresis').value,smooth:+$('smooth').value}); }
+  $('mFixed').onclick=()=>setMode('fixed');
+  $('mDiatonic').onclick=()=>setMode('diatonic');
+  $('key').onchange=e=>send({key:e.target.value});
+  $('scale').onchange=e=>send({minor:e.target.value==='minor'});
+  $('free').onclick=e=>{const on=e.currentTarget.getAttribute('aria-pressed')!=='true';e.currentTarget.setAttribute('aria-pressed',on);send({free:on});};
+  // off→on re-arms the engine to the silent opening; on→off puts every voice back at full gain
+  $('entrance').onclick=e=>{const on=e.currentTarget.getAttribute('aria-pressed')!=='true';
+    e.currentTarget.setAttribute('aria-pressed',on);send({entrance:on});};
+  $('dry').onclick=()=>{const b=$('dry'),on=b.getAttribute('aria-pressed')!=='true';b.setAttribute('aria-pressed',on);paintDry();send({dry:on});};
+  $('glide').oninput=e=>{$('glV').textContent=(+e.target.value).toFixed(2);send({glide:+e.target.value});};
+  $('hysteresis').oninput=e=>{$('hyV').textContent=(+e.target.value).toFixed(2);send({hysteresis:+e.target.value});};
+  $('smooth').oninput=e=>{$('smV').textContent=e.target.value;send({smooth:+e.target.value});};
+  function setAB(naive){ $('hVoice').setAttribute('aria-pressed',!naive);
+    $('hShift').setAttribute('aria-pressed',naive); send({naive:naive}); }
+  $('hVoice').onclick=()=>setAB(false);
+  $('hShift').onclick=()=>setAB(true);
+  $('model').onchange=e=>{const a=api();if(a&&a.set_model)a.set_model(e.target.value);};
+
+  // ── rebuild errors (bridge → here): engine-start failures land in this line, '' clears it
+  window.soloErr=function(m){const e=$('err');e.textContent=m||'';e.style.display=m?'':'none';};
+
+  // ── Entrance status (engine truth, ~10 Hz): waiting / how many voices are up / done, plus the
+  //    trigger level drawn on the input meter so the threshold is visible instead of guessed.
+  function paintEnt(e){ const b=$('entrance'), m=$('entMark');
+    if(!e){ b.textContent='Entrance'; b.setAttribute('aria-pressed',false); m.style.display='none'; return; }
+    b.setAttribute('aria-pressed',true);
+    b.textContent='Entrance · '+(e.armed?'waiting':(e.up>=e.n-0.01?'live':Math.ceil(e.up)+'/'+e.n));
+    m.style.display=''; m.style.left=Math.min(99,100*e.trig/LVL)+'%'; }
+
+  // ── telemetry (bridge → here, ~10 Hz): note readout, input meter, per-voice activity
+  const LVL=0.22;             // input RMS mapped to full meter
+  let lastTele=0;
+  window.soloTele=function(t){
+    lastTele=performance.now();
+    $('inMeter').style.transform='scaleX('+Math.min(1,(t.level||0)/LVL)+')';
+    if(t.voiced&&t.f0>0){
+      const m=69+12*Math.log2(t.f0/440), r=Math.round(m), cents=Math.round((m-r)*100);
+      $('noteName').textContent=NOTES[((r%12)+12)%12]+(Math.floor(r/12)-1);
+      $('noteInfo').textContent=t.f0.toFixed(1)+' Hz · '+(cents>=0?'+':'')+cents+'¢';
+    }else{
+      $('noteName').textContent='—';
+      $('noteInfo').textContent=(mode==='fixed')?'pitch tracking off in fixed mode':'sing to see pitch';
+    }
+    paintEnt(t.ent);
+    $('actYou').style.transform='scaleX('+(t.dry?Math.min(1,(t.level||0)/LVL):0)+')';
+    (t.voices||[]).forEach((tv,i)=>{ if(!V[i])return;
+      V[i].act.style.transform='scaleX('+(tv.on?Math.min(1,(tv.out||0)/LVL):0)+')';
+      V[i].card.classList.toggle('live',tv.on&&tv.out>0.01);
+      if(mode==='diatonic') V[i].sval.textContent=fmt(mode==='diatonic'?st.steps[i]:st.intervals[i])+' · '+(tv.shift>=0?'+':'')+tv.shift.toFixed(1)+' st';
+    });
+  };
+  setInterval(()=>{ const live=performance.now()-lastTele<600;
+    $('livePill').classList.toggle('off',!live);
+    $('liveTxt').textContent=live?'Live':'Engine'; },300);
+
+  // ── init from the bridge (truthful state) + model list
+  function initState(){ const a=api(); if(!(a&&a.get_state))return;
+    a.get_state().then(s=>{ if(!s)return;
+      st.steps=s.steps; st.intervals=s.intervals; st.on=s.on;
+      $('key').value=s.key; $('scale').value=s.minor?'minor':'major';
+      $('free').setAttribute('aria-pressed',!!s.free);
+      $('hVoice').setAttribute('aria-pressed',!s.naive);
+      $('hShift').setAttribute('aria-pressed',!!s.naive);
+      $('entrance').setAttribute('aria-pressed',!!s.entrance);
+      const cdb=Math.round(20*Math.log10(s.choir_gain||1));
+      $('cgain').value=cdb; $('cgV').textContent=(cdb>0?'+':'')+cdb+' dB';
+      $('gate').value=s.gate||0; $('gtV').textContent=s.gate?(+s.gate).toFixed(3):'off';
+      const ydb=Math.round(20*Math.log10(s.you_gain||1));
+      $('ygain').value=ydb; $('ygV').textContent=(ydb>0?'+':'')+ydb+' dB';
+      $('dry').setAttribute('aria-pressed',!!s.dry); paintDry();
+      $('glide').value=s.glide; $('glV').textContent=(+s.glide).toFixed(2);
+      $('hysteresis').value=s.hysteresis; $('hyV').textContent=(+s.hysteresis).toFixed(2);
+      $('smooth').value=s.smooth; $('smV').textContent=s.smooth;
+      for(let i=0;i<4;i++) paintVoice(i);
+      setMode(s.mode,false); }); }
+  // ── audio devices: exact names from the bridge; switching rebuilds the engine
+  let outChs={};   // output device name → max output channels (for the routing selects)
+  function populateDevices(){ const a=api(); if(!(a&&a.list_devices))return;
+    a.list_devices().then(d=>{ const fill=(sel,names,cur)=>{ sel.innerHTML='';
+        (names||[]).forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;
+          if(cur&&n.toLowerCase().includes(String(cur).toLowerCase()))o.selected=true;sel.appendChild(o);}); };
+      outChs={}; (d.outputs||[]).forEach(o=>outChs[o.name]=o.ch);
+      fill($('inDev'),d.inputs,d.in_name);
+      fill($('outDev'),(d.outputs||[]).map(o=>o.name),d.out_name);
+      paintRoute(d.out_map||null, (d.dry_ch==null)?-1:d.dry_ch); }); }
+  const pushDevices=()=>{const a=api();if(a&&a.set_devices)
+    a.set_devices($('inDev').value,$('outDev').value).then(()=>populateDevices());};   // repaint: bridge may drop an incompatible map
+  $('inDev').onchange=pushDevices; $('outDev').onchange=pushDevices;
+  $('devRescan').onclick=()=>{const a=api();if(a&&a.rescan_devices)a.rescan_devices().then(()=>populateDevices());};
+
+  // ── per-voice output routing (bridge validates against the selected device's channel count)
+  const ROUTE_SEL=['chY','chV0','chV1','chV2','chV3'];
+  function paintRoute(mapStr,dry){ const on=!!mapStr;
+    $('routeOn').setAttribute('aria-pressed',on);
+    const n=outChs[$('outDev').value]||2;
+    const map=on?String(mapStr).split(',').map(Number):[0,0,1,1];
+    const fillCh=(sel,val,withAll)=>{ sel.innerHTML='';
+      if(withAll){const o=document.createElement('option');o.value='-1';o.textContent='all';sel.appendChild(o);}
+      for(let c=0;c<n;c++){const o=document.createElement('option');o.value=String(c);o.textContent='ch '+c;sel.appendChild(o);}
+      sel.value=String(val); if(sel.selectedIndex<0)sel.selectedIndex=0; sel.disabled=!on; };
+    fillCh($('chY'),on?dry:-1,true);
+    for(let i=0;i<4;i++) fillCh($('chV'+i),map[i]??0,false); }
+  function pushRoute(){ const a=api(); if(!(a&&a.set_out_map))return;
+    const on=$('routeOn').getAttribute('aria-pressed')==='true';
+    a.set_out_map(on?[0,1,2,3].map(i=>$('chV'+i).value).join(','):null,
+                  on?+$('chY').value:-1)
+     .then(ok=>{ if(!ok)populateDevices(); });   // rejected → repaint bridge truth (error line says why)
+  }
+  $('routeOn').onclick=e=>{ const on=e.currentTarget.getAttribute('aria-pressed')!=='true';
+    if(on){ const n=outChs[$('outDev').value]||2;   // default split: V1+V2→ch0, V3+V4→ch1 (clamped)
+      paintRoute([0,0,1,1].map(c=>Math.min(c,n-1)).join(','),-1); }
+    else paintRoute(null,-1);
+    pushRoute(); };
+  ROUTE_SEL.forEach(id=>$(id).onchange=pushRoute);
+  $('cgain').oninput=e=>{const db=+e.target.value;$('cgV').textContent=(db>0?'+':'')+db+' dB';
+    send({choir_gain:Math.pow(10,db/20)});};   // converted voices only — the dry You keeps its level
+  $('ygain').oninput=e=>{const db=+e.target.value;$('ygV').textContent=(db>0?'+':'')+db+' dB';
+    send({you:Math.pow(10,db/20)});};   // dry You level (contract key `you`)
+  $('gate').oninput=e=>{const v=+e.target.value;$('gtV').textContent=v?v.toFixed(3):'off';send({gate:v});};
+  $('ogain').oninput=e=>{const db=+e.target.value;$('ogV').textContent='+'+db+' dB';
+    send({gain:Math.pow(10,db/20)});};   // dB → linear; 0 dB → 1.0 (unity, byte-identical path)
+
+  function populateModels(){ const a=api(); if(!(a&&a.list_models))return;
+    a.list_models().then(d=>{ const s=$('model'); s.innerHTML='';
+      (d.models||[]).forEach(n=>{const o=document.createElement('option');o.value=o.textContent=n;if(n===d.current)o.selected=true;s.appendChild(o);}); }); }
+  function boot(){ populateModels(); initState(); populateDevices(); }
+  window.addEventListener('pywebviewready',boot);
+  if(window.pywebview) boot();
+  // browser preview (no bridge): paint defaults
+  for(let i=0;i<4;i++) paintVoice(i); paintDry(); setMode('diatonic',false);
+</script>
+</body>
+</html>

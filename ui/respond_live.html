@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Solo Choir · Call &amp; Response</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #10141a; color: #cbd5e1; height: 100vh; overflow: hidden;
+    font-family: "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+    display: flex; flex-direction: column; user-select: none;
+  }
+  /* top bar: params + start/stop */
+  #bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px;
+         background: #161b23; border-bottom: 1px solid #232b36; flex-wrap: wrap; }
+  #bar label { font-size: 11px; color: #64748b; display: flex; flex-direction: column; gap: 2px; }
+  #bar input, #bar select { width: 64px; background: #0d1117; color: #e2e8f0;
+               border: 1px solid #2b3542;
+               border-radius: 6px; padding: 4px 6px; font-size: 13px; }
+  #bar select#inname, #bar select#outname { width: 150px; }
+  #mapgrp, #bmapgrp { display: flex; gap: 2px; }
+  #mapgrp select, #bmapgrp select { width: 46px; }
+  button { border: 0; border-radius: 8px; padding: 9px 22px; font-size: 15px; font-weight: 700;
+           cursor: pointer; }
+  #btnStart { background: #16a34a; color: #fff; }
+  #btnStop  { background: #7f1d1d; color: #fecaca; display: none; }
+  button:disabled { opacity: .4; cursor: default; }
+  .sp { flex: 1; }
+
+  /* main state: readable from 2–3 m away */
+  #stage { flex: 1; display: flex; flex-direction: column; align-items: center;
+           justify-content: center; gap: 10px; transition: background .25s;
+           position: relative; }
+  /* 引擎讀數列（bank_st/solo_st）。08-18 Harry「UI 鏡頭顯示都拿掉」＝
+     mouthCam 影像退役（要回來：08-18 之前版本），camCap 只剩讀數、
+     搬回右上角原鏡頭的位置 */
+  #camCap { position: absolute; top: 10px; right: 12px; width: 200px;
+            text-align: center; font-size: 11px; color: #7c8ba0; display: none; }
+  #state { font-size: clamp(56px, 20vh, 170px); font-weight: 800; letter-spacing: .06em;
+           line-height: 1; }
+  #sub   { font-size: clamp(14px, 3vh, 24px); color: #7c8ba0; }
+  .s-idle   #state { color: #475569; }
+  .s-boot   #state { color: #64748b; }
+  .s-calq   { background: #1c1210; } .s-calq #state { color: #f87171; }
+  .s-cals   { background: #101b12; } .s-cals #state { color: #4ade80; }
+  .s-listen { background: #0f1a13; } .s-listen #state { color: #4ade80; }
+  .s-render { background: #1b1609; } .s-render #state { color: #fbbf24; }
+  .s-play   { background: #0e1620; } .s-play   #state { color: #60a5fa; }
+  .s-done   #state { color: #94a3b8; }
+
+  /* single key hint. fixed spot + fixed wording per state, so the eye never
+     has to read a sentence to know what one tap does now (08-13 Harry). */
+  #tapPill { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+             display: none; align-items: center; gap: 10px;
+             background: #171d26; border: 1px solid #2b3542; border-radius: 999px;
+             padding: 9px 20px; font-size: clamp(14px, 2.4vh, 20px); font-weight: 600;
+             color: #cbd5e1; }
+  #tapPill .key { font-size: .72em; font-weight: 700; letter-spacing: .06em;
+                  color: #0d1117; background: #cbd5e1; border-radius: 6px;
+                  padding: 3px 9px; box-shadow: 0 2px 0 #64748b; }
+
+  #warn { min-height: 22px; padding: 3px 14px; font-size: 13px; color: #fbbf24;
+          background: #1b1609; display: none; }
+
+  /* stats row */
+  #stats { display: flex; gap: 0; border-top: 1px solid #232b36; background: #161b23; }
+  #stats div { flex: 1; text-align: center; padding: 8px 4px; }
+  #stats .v { font-size: 20px; font-weight: 700; color: #e2e8f0; }
+  #stats .k { font-size: 10px; color: #64748b; margin-top: 1px; }
+
+  /* raw engine log */
+  #log { height: 120px; overflow-y: auto; background: #0b0e13; border-top: 1px solid #232b36;
+         font: 10.5px/1.5 "SF Mono", Menlo, monospace; padding: 6px 10px; color: #55657a;
+         white-space: pre-wrap; user-select: text; }
+  #log .w { color: #fbbf24; }
+</style>
+</head>
+<body class="s-idle">
+  <div id="bar">
+    <label>mode<select id="mode">
+      <option value="respond">Respond</option>
+      <option value="stream">Live</option>
+      <option value="duo">Live + neural</option>
+      <option value="solo">Live · neural</option>
+    </select></label>
+    <label>gain<input id="gain" value="0.5"></label>
+    <label>gap s<input id="gap" value="1.2"></label>
+    <label>neural<input id="ngain" value="" placeholder="1｜duo .25"></label>
+    <label>bank<input id="bankgain" value="" placeholder="1｜duo .5"></label>
+    <label>you<input id="yougain" value="" placeholder=".3"></label>
+    <label>stab<input id="stab" value="1"></label>
+    <label>key<input id="key" value="auto"></label>
+    <label>mic<select id="inname"></select></label>
+    <label>out<select id="outname"></select></label>
+    <label>map D·U·L·S<span id="mapgrp">
+      <select id="mapd"></select><select id="mapu"></select><select id="mapl"></select><select id="maps"></select>
+    </span></label>
+    <label>map B·T·A·S<span id="bmapgrp">
+      <select id="bmapb"></select><select id="bmapt"></select><select id="bmapa"></select><select id="bmaps"></select>
+    </span></label>
+    <label>max-min<input id="maxmin" value="40"></label>
+    <label>reverb<input id="reverb" value="0.20"></label>
+    <label>tail s<input id="tails" value="0"></label>
+    <span class="sp"></span>
+    <button id="btnStart">Start</button>
+    <button id="btnStop">Stop</button>
+  </div>
+
+  <div id="stage">
+    <div id="state">IDLE</div>
+    <div id="sub">Press Start — models take ~10 s to load</div>
+    <div id="camCap"></div>
+    <div id="tapPill"><span class="key" id="tapKey">SPACE</span><span id="tapVerb"></span></div>
+  </div>
+  <div id="warn"></div>
+
+  <div id="stats">
+    <div><div class="v" id="stPhr">–</div><div class="k">PHRASES</div></div>
+    <div><div class="v" id="stWait">–</div><div class="k">LAST WAIT s</div></div>
+    <div><div class="v" id="stKey">–</div><div class="k">KEY</div></div>
+    <div><div class="v" id="stSep">–</div><div class="k">SEPARATION dB</div></div>
+    <div><div class="v" id="stIo">–</div><div class="k">IO OVER/UNDER</div></div>
+  </div>
+  <div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let playTimer = null;
+let curMode = null;      // 引擎實際在跑的模式（switched/Start 更新；null＝沒開演）
+
+// What one tap does, per state. Derived from the state class so every setState
+// call gets the right hint automatically; states absent here = tap does nothing
+// = pill hidden (better than a hint that lies).
+const TAP_VERB = { listen: 'end phrase', render: 'cancel, keep singing', play: 'skip' };
+
+// 引擎的 [tap] 行整段可以顯示，但它為 log 面板寫的，對站著唱的人太長＝狀態列
+// 只留一句。gap 照引擎實際生效的值印（顯示誠實）。認不得的原樣過。
+function tapText(s) {
+  const g = (s.match(/gap ([\d.]+)s/) || [])[1];
+  if (s.startsWith('connected'))
+    return 'Key connected — you end each phrase' + (g ? ' (auto after ' + g + ' s)' : '');
+  if (s.startsWith('disconnected'))
+    return 'Key disconnected — phrases end after ' + (g || '?') + ' s of silence';
+  return s;
+}
+
+function setState(cls, word, sub) {
+  document.body.className = 's-' + cls;
+  $('state').textContent = word;
+  $('sub').textContent = sub || '';
+  const verb = TAP_VERB[cls] || '';
+  $('tapVerb').textContent = verb;
+  // 膠囊只在**有句子可以結束**的模式出現。listen/render/play 這些狀態四個
+  // 模式都會用到，但取樣器與神經模式沒有斷句這回事，掛在那裡＝假提示
+  // （08-13 定的規則：表裡沒有的就整顆隱藏，寧可不提示也不給假的）。
+  updatePill();
+}
+function updatePill() {          // 模式或狀態任一改變都要重算
+  const cls = document.body.className.replace(/^s-/, '');
+  const verb = TAP_VERB[cls] || '';
+  const keyed = $('mode').value === 'respond' || $('mode').value === 'both';
+  $('tapPill').style.display = (verb && keyed) ? 'flex' : 'none';
+}
+// 欄位只在特定模式生效（shell 端 _spawn_* 誰讀誰算，08-18 稽核逐欄核對）。
+// 其他模式下整欄變灰＋鎖輸入——調了沒反應「看起來像壞掉」是這個 app 的
+// 大忌（同 mode 下拉、tapPill 的既有規則）。值照留，切回有效模式即生效。
+const FIELD_MODES = {
+  gain: ['respond'], gap: ['respond'], stab: ['respond'],
+  maxmin: ['respond'], reverb: ['respond'], tails: ['respond'],
+  // 分聲道（08-18 Harry 裁決）：D·U·L·S＝respond 的 dry/上/下/S，neural 下
+  // ＝乾聲/屋頂/低音/中層；B·T·A·S＝取樣合唱四聲部（bass/tenor/alto/sop）
+  mapgrp: ['respond', 'solo', 'duo'],
+  bmapgrp: ['stream', 'duo'],
+  ngain: ['solo', 'duo'], yougain: ['solo', 'duo'],
+  bankgain: ['stream', 'duo'],
+  key: ['respond', 'solo', 'duo'],
+};
+function applyRelevance() {       // mode 下拉的值一變就要重算（跟 updatePill 同節奏）
+  const m = $('mode').value;
+  for (const [id, modes] of Object.entries(FIELD_MODES)) {
+    const on = modes.includes(m), el = $(id);
+    el.closest('label').style.opacity = on ? '' : '.35';
+    // disabled 只鎖輸入不清值；map 群組是 span 包四顆 select（span 本身
+    // disabled 無效，要鎖到裡面的 select——bmapgrp 上過這課）
+    const kids = el.querySelectorAll('select');
+    (kids.length && el.tagName === 'SPAN' ? [...kids] : [el])
+      .forEach(x => { x.disabled = !on; });
+  }
+}
+// key=auto 是 respond 專屬語意（逐句真追調）；neural（solo/duo）只認 C..B
+// 調名，其他值 shell 會默默降成 C（respond_shell._spawn_solo）——降級要講
+// 出來，不然唱別調的人整場和弦全錯還不知道為什麼（08-18 稽核）。
+function warnKeyDowngrade() {
+  const m = $('mode').value, k = $('key').value.trim();
+  if ((m === 'solo' || m === 'duo') && k && !/^[A-Ga-g][#b]?$/.test(k))
+    warn("key '" + k + "' only works in Respond — neural modes fall back to C (type a key name)");
+}
+function warn(msg) {              // latest warning stays until the next one
+  $('warn').style.display = 'block';
+  $('warn').textContent = msg;
+}
+function log(line, isWarn) {
+  const el = $('log');
+  const d = document.createElement('div');
+  if (isWarn) d.className = 'w';
+  d.textContent = line;
+  el.appendChild(d);
+  while (el.childNodes.length > 400) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+
+let keyIsUdp = false;    // 引擎退回 UDP＝你按的是 app 的 space（見下）
+let keyIsBle = false;    // 藍牙實體鍵接上（08-25，見下）
+window.respTele = ev => {
+  // frame 事件已退役（08-18 鏡頭拿掉）。08-25：藍牙鍵那兩則（連上／掉線）是
+  // shell 直接推的，沒有 line 欄位 ⇒ 舊碼 log(undefined) 在訊息區印出
+  // 「undefined」。沒有 line 就退而用 m[0]＝那兩則變成看得懂的一行，
+  // 順便讓「鍵到底有沒有連上」在訊息區查得到。兩者都沒有就不印。
+  const logLine = ev.line || (ev.m || [])[0];
+  if (logLine) log(logLine, ev.kind === 'warn');
+  const m = ev.m || [];
+  // 鍵帽上的字＝**引擎實際在聽哪一個來源**，不是「有沒有連上」。
+  // 08-14 血訓：`[tap] connected` 只代表有訊號進來，而沒插 Pico 時那個訊號
+  // 就是 app 自己每 2 秒送的 UDP heartbeat ⇒ 拿它當「實體鍵接上」會讓畫面
+  // 說 TAP、手指按的卻是 Space。引擎退回 UDP 時會在訊息裡印
+  // 「(app space key)」——用那個標記，因為它是引擎對來源的明說。
+  // 08-25 血訓：藍牙鍵**走的就是 UDP 這條路**（shell 收到 BLE TAP 後轉發
+  // UDP，見 respond_shell 的 _ble_key），所以引擎必定印「app space key」。
+  // 那句講的是「引擎在聽哪個埠」，不是「有沒有實體鍵」——BLE 接上時必須
+  // 壓過它，否則手上明明有鍵、畫面永遠寫 SPACE（Harry 實測，viva 前一天）。
+  if (ev.kind === 'tap' && m[0] && m[0].indexOf('BLE key') >= 0) {
+    keyIsBle = m[0].startsWith('connected');
+    $('tapKey').textContent = keyIsBle ? 'BUTTON' : 'SPACE';
+  }
+  if (!keyIsBle && ev.line && ev.line.indexOf('app space key') >= 0) {
+    keyIsUdp = true;
+    $('tapKey').textContent = 'SPACE';
+  }
+  // 沒退回 UDP 而且鍵活著＝真的走 serial 的實體鍵
+  if (!keyIsUdp && !keyIsBle && ev.kind === 'tap' && m[0] && m[0].startsWith('connected'))
+    $('tapKey').textContent = 'BUTTON';
+  switch (ev.kind) {
+    case 'switching': // 1-4 換模式：新引擎在起，舊的還在唱（不會有空隙）
+      // 08-17 成熟化：點下去的**那一刻**畫面就要回應——大字進 SWITCHING、
+      // 舊引擎的讀數立刻收（shell 端同步停止舊引擎驅動 UI）、下拉
+      // 鎖住到切換結束。聲音仍由舊引擎唱到新引擎 ready＝無縫不變。
+      $('mode').disabled = true;
+      $('camCap').style.display = 'none';
+      $('camCap').textContent = '';
+      setState('boot', 'SWITCHING…',
+               m[0] + ' is loading — quiet until it is ready');
+      break;
+    case 'switch_fail': { // 切換死掉/超時：舊引擎在點擊時已停＝全停回 Start
+      $('mode').disabled = false;
+      clearTimeout(playTimer);
+      curMode = null;
+      setState('done', 'ENDED', 'switch failed — press Start');
+      $('btnStart').style.display = ''; $('btnStop').style.display = 'none';
+      $('btnStop').disabled = false;
+      break;
+    }
+    case 'switched':  // 新引擎報到、舊的已退場
+      curMode = m[0];                // 08-17：JS 端記住實際模式（下拉回復用）
+      $('mode').disabled = false;
+      $('mode').value = m[0];        // 下拉跟著走＝畫面不會跟實際不一致
+      $('sub').textContent = 'now ' + m[0];
+      updatePill();                  // 新模式可能沒有斷句鍵＝膠囊要收掉
+      applyRelevance();              // 欄位灰/亮跟著新模式走
+      warnKeyDowngrade();            // solo/duo 收到 auto/怪值＝會被降成 C，要說
+      // respond 專屬統計（句數/等待/調/分離度/IO）不跨引擎：切走不清＝凍著
+      // 上一場舊數字被當現值（08-18 稽核第 4 條）。切回 respond 時新引擎
+      // 會自己重新填。
+      ['stPhr', 'stWait', 'stKey', 'stSep', 'stIo']
+        .forEach(id => { $(id).textContent = '–'; });
+      // 舊引擎的讀數殘影要收掉（respond 沒有讀數列；bank/solo 的新引擎
+      // 下一幀 bank_st/solo_st 會自己再打開）——08-17 Harry 實測：
+      // exit 降級後原本靠 exit 收畫面的路斷了，切到 respond 殘影凍著。
+      $('camCap').style.display = 'none';
+      $('camCap').textContent = '';
+      break;
+    case 'solo_on':   // 神經即時（solo_min）：兩顆嘴＋你的乾聲＝三部
+      setState('listen', 'SING', 'Neural voices — soprano + bass follow you');
+      break;
+    case 'solo_st':   // xrun 累計。持續上升＝CPU 追不上，不是啟動抖動
+      $('camCap').style.display = 'block';
+      $('camCap').textContent = 'xrun ' + m[0];
+      if (parseInt(m[0]) > 20) warn('Neural mode xruns ' + m[0] + ' — audio may break up');
+      break;
+    case 'bank_on':   // both 模式別蓋掉應答的狀態字（bank 是配角）
+      if ($('mode').value !== 'both')
+        setState('listen', 'SING', 'Sampler bank — choir follows you (~60 ms)');
+      break;
+    case 'bank_st': { // 音 N cents ±C 嘴 開/閉 xrun X [backlog B[/dropped D]]
+      // 08-17 review #2：--frame-b64 0 之後只有 frame/solo_st 會解隱藏，
+      // bank 模式的讀數全寫進一個 display:none 的元素＝台上零即時讀數，
+      // 違反「不上狀態列就等於沒有」。這裡自己解隱藏（solo_st 同款）。
+      $('camCap').style.display = 'block';
+      // m[2] 引擎印的欄名還叫 mouth，但 08-18 起它反映的是**麥克風門**
+      // 的開關（M.eff），跟嘴/鏡頭無關＝畫面上照實叫 gate
+      $('camCap').textContent = 'pitch ' + m[0] + ' · gate ' + m[2] +
+                                ' · xrun ' + m[3] +
+                                (m[5] ? ' · drop ' + m[5] : '');
+      // dropped 是「掉音訊」唯一照得到的儀器（F25）——一直漲＝CPU 追不上
+      // （duo 模式最可能），每個 drop 就是一個 35ms 的洞。
+      if (m[5] && parseInt(m[5]) > 5)
+        warn('Sampler dropped ' + m[5] + ' blocks (35 ms holes) — CPU may not keep up');
+      // 狀態列行尾的 ⚠GATE DEAD/⚠WORKER DEAD 被 bank_st 先搶走＝warn
+      // pattern 看不到；從原始行 sniff，別讓大警告條漏掉它。
+      if (ev.line.indexOf('GATE DEAD') >= 0)
+        warn('⚠ mouth gate DEAD — running ungated (PA volume is the only guard)');
+      if (ev.line.indexOf('WORKER DEAD') >= 0)
+        warn('⚠ audio worker DEAD — output is silent, restart the engine');
+      break;
+    }
+    case 'boot':      setState('boot', 'LOADING', ev.line); break;
+    case 'cal_quiet': setState('calq', 'QUIET', 'Measuring noise floor — 3 s, stay silent'); break;
+    case 'cal_sing':  setState('cals', 'SING 5 s', 'Performance volume'); break;
+    case 'sep':       $('stSep').textContent = m[0]; break;
+    case 'key':       $('stKey').textContent = ev.line.replace(/^\[key\] /, '')
+                        .replace(/\(.*$/, '').replace(/^.*--key /, '').trim(); break;
+    case 'live':      setState('listen', 'SING', ''); break;
+    case 'stream_on': setState('listen', 'SING', 'Live mode — choir follows you'); break;
+    case 'stream_st': {          // infer p50 / 缺塊 / 旗標
+      $('stWait').textContent = (parseInt(m[0]) / 1000).toFixed(2);
+      $('stIo').textContent = m[1] + '/' + m[2];
+      if (parseInt(m[1]) > 10) warn('Stream dropouts ' + m[1] + ' — output may break up');
+      break;
+    }
+    case 'listen': {  // heartbeat line = back to singable (also corrects the PLAY countdown)
+      clearTimeout(playTimer); playTimer = null;
+      setState('listen', 'SING', '');
+      $('stPhr').textContent = m[1];
+      $('stIo').textContent = m[2] + '/' + m[3];
+      break;
+    }
+    case 'render':    setState('render', 'HOLD', 'Rendering…'); break;
+    case 'phrase': {  // response starts. silence ≈ response length + pause + tail
+      $('stPhr').textContent = m[0];
+      $('stWait').textContent = m[2];
+      setState('play', 'RESPONSE', 'Listen');
+      clearTimeout(playTimer);
+      playTimer = setTimeout(() => setState('listen', 'SING', ''),
+                             (parseFloat(m[1]) + 0.7) * 1000);
+      break;
+    }
+    case 'tap':       // 鍵的狀態上狀態列（鍵帽的字另由 keySrc 決定，見上）
+      $('sub').textContent = tapText(m[0]);
+      break;
+    case 'warn':      warn(ev.line.trim()); break;
+    case 'dump':      log('dump → ' + m[0]); break;
+    // 引擎的收場行是中文長句（統計留在 log 區就好），狀態列只報句數
+    case 'done':      setState('done', 'ENDED',
+                               m[0] ? m[0] + ' phrases' : ev.line); break;
+    case 'exit': {
+      // 審查 S1：both 模式一顆先死另一顆還在唱時，不能還原成 Start＝假
+      // ENDED＋孤兒（Start 會被 running() 擋、Stop 又不見）。ev.still＝
+      // shell 回報「還有引擎活著」。
+      if (ev.who === 'bank' || !ev.still) {       // 審查 B6：respond 死 bank
+        $('camCap').style.display = 'none';       // bank 還活時讀數照播，別藏
+        $('camCap').textContent = '';
+      }
+      if (ev.still) {
+        warn((ev.who || 'engine') + ' exited first — another engine is still running; '
+             + 'Stop clears everything');
+        break;
+      }
+      clearTimeout(playTimer);
+      curMode = null;                             // 全部退場＝沒有實際模式
+      $('mode').disabled = false;                 // 別讓鎖跨場殘留
+      if (!document.body.className.includes('done'))
+        setState('done', 'ENDED', ev.line);
+      $('btnStart').style.display = ''; $('btnStop').style.display = 'none';
+      $('btnStop').disabled = false;              // 下一場可以再按
+      break;
+    }
+  }
+};
+
+async function loadDevices() {
+  // mic/out 下拉選單（08-05 Harry：打字不方便）。裝置名整串進 --in-name/
+  // --out-name（respond2 端子字串匹配，整名必中）。out 首項＝系統預設。
+  try {
+    const dv = await window.pywebview.api.devices();
+    const fill = (el, names, extra) => {
+      el.innerHTML = '';
+      (extra ? [extra] : []).concat(names).forEach(n => {
+        const o = document.createElement('option');
+        o.value = n === 'default' ? '' : n;
+        o.textContent = n;
+        el.appendChild(o);
+      });
+    };
+    fill($('inname'), dv['in'] || []);
+    outDevs = dv['out'] || [];
+    fill($('outname'), outDevs.map(o => o.name), 'default');
+    const pre = (dv['in'] || []).find(n => n.includes('AI-Micro'));
+    if (pre) $('inname').value = pre;
+    fillMap();
+  } catch (e) { warn('Could not load the device list: ' + e); }
+}
+
+let outDevs = [];
+function fillMap() {
+  // D/U/L/S 四路聲道下拉：選項數＝所選 out 裝置的實際聲道數（default＝8）。
+  // 全部留 — ＝不分路（單一混音）。S 可留 —（跟 upper 同道，respond2 預設）。
+  const dev = outDevs.find(o => o.name === $('outname').value);
+  const ch = dev ? dev.ch : 8;
+  ['mapd', 'mapu', 'mapl', 'maps',
+   'bmapb', 'bmapt', 'bmapa', 'bmaps'].forEach(id => {
+    const el = $(id), prev = el.value;
+    el.innerHTML = '';
+    const dash = document.createElement('option');
+    dash.value = ''; dash.textContent = '—';
+    el.appendChild(dash);
+    for (let c = 0; c < ch; c++) {
+      const o = document.createElement('option');
+      o.value = String(c); o.textContent = String(c);
+      el.appendChild(o);
+    }
+    if ([...el.options].some(o => o.value === prev)) el.value = prev;
+  });
+}
+$('outname') && ($('outname').onchange = fillMap);
+
+function mapValue() {
+  const mv = ['mapd', 'mapu', 'mapl'].map(i => $(i).value);
+  if (mv.some(v => v === '')) return '';        // D/U/L 沒選滿＝不分路
+  const s = $('maps').value;
+  return mv.join(',') + (s !== '' ? ',' + s : '');
+}
+function bankMapValue() {
+  // bank 四聲部（B·T·A·S＝引擎 VOICES 順序）。四格要選滿才分路——引擎端
+  // 要求每聲部一個道；沒選滿＝空＝原立體聲混音。
+  const mv = ['bmapb', 'bmapt', 'bmapa', 'bmaps'].map(i => $(i).value);
+  return mv.some(v => v === '') ? '' : mv.join(',');
+}
+window.addEventListener('pywebviewready', loadDevices);
+if (window.pywebview) loadDevices();
+applyRelevance();   // 開場就按預設模式標灰（respond＝neural/bank/you 三欄灰）
+
+// space＝實體鍵（沒接 Pico 時；shell 轉成 UDP TAP，respond2 同協定收）。
+// focus 才算「鍵在」：失焦停 heartbeat → 引擎 6s 後自動回純能量斷句。
+// 1-4＝演出中無縫換模式（先起新引擎、等它 ready 才殺舊的＝沒有空隙）。
+// 同一個 keydown handler，因為表單防呆那條規則對兩者都適用。
+// 3 原本是 Respond+Live，08-14 Harry 拿掉，改成 Live+neural（取樣器四聲部
+// ＋神經兩顆嘴同時響）。both 的機制還在碼裡，要回來只是加一個 option。
+const MODE_KEY = {Digit1: 'respond', Digit2: 'stream',
+                  Digit3: 'duo', Digit4: 'solo'};
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const t = e.target && e.target.tagName;
+  if (t === 'SELECT' || t === 'INPUT' || t === 'BUTTON') return;  // 別搶表單的鍵
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (window.pywebview) window.pywebview.api.tap();
+    return;
+  }
+  const m = MODE_KEY[e.code];
+  if (!m || !window.pywebview) return;
+  e.preventDefault();
+  window.pywebview.api.switch_mode(m, opts());
+});
+// 演出中用滑鼠改 mode 下拉＝直接切換（跟按 1-4 同一條路）。
+// 08-14 Harry：1-4 是給他自己用的，但沒用過這個 app 的人只會去點下拉，
+// 而原本點了不會有任何事發生（要 Stop→改→Start）＝看起來像壞掉。
+// 注意：程式改 .value（switched 事件）不會觸發 change，所以不會遞迴。
+// 還沒開演時 switch_mode 自己會回 False（後端守衛），下拉的值就留給 Start
+// 用——前端不要再判斷一次「有沒有在跑」，那會跟 CSS/inline style 糾纏
+// （btnStop 初始是 CSS 隱藏，inline style 是空字串不是 'none'）。
+$('mode').onchange = async () => {
+  if (!window.pywebview) return;
+  const ok = await window.pywebview.api.switch_mode($('mode').value, opts());
+  // 08-17 review #18：blur 是必修——btnStart.onclick 那顆 blur 的註解
+  // （08-12 審查 A8）講的就是這個 bug：<select> 抓著 focus 時 keydown 的
+  // 表單防呆會吞掉 Space 與 1-4，而 pill 還寫著「SPACE · end phrase」＝
+  // 台上按 Space 沒反應、每句只能等 6 秒 gap，看起來像 app 當了。
+  if (document.activeElement) document.activeElement.blur();
+  // 切換被拒（切換進行中/timeout 後）＝下拉不能停在一個引擎沒在跑的模式，
+  // 否則畫面說謊、之後 Stop→Start 會開錯引擎。開演前（curMode null）值要
+  // 留著給 Start 用（後端本來就會拒，那不是錯誤）。
+  if (!ok && curMode) $('mode').value = curMode;
+  applyRelevance();   // 不論成功/被拒/回復，灰亮永遠跟下拉現值一致
+};
+window.addEventListener('focus', () => window.pywebview && window.pywebview.api.tap_presence(true));
+window.addEventListener('blur',  () => window.pywebview && window.pywebview.api.tap_presence(false));
+window.addEventListener('pywebviewready', () => window.pywebview.api.tap_presence(document.hasFocus()));
+
+// Start 與換模式共用同一組欄位讀取＝畫面上的數字永遠就是實際生效的那個
+// （分兩份寫遲早會有一邊忘了跟上，那正是今天下午修掉的那類 bug）。
+function opts() {
+  return {
+    mode: $('mode').value,
+    gain: $('gain').value, stab: $('stab').value, key: $('key').value,
+    in_name: $('inname').value, out_name: $('outname').value,
+    out_map: mapValue(), bank_map: bankMapValue(), max_min: $('maxmin').value,
+    reverb: $('reverb').value, tail_s: $('tails').value,
+    gap: $('gap').value,      // 斷句靜默秒數（引擎預設 0.35＝太快被切斷）
+    ngain: $('ngain').value,     // 神經聲部音量（Live+neural 要壓，見 shell）
+    bank_gain: $('bankgain').value,  // 取樣器輸出音量（08-18：duo 裡 bank 蓋過
+                                     // neural 的平衡鈕；1=過耳認證原值）
+    you_gain: $('yougain').value };  // 0＝不把你的 mic 直通回喇叭（回音源）
+}
+$('btnStart').onclick = async () => {
+  const ok = await window.pywebview.api.start(opts());
+  if (ok) {
+    curMode = $('mode').value;       // 開演＝這就是實際模式
+    $('warn').style.display = 'none';
+    warnKeyDowngrade();              // 清舊警告之後再檢查，不然會被上一行蓋掉
+    $('btnStart').style.display = 'none';
+    $('btnStop').style.display = 'inline-block';   // '' 會掉回 CSS 的 display:none
+    $('btnStop').disabled = false;                 // 上一場 Stop 後殘留的鎖
+    // 焦點若留在剛用完的下拉/輸入框，space 會被表單吞掉（上面 keydown 的
+    // guard）＝開演後按鍵無聲無息失效（08-12 審查 conc A8）。開始＝收走焦點。
+    if (document.activeElement) document.activeElement.blur();
+  } else {
+    // 審查 S1：start 被 shell 拒絕（還有引擎活著）不能無聲無息
+    warn('An engine is still running — Stop it (or wait for it to finish) before Start');
+    $('btnStop').style.display = 'inline-block';
+    $('btnStop').disabled = false;
+  }
+};
+$('btnStop').onclick = () => {
+  // 連點防護：STOPPING 最長 8s（CoreAudio 關流掛死），人一定會再按一次，
+  // 而第二個 SIGINT 會打進正在寫 dump 的 sf.write（08-12 審查 A7）。
+  if ($('btnStop').disabled) return;
+  $('btnStop').disabled = true;
+  window.pywebview.api.stop();
+  setState('done', 'STOPPING…', 'writing session dump');
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# UI shell environment (Python 3.10). The shell only draws the interface and
+# spawns engines; it never touches audio, so it needs no DSP stack.
+pywebview==6.2.1
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-WebKit==12.2
+bleak==3.0.2
+numpy==1.23.5
+sounddevice==0.4.6
+soundfile==0.14.0
