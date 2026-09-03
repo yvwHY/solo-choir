@@ -1,6 +1,6 @@
 # Solo Choir — Technical Documentation & AI-Assisted Development Process
 
-*MA Computational Arts thesis project — Yu-Ting (Harry) Liao, Goldsmiths. Draft documentation; figures are values measured during development on a MacBook Pro 16" (M2 Pro), macOS.*
+*MA Computational Arts thesis project — Yu-Ting Liao, Goldsmiths. Draft documentation; figures are values measured during development on a MacBook Pro 16" (M2 Pro), macOS.*
 
 ---
 

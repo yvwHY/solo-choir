@@ -4,7 +4,7 @@ A real-time instrument that turns one singer into a choir. You sing a phrase int
 a microphone; the system re-synthesises your voice and answers with harmony
 voices, on CPU, low latency, around a table.
 
-**Yu-Ting (Harry) Liao** — MA Computational Arts, Goldsmiths, University of
+**Yu-Ting Liao** — MA Computational Arts, Goldsmiths, University of
 London, 2026. Final project.
 
 - Documentation video: **https://vimeo.com/1223687812**
