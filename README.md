@@ -64,6 +64,17 @@ research/      Work that is not part of the performing instrument:
                the score-roll web prototype, and the 3D-print batches
 config.py      Every path that points outside this repository, in one place
 models/        Not in git — see models/README.md
+
+CLAUDE.md      The instruction file the AI assistant worked under: hard rules,
+AGENTS.md      architecture, data contracts, and a read-before-acting routing table
+.claude/       The workflow skills it was given (verification, dead-end registry,
+_reference/    review); _reference/skills/ holds the third-party ones it adapted,
+               with their attribution. Kept because the AI-assisted method is part
+               of what is documented, not an afterthought.
+BEATRICE_SOLO_CHOIR.md   Notes on the conversion engine wrapper and its licence
+requirements-app.txt     The UI shell environment
+requirements-engine.txt  The engine environment
+NOTICE.md      Attribution for everything borrowed
 ```
 
 ## Running it
@@ -113,8 +124,10 @@ licence. [`docs/VOICE_CREDITS.md`](docs/VOICE_CREDITS.md) records consent for th
 one non-corpus human voice in the shipping path.
 
 The trained harmony-brain weights in `harmony/checkpoints/` **are** included —
-they are this project's own models, trained on public-domain chorale scores, and
-they contain no voice data.
+they are this project's own models and contain no voice data. The two shipping
+models were trained on public-domain choral scores; the earlier `v2` checkpoint
+also used lines derived from the POP909 dataset. [`NOTICE.md`](NOTICE.md) says
+which corpus is in which checkpoint.
 
 ## Documentation
 

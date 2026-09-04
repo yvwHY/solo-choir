@@ -22,14 +22,52 @@ with its history, is at
 (`server/beatrice_converter.py`). Academic / non-commercial terms. The engine
 build and its models are not redistributed here.
 
+## Voice synthesis code
+
+The Respond and sampled-choir engines import and drive **DDSP-SVC**
+(**[yxlllc/DDSP-SVC](https://github.com/yxlllc/DDSP-SVC)**, MIT licence) from a
+checkout outside this repository: `harmony/phrase_render.py`,
+`harmony/world_live.py` and `harmony/spike_stream6.py` call its `ddsp.vocoder`,
+`ddsp.core`, `enhancer` and `encoder` modules. Its checkout path is configured
+through `SOLO_CHOIR_DDSP` / `SOLO_CHOIR_DDSP6X`; see
+[`models/README.md`](models/README.md). DDSP-SVC in turn brings in:
+
+- **HuBERT-Soft** — [bshall/hubert](https://github.com/bshall/hubert), MIT
+  licence, used as the content encoder. Method: van Niekerk et al., *A comparison
+  of discrete and soft speech units for improved voice conversion*, ICASSP 2022.
+- **NSF-HiFiGAN** — the vocoder and the enhancer. HiFi-GAN: Kong, Kim and Bae,
+  NeurIPS 2020; the neural source-filter model: Wang, Takaki and Yamagishi,
+  *IEEE/ACM TASLP* 28, 2020.
+- The **DDSP** formulation itself: Engel, Hantrakul, Gu and Roberts, ICLR 2020.
+
+**MediaPipe Face Landmarker** ([google-ai-edge/mediapipe](https://github.com/google-ai-edge/mediapipe),
+Apache 2.0) provides the blendshapes the camera gate and the vowel work were
+built on. Lugaresi et al., arXiv:1906.08172.
+
 ## Singing corpora
 
 - **M4Singer** — Zhang et al., *NeurIPS 2022 Datasets and Benchmarks*.
   CC BY-NC-SA. Six of the shipping voice models are trained on it.
 - **JVS corpus** and **JVS-MuSiC** — Takamichi et al. Academic /
   non-commercial. Base corpus for the Beatrice-family models.
-- **CPDL** (Choral Public Domain Library) — public-domain chorale scores, used
-  to train the harmony-brain models in `harmony/checkpoints/`.
+- **CPDL** (Choral Public Domain Library) — public-domain choral scores.
+- The **JSB chorales** distributed with **music21** (Cuthbert and Ariza, MIT
+  licence) — public-domain scores.
+- **POP909** — Wang et al., *ISMIR 2020*, released for research use. Only the
+  melody and chord annotations were used, to derive a second voice
+  (`research/harmony_experiments/silver_line.py`); the dataset itself is not
+  redistributed here.
+
+### Which corpus is in which harmony-brain checkpoint
+
+The checkpoints in `harmony/checkpoints/` are this project's own weights and
+contain no voice data, but they are not all trained on the same corpus:
+
+| Checkpoint | Trained on |
+|---|---|
+| `v3_joint/`, `v3_serial/` (the shipping models) | JSB chorales and CPDL |
+| `v2/` | JSB chorales, CPDL, and lines derived from POP909 |
+| `best.pt` (v1) | JSB chorales |
 
 ## Human voices
 
