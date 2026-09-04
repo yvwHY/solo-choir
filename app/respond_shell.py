@@ -87,9 +87,12 @@ _PATTERNS = [
     ("dump",      re.compile(r"^session dump: (.+?) \(")),
     ("done",      re.compile(r"^total (\d+) phrases \| (.+)")),
     # The live streaming mode (spike_stream, 2026-08-05 §M)
-    ("stream_on", re.compile(r"^stream on ")),
+    # These two never matched what spike_stream6 actually prints; the mode was
+    # retired on 2026-08-12 and replaced by bank_live, so the stale patterns were
+    # never noticed. Corrected here against spike_stream6.py:1496 and :1440.
+    ("stream_on", re.compile(r"^opening stream ")),
     ("stream_st", re.compile(
-        r"^infer p50 (\d+)ms.*under (\d+) flags (\d+)")),
+        r"^infer p50 (\d+)ms.*underruns (\d+) flags (\d+)")),
     # Live mode v2 is bank_live, which replaced spike_stream on 2026-08-12.
     # A dead gate risks feedback in the both mode, so it must raise the large
     # warning bar and not sit in the 10.5px log (review A4).

@@ -1,15 +1,18 @@
-"""mic_check.py — 開唱前 30 秒的收音體檢（08-08）
+"""mic_check.py - a thirty-second check on the recording chain before singing.
 
-為什麼有這支：diag8 那一唱的 SNR 只有 29dB（0802 同一支 USB 麥是 42dB），
-三張嘴把麥克風的雜訊底一起唱出來＝「氣音竊竊私語」。當時沒人知道底片已經
-壞了，於是整輪耳測與量測都建在壞素材上。這支就是不讓那件事再發生一次。
+Why this exists: one session was recorded at only 29 dB SNR, where the same USB
+microphone had given 42 dB a week earlier, and all three voices sang the
+microphone's noise floor along with everything else - the "whispering breath"
+quality. Nobody knew the material was already spoilt, so a whole round of listening
+and measurement was built on it. This exists so that does not happen twice.
 
-輸入位準沒有任何軟體增益（spike_stream6.py:486 直接吃 indata），所以唯一
-的旋鈕是 macOS 的輸入音量（系統設定→聲音→輸入）。
+There is no software gain on the input (spike_stream6.py:486 takes indata
+directly), so the only control is the macOS input volume, under Settings, Sound,
+Input.
 
-Run (DDSP venv):  python mic_check.py            # 預設 12 秒
+Run (DDSP venv):  python mic_check.py            # 12 seconds by default
                   python mic_check.py --sec 20
-流程：前 3 秒安靜（量雜訊底）→ 之後正常唱一句。
+How: be quiet for the first 3 seconds, to measure the noise floor, then sing a phrase normally.
 """
 import argparse
 import numpy as np
@@ -17,9 +20,9 @@ import sounddevice as sd
 
 SR = 44100
 HOP = 512
-QUIET_S = 3.0                 # 開頭安靜段長度
-TRAIN_REF_RMS = 0.0566        # direct_mouth.TRAIN_REF_RMS（模型訓練參考位準）
-SNR_GOOD = 40.0               # 0802 那捲好底片 = 42dB
+QUIET_S = 3.0                 # length of the silent stretch at the start
+TRAIN_REF_RMS = 0.0566        # direct_mouth.TRAIN_REF_RMS, the model's training reference level
+SNR_GOOD = 40.0               # the good session measured 42 dB
 SNR_MIN = 35.0
 
 
@@ -32,7 +35,7 @@ def main():
     ap.add_argument("--in-name", default="USB PnP")
     ap.add_argument("--sec", type=float, default=12.0)
     ap.add_argument("--file", default="",
-                    help="改判讀既有 wav（不錄音）＝可離線驗算這支工具本身")
+                    help="judge an existing wav instead of recording, which also checks this tool offline")
     a = ap.parse_args()
 
     if a.file:
@@ -41,9 +44,9 @@ def main():
         if x.ndim > 1:
             x = x.mean(1)
         x = x.astype(np.float64)
-        print(f"判讀 {a.file}（{len(x) / SR:.1f}s）")
+        print(f"judging {a.file} ({len(x) / SR:.1f}s)")
     else:
-        print(f"錄音 {a.sec:.0f} 秒 — 前 {QUIET_S:.0f} 秒請安靜，之後正常唱一句")
+        print(f"recording {a.sec:.0f} seconds - be quiet for the first {QUIET_S:.0f}, then sing a phrase normally")
         buf = sd.rec(int(a.sec * SR), samplerate=SR, channels=1,
                      dtype="float32", device=a.in_name)
         for s in range(int(a.sec), 0, -1):
@@ -57,35 +60,35 @@ def main():
     nq = int(QUIET_S * SR / HOP)
 
     if a.file:
-        # 既有檔沒有約定的安靜段：用全檔分位數（與 08-08 診斷同一把尺）
+        # an existing file has no agreed silent stretch: use whole-file percentiles, the same measure as the original diagnosis
         floor, voice = np.percentile(r, 10), np.percentile(r, 90)
     else:
-        floor = np.percentile(r[:nq], 90)    # 安靜段的上緣＝真正的底
-        voice = np.percentile(r[nq:], 90)    # 唱歌段的 p90
+        floor = np.percentile(r[:nq], 90)    # the top of the silent stretch, which is the real floor
+        voice = np.percentile(r[nq:], 90)    # p90 of the singing
     snr = db(voice) - db(floor)
     peak = np.abs(x[nq * HOP:]).max()
 
-    print(f"\n  雜訊底 {db(floor):6.1f} dBFS")
-    print(f"  歌聲   {db(voice):6.1f} dBFS   (峰值 {db(peak):.1f})")
+    print(f"\n  noise floor {db(floor):6.1f} dBFS")
+    print(f"  singing     {db(voice):6.1f} dBFS   (peak {db(peak):.1f})")
     print(f"  SNR    {snr:6.1f} dB")
-    print(f"  vs 訓練參考 {db(TRAIN_REF_RMS):.1f} dBFS："
+    print(f"  against the training reference {db(TRAIN_REF_RMS):.1f} dBFS: "
           f"{db(voice) - db(TRAIN_REF_RMS):+.1f} dB")
 
     print()
     if peak > 0.95:
-        print("  ✗ 削峰了 — 把輸入音量調低")
+        print("  FAIL clipping - turn the input volume down")
     elif snr < SNR_MIN:
-        print(f"  ✗ SNR {snr:.0f}dB 太低（diag8 那捲壞底片就是 29dB）。"
-              "把 macOS 輸入音量調高再測一次；\n"
-              "    若調到底仍不足，換麥距／線材／USB 埠再試。")
+        print(f"  FAIL SNR {snr:.0f}dB is too low (the spoilt session was 29 dB). "
+              "Turn the macOS input volume up and measure again;\n"
+              "    if it is already at maximum, try the distance, the cable or another USB port.")
     elif snr < SNR_GOOD:
-        print(f"  △ SNR {snr:.0f}dB 堪用，但不如 0802 那捲（42dB）。"
-              "還有調高的空間就調。")
+        print(f"  MARGINAL SNR {snr:.0f}dB is usable but below the good session (42 dB). "
+              "Raise it if there is room.")
     else:
-        print(f"  ✓ SNR {snr:.0f}dB — 可以開唱")
+        print(f"  PASS SNR {snr:.0f}dB - ready to sing")
 
     if abs(db(voice) - db(TRAIN_REF_RMS)) > 6 and snr >= SNR_MIN:
-        print("  △ 歌聲位準離訓練分布 >6dB（模型在分布外會退化）")
+        print("  MARGINAL the singing level is more than 6 dB from the training distribution, where the model degrades")
 
 
 if __name__ == "__main__":

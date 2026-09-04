@@ -1,22 +1,28 @@
-"""bare_test.py — autotune 案重審：乾淨素材 × 全階梯（08-05 v2）
+"""bare_test.py - the auto-tune case re-tried on clean material, across the whole ladder (v2).
 
-**素材翻案（Harry 抓到的）**：respond2 的 session dump 是「他被聽見的＋
-播出去的同軌」（respond2.py:850）＝他的獨唱句與回應段（他的重播＋兩天使）
-在同一條 mono 軌上交錯。舊選段 `[0::2]` 的奇偶對位被前置過濾打歪——
-互相關鑑定（回應段必含上一句的數位重播＝xcorr 高）證實：prosody_ab／
-vs_male3_trial／裸測 v1 選中的 seg0/seg1（103.7s、123.7s）**都是回應段**
-＝三聲部混音被當成他的句子餵進 harvest/HuBERT＝「不穩、亂掉」的來源。
-A–E／裸測 v1／正典 v1 的所有判決與量測作廢（worklog 08-05 §C）。
+**The material was withdrawn.** respond2's session dump is "what he was heard
+saying plus what was played out, on one track" (respond2.py:850): his solo phrases
+and the responses - his own playback plus both parts - interleave on a single mono
+track. The old `[0::2]` selection had its odd/even alignment thrown off by a
+pre-filter. Cross-correlation settles it, since a response necessarily contains a
+digital replay of the phrase before it and so correlates highly: the segments
+chosen by prosody_ab, vs_male3_trial and the first bare test (at 103.7 s and
+123.7 s) were ALL responses, so a three-part mix was fed to harvest and HuBERT as
+if it were his phrase, which is where "unsteady, a mess" came from. Every verdict
+and measurement from cells A to E, the first bare test and the first reference run
+is void.
 
-本檔 v2＝在真獨唱句上重跑整條階梯（產物 `out/clean_ab/`）：
-  seg{i}_dry.wav                 他的獨唱句（先確認：單人聲、乾淨）
-  seg{i}_A_mix / _A_bass1_lower  現行配方基線（骨架量化；原始 autotune 被告）
-  seg{i}_bare_harry_ident        他的 harvest f0 ×1 直進他自己的模型（dm 馬具）
-  seg{i}_bare_bass1_oct / _girl_up / _bare_mix   八度下/上與裸混音
-  （canon＝main.py 直跑另由 shell 產：seg{i}_canon_*.wav）
+This v2 re-runs the whole ladder on real solo phrases, into `out/clean_ab/`:
+  seg{i}_dry.wav                 his solo phrase (confirmed first: one voice, clean)
+  seg{i}_A_mix / _A_bass1_lower  the current recipe as a baseline (quantised
+                                 skeleton, the original defendant)
+  seg{i}_bare_harry_ident        his harvest f0 at x1 straight into his own model
+  seg{i}_bare_bass1_oct / _girl_up / _bare_mix   an octave down and up, and the bare mix
+  (the reference cells come from running main.py directly, via the shell: seg{i}_canon_*.wav)
 
-判讀階梯：dry → canon（正典上限）→ bare（dm 馬具）→ A（全配方）——
-autotune／亂掉在哪一階出現，罪就在那一階新增的東西上。
+Reading the ladder: dry, then reference (the ceiling), then bare, then A (the full
+recipe). Whichever rung the auto-tuned or unsteady quality appears on, the blame
+belongs to what that rung added.
 
 Run (DDSP venv):  python bare_test.py
 """
@@ -39,9 +45,12 @@ DUMP = H / "out/resp2_live_260804_160058.wav"
 
 
 def his_phrases(x, k=2, min_s=3.0, xc_resp=0.5, xc_self=0.35):
-    """挑真獨唱句。分類器＝與前一段的正規化互相關峰值：回應段含上一句的
-    數位重播（實測 0.56–0.95），他的句子與前段無關（實測 ≤0.30）。
-    再要求「下一段是回應」＝這句真的被腦聽見並回應過。"""
+    """Pick real solo phrases. The classifier is the peak normalised
+    cross-correlation with the previous segment: a response contains a digital
+    replay of the phrase before it (measured 0.56 to 0.95), while his own phrase is
+    unrelated to what precedes it (measured 0.30 or below). It also requires that
+    the NEXT segment be a response, which proves the model heard this phrase and
+    answered it."""
     from scipy.signal import fftconvolve
     ph = [(s, e) for s, e in R.find_phrases(x, 0.35, 0.8)]
     xc = [0.0]
@@ -61,8 +70,10 @@ def his_phrases(x, k=2, min_s=3.0, xc_resp=0.5, xc_self=0.35):
 
 
 def bare_render(r, x, ratio, sh):
-    """他的 f0 × 固定倍率直接進模型。phrase_render.render 拆掉骨架後的殘骸：
-    每一步（AGC/vm/哨兵/vol mask/÷agc_g/uv 靜音）逐行對齊，只差 f0 來源。"""
+    """His f0 times a fixed ratio, straight into the model: what is left of
+    phrase_render.render once the skeleton is removed. Every step (AGC, voicing
+    mask, sentinel, volume mask, dividing the AGC gain back out, silencing unvoiced)
+    matches line for line; only the source of f0 differs."""
     torch = r.torch
     n_hops = len(x) // dm.HOP + 1
     if "f0m" not in sh:
@@ -77,7 +88,7 @@ def bare_render(r, x, ratio, sh):
     f0 = np.zeros(n_hops)
     k = min(n_hops, len(f0m))
     f0[:k] = f0m[:k] * ratio
-    f0 = np.where(f0 * vm > 0, f0 * vm, 1200.0)   # uv 哨兵，同 phrase_render
+    f0 = np.where(f0 * vm > 0, f0 * vm, 1200.0)   # the unvoiced sentinel, as in phrase_render
     with torch.no_grad():
         if sh.get("units") is None:
             au = torch.from_numpy(x_in).float().unsqueeze(0).to(r.device)
@@ -95,7 +106,7 @@ def bare_render(r, x, ratio, sh):
     wav[: len(m_up)] *= m_up
     kk = min(len(wav), len(agc_g))
     wav = wav[:kk] / agc_g[:kk]
-    ang, _ = dm.uv_passthrough(wav, x[:kk], vm, dry_gain=0.0)  # 同 AB stems
+    ang, _ = dm.uv_passthrough(wav, x[:kk], vm, dry_gain=0.0)  # the same stems as the A/B
     return ang
 
 
@@ -113,7 +124,7 @@ def main():
     R.RMS_GATE = 0.02
     segs, ts = his_phrases(x)
     for (a, b) in ts:
-        print(f"seg @ {a:.1f}-{b:.1f}s（獨唱句，xcorr 鑑定）")
+        print(f"seg at {a:.1f}-{b:.1f}s (a solo phrase, confirmed by cross-correlation)")
 
     torch.manual_seed(1234)
     ear = EarV3(indep=0.15, stab=1, key=0)
@@ -131,7 +142,7 @@ def main():
         sf.write(str(OUT / "src" / f"seg{i}_src.wav"), seg, SR, subtype="FLOAT")
         wr(f"seg{i}_dry.wav", seg)
         sh = {"f0m": dm.harvest_f0(seg)}
-        # --- 裸測（dm 馬具、零骨架） ---
+        # --- the bare test: the harness only, no skeleton ---
         res = {}
         for tag, mdl, ratio in plan:
             ang = bare_render(rend[mdl], seg, ratio, sh)
@@ -141,7 +152,7 @@ def main():
         wr(f"seg{i}_bare_mix.wav",
            DRY * seg[:n] + GU * res["girl_up"][:n]
            + GL * res["bass1_oct"][:n])
-        # --- A 版基線（現行配方＝骨架量化；同 prosody_ab A） ---
+        # --- the A baseline: the current recipe, that is the quantised skeleton ---
         kt.push(sh["f0m"])
         rb = kt.best()
         if rb is not None and rb[2] >= 0.015:
@@ -152,8 +163,9 @@ def main():
         json.dump({v: [None if t is None else int(t) for t in d[v]]
                    for v in d},
                   open(OUT / f"seg{i}_notes.json", "w"))
-        # 音符線落檔＝a_enh.py 等後續 A/B 吃同一條線（EarV3 有隨機性、對
-        # 呼叫序敏感——單一變因對照必須鎖線）。
+        # write the note line out, so later A/Bs such as a_enh.py consume the same
+        # one; the ear has randomness and is sensitive to call order, so a
+        # single-variable comparison has to lock the line.
         kw = {v: dict(expr_gain=0.0, vib_semi=0.12, vib_onset_ms=250.0,
                       uv_dry=0.0, vib_hz=R.VIB[v][0], vib_phase=R.VIB[v][1])
               for v in R.VOICES}
@@ -164,7 +176,7 @@ def main():
         wr(f"seg{i}_A_mix.wav",
            DRY * seg[:n] + GU * angA["upper"][:n] + GL * angA["lower"][:n])
         wr(f"seg{i}_A_bass1_lower.wav", angA["lower"][:n])
-        print(f"seg{i}: 幀間 f0 活動 dry {motion(seg):.1f}c ｜ "
+        print(f"seg{i}: frame-to-frame f0 activity, dry {motion(seg):.1f}c | "
               + " ".join(f"{t} {motion(w):.1f}c" for t, w in res.items())
               + f" ｜ A_lower {motion(angA['lower'][:n]):.1f}c")
     print("wrote", OUT)

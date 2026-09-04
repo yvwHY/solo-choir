@@ -1,11 +1,13 @@
-"""bank_gate_forensics — 門控法醫（v14.2 配套）：對 dump 驗收狀態機。
+"""bank_gate_forensics - forensics on the gate: check the state machine against a dump.
 
-用法: python bank_gate_forensics.py scratchpad/<dump前綴>
-輸出: ①每次門/臉/嘴狀態轉移的時間戳與間隔 ②不變量檢查（抓「不該發生」）：
-  I1 門關(mok=0)期間 f0 必須為 0（違反＝門控被繞過）
-  I2 門關超過 release(0.25s)+尾（0.3s）後輸出包絡必須 <-40dB（違反＝關不掉）
-  I3 臉丟失→門關的延遲必須 ≤0.9s（0.8s 寬限＋一個嘴迴圈）
-  I4 臉回來→門開的延遲必須 ≤0.2s（嘴 worker 週期＋偵測）
+Usage: python bank_gate_forensics.py scratchpad/<dump prefix>
+Output: (1) a timestamp and interval for every gate, face and mouth transition;
+(2) invariant checks, which catch what should not happen:
+  I1 while the gate is shut, f0 must be 0 (a violation means the gate was bypassed)
+  I2 more than release (0.25 s) plus the tail (0.3 s) after the gate shuts, the
+     output envelope must be below -40 dB (a violation means it will not shut)
+  I3 face lost to gate shut must be within 0.9 s (0.8 s grace plus one mouth loop)
+  I4 face back to gate open must be within 0.2 s (the mouth worker period plus detection)
 """
 import sys
 
@@ -25,26 +27,27 @@ print(f"dump {n} hops（{n*hop:.1f}s）")
 
 def transitions(x, name):
     ch = np.where(np.diff(x.astype(int)) != 0)[0]
-    print(f"\n[{name}] 轉移 {len(ch)} 次")
+    print(f"\n[{name}] {len(ch)} transitions")
     for i in ch[:40]:
         print(f"  {t[i+1]:8.2f}s  {int(x[i])} → {int(x[i+1])}")
     return ch
 
 
-tf = transitions(face, "臉")
-tm = transitions(mon, "嘴開")
-tg = transitions(mok, "門")
+tf = transitions(face, "face")
+tm = transitions(mon, "mouth open")
+tg = transitions(mok, "gate")
 
-print("\n── 不變量 ──")
-# I1（R5 修正：f0 通道現在記門控**前**的偵測＝門關時有 f0 是正常的；
-# 正確不變量＝門關期間 note 不得改變）
+print("\n-- invariants --")
+# I1 (corrected in R5: the f0 channel now records detection BEFORE the gate, so f0
+# while the gate is shut is normal; the correct invariant is that the note must not
+# change while the gate is shut)
 note = z["note"]
 v1 = 0
 for i in range(1, len(mok)):
     if mok[i] < 0.5 and mok[i-1] < 0.5 and note[i] != note[i-1]             and note[i] >= 0:
         v1 += 1
-print(f"I1 門關期間 note 改變：{v1} 次 {'✗ 違反' if v1 else '✓'}")
-# I2 門關 ≥0.55s 之後的輸出包絡
+print(f"I1 note changed while the gate was shut: {v1} times {'FAIL' if v1 else 'ok'}")
+# I2 output envelope more than 0.55 s after the gate shuts
 env = np.array([np.sqrt((om[int(i*hop*sr):int((i+1)*hop*sr)]**2).mean())
                 for i in range(n)])
 bad = 0
@@ -53,8 +56,8 @@ for i in range(n):
     run = run + 1 if mok[i] < 0.5 else 0
     if run * hop > 0.55 and env[i] > 0.01:
         bad += 1
-print(f"I2 門關 >0.55s 後仍有輸出：{bad} hops {'✗ 違反' if bad else '✓'}")
-# I3 臉丟→門關延遲
+print(f"I2 still output more than 0.55s after the gate shut: {bad} hops {'FAIL' if bad else 'ok'}")
+# I3 face lost to gate shut
 lags = []
 for i in np.where(np.diff(face.astype(int)) == -1)[0]:
     j = i
@@ -63,11 +66,11 @@ for i in np.where(np.diff(face.astype(int)) == -1)[0]:
     if j < n:
         lags.append((j - i) * hop)
 if lags:
-    print(f"I3 臉丟→門關：p50 {np.median(lags):.2f}s max {max(lags):.2f}s "
+    print(f"I3 face lost to gate shut: p50 {np.median(lags):.2f}s max {max(lags):.2f}s "
           f"{'✓' if max(lags) <= 0.9 else '✗ >0.9s'}")
 else:
-    print("I3 無臉丟事件（本場沒走開過）")
-# I4 臉回→門開
+    print("I3 no face-lost events (nobody walked away)")
+# I4 face back to gate open
 lags = []
 for i in np.where(np.diff(face.astype(int)) == 1)[0]:
     j = i
@@ -76,7 +79,7 @@ for i in np.where(np.diff(face.astype(int)) == 1)[0]:
     if j < n:
         lags.append((j - i) * hop)
 if lags:
-    print(f"I4 臉回→門開：p50 {np.median(lags):.2f}s max {max(lags):.2f}s"
-          f"（含他重新開口的時間；純門延遲看 p50）")
+    print(f"I4 face back to gate open: p50 {np.median(lags):.2f}s max {max(lags):.2f}s"
+          f" (including the time he took to start singing again; p50 is the gate delay alone)")
 else:
-    print("I4 無臉回事件")
+    print("I4 no face-returned events")

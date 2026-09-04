@@ -1,12 +1,15 @@
-"""lab.py — live_v3 實驗台（單檔 web 控制台，2026-07-31）
+"""lab.py - a test bench for the live engine: a single-file web console.
 
-不走 app/ 的 pywebview 三層模式：live_v3 是引擎子行程（音訊它自己管），
-這裡只是 stdlib HTTP server——一頁 UI＋SSE 把引擎 stdout 串進瀏覽器＋
-start/stop 兩個 POST。沒有新依賴，每個端點可 curl，玩壞了殺掉重開就好。
+This does not use the three-layer pywebview pattern of app/. The engine is a
+subprocess owning its own audio, so this is only a stdlib HTTP server: one page of
+UI, server-sent events streaming the engine's stdout into the browser, and two POST
+endpoints for start and stop. No new dependencies, every endpoint can be curled,
+and if it breaks, kill it and start again.
 
-Run（DDSP venv，於 harmony/ 下）:
-  .../260724_ddsp_svc/venv/bin/python lab.py     # 自動開瀏覽器
-Stop 按鈕送 SIGINT＝引擎跑完收官報表（mic dump＋命題一數字）才退。
+Run (DDSP venv, from harmony/):
+  .../260724_ddsp_svc/venv/bin/python lab.py     # opens a browser
+The Stop button sends SIGINT, so the engine finishes its closing report (the
+microphone dump and the headline numbers) before it exits.
 """
 import json
 import os
@@ -26,7 +29,7 @@ PORT = 8321
 
 _clients = set()
 _clients_lock = threading.Lock()
-_hist = []              # 引擎輸出歷史（晚進的瀏覽器補看）
+_hist = []              # history of engine output, so a browser arriving late catches up
 _engine = {"proc": None}
 
 
@@ -48,13 +51,13 @@ def _pump(proc):
 
 def _start(cfg):
     if _engine["proc"] is not None:
-        return {"err": "已經在跑了，先 Stop"}
+        return {"err": "already running; stop it first"}
     cmd = [PY, "-u", str(HERE / "live_v3.py")]
     if cfg.get("mode") == "file":
         src = cfg.get("file_in") or ""
-        # Path("") == Path(".") 會存在——必須先擋空字串再驗檔案（07-31 Harry 踩到）
+        # Path("") == Path(".") exists, so the empty string has to be rejected before the file is checked
         if not src or not Path(src).is_file():
-            return {"err": f"file 模式要先填輸入 wav 路徑（收到：{src!r}）"}
+            return {"err": f"file mode needs an input wav path (got {src!r})"}
         cmd += ["--file", src, str(HERE / "out" / "lab_render.wav")]
     else:
         for k, f in (("in_name", "--in-name"), ("out_name", "--out-name")):
@@ -70,7 +73,7 @@ def _start(cfg):
             "--expr-gain", str(cfg.get("expr_gain", 1.0))]
     if cfg.get("anticipate"):
         cmd += ["--anticipate"]
-    if cfg.get("extra"):          # 進階參數原樣傳（如 --hop-ms 100 --bound-ms 450）
+    if cfg.get("extra"):          # pass advanced arguments through verbatim, such as --hop-ms 100 --bound-ms 450
         cmd += str(cfg["extra"]).split()
     if cfg.get("rehearse"):
         cmd += ["--rehearse", cfg["rehearse"],
@@ -87,14 +90,14 @@ def _start(cfg):
 def _stop():
     p = _engine["proc"]
     if p is None:
-        return {"err": "沒有在跑"}
-    p.send_signal(signal.SIGINT)     # ＝Ctrl-C：跑完收官報表才退
+        return {"err": "not running"}
+    p.send_signal(signal.SIGINT)     # the same as Ctrl-C: it exits after the closing report
 
-    def _escalate(proc):             # SIGINT 被忽略/卡死的保險（07-31 Stop 失靈案）
+    def _escalate(proc):             # insurance for SIGINT being ignored or the process wedging
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            _emit("⚠ SIGINT 15s 未退，改送 SIGTERM")
+            _emit("SIGINT did not exit within 15s, sending SIGTERM")
             proc.terminate()
     threading.Thread(target=_escalate, args=(p,), daemon=True).start()
     return {"ok": True}
@@ -190,7 +193,7 @@ class H(BaseHTTPRequestHandler):
 def main():
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     url = f"http://127.0.0.1:{PORT}"
-    print(f"v3 lab: {url}  (Ctrl-C 關閉；引擎若在跑會一併收掉)")
+    print(f"lab: {url}  (Ctrl-C closes it, taking a running engine with it)")
     if "--no-browser" not in sys.argv:
         webbrowser.open(url)
     try:

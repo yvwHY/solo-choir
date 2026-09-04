@@ -1,20 +1,24 @@
-"""respond2 --live 的合成 probe：BlackHole 當虛擬 mic，無硬體跑完整條鏈。
+"""A synthetic probe for respond2 --live: BlackHole as a virtual microphone, so the whole chain runs with no hardware.
 
-與 live_probe.py（live_v3 用）的差別＝**應答式要會等**：respond2 斷句後輸入
-硬靜音，一路到回應播完＋殘響尾巴。feeder 若一路播下去，他「下一句」會整段
-落在靜音窗裡被吃掉，量到的句長與等待全是假的（08-02 合成 probe 低估 3 倍的
-另一個成因）。所以這裡讀 respond2 自己印的「靜音窗」秒數，**播放頭原地暫停**
-——模擬他等回應播完才唱下一句。
+The difference from live_probe.py: **the answering mode has to wait.** After a
+phrase ends, respond2 hard-mutes its input all the way through the response and its
+reverb tail. If the feeder keeps playing, his "next phrase" lands entirely inside
+that mute window and is swallowed, so the phrase lengths and waits measured are
+fictional (this is the other reason an earlier synthetic probe underestimated by a
+factor of three). So this reads the mute-window duration respond2 prints and PAUSES
+THE PLAY HEAD, simulating a singer waiting for the response before the next phrase.
 
-量的是三件事：①端到端跑不跑得完 ②io overflow/underflow（管線化在他唱的時候
-就開始跑腦與 voicing，這是輸入被擠掉的唯一風險）③每句「他停唱到回應開播」。
+It measures three things: whether the chain runs end to end; input overflow and
+underflow (pipelining starts the model and the voicing while he is still singing,
+which is the only risk of input being squeezed out); and, per phrase, the time from
+him stopping to the response starting.
 
-用法（DDSP venv，於 harmony/ 下）:
+Usage (DDSP venv, from harmony/):
   .../260724_ddsp_svc/venv/bin/python resp2_probe.py take.wav --key 3
-  ... resp2_probe.py take.wav --key 3 -- --no-pipeline      # -- 之後傳給 respond2
+  ... resp2_probe.py take.wav --key 3 -- --no-pipeline      # anything after -- goes to respond2
 
-血訓（07-31 §H）：shell `&` 背景起的行程 SIGINT 被設成忽略 → 必須 Popen
-（無 shell）＋ proc.send_signal(SIGINT)。
+A lesson learned the hard way: a process started with a shell `&` has SIGINT set to
+ignored, so this must use Popen with no shell plus proc.send_signal(SIGINT).
 """
 import argparse
 import re
@@ -31,8 +35,8 @@ import soundfile as sf
 ap = argparse.ArgumentParser()
 ap.add_argument("wav")
 ap.add_argument("--key", default="3")
-ap.add_argument("--gate", default="0.02", help="給死＝跳過開場校準")
-ap.add_argument("--in-name", default="BlackHole", help="respond2 的虛擬 mic")
+ap.add_argument("--gate", default="0.02", help="fixed, so the opening calibration is skipped")
+ap.add_argument("--in-name", default="BlackHole", help="respond2's virtual microphone")
 a, rest = ap.parse_known_args()
 if rest and rest[0] == "--":
     rest = rest[1:]
@@ -49,7 +53,7 @@ proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
 
 started = threading.Event()
 st = {"pos": 0, "mute_until": 0.0}
-RE = re.compile(r"腦＋渲染\s+([\d.]+)s.*靜音窗\s+([\d.]+)s")
+RE = re.compile(r"brain\+render\s+([\d.]+)s.*mute window\s+([\d.]+)s")
 
 
 def reader():
@@ -59,7 +63,7 @@ def reader():
         if ln.startswith("respond2 live."):
             started.set()
         m = RE.search(ln)
-        if m:                      # 靜音窗剩下的部分＝總長減掉已經花掉的腦＋渲染
+        if m:                      # what is left of the mute window is its total minus the model and render already spent
             st["mute_until"] = time.perf_counter() + max(
                 0.0, float(m.group(2)) - float(m.group(1)))
 
@@ -67,7 +71,7 @@ def reader():
 threading.Thread(target=reader, daemon=True).start()
 if not started.wait(180):
     proc.kill()
-    sys.exit("respond2 沒開場（180s）")
+    sys.exit("respond2 never started (180s)")
 
 done = threading.Event()
 
@@ -75,7 +79,7 @@ done = threading.Event()
 def cb(outdata, frames, t, status):
     outdata[:] = 0
     if time.perf_counter() < st["mute_until"]:
-        return                      # 他在聽回應：播放頭不前進
+        return                      # he is listening to the response: do not advance the play head
     p = st["pos"]
     s = x[p:p + frames]
     if not len(s):
@@ -89,13 +93,13 @@ def cb(outdata, frames, t, status):
 
 time.sleep(0.3)
 print(f"probe: feeding {len(x) / sr:.1f}s into {a.in_name}"
-      f"（回應播放期間暫停播放頭）", flush=True)
+      f" (the play head pauses while a response plays)", flush=True)
 with sd.OutputStream(samplerate=sr, blocksize=1024, channels=2,
                      device=a.in_name, callback=cb):
     t0 = time.perf_counter()
     while not done.wait(0.2):
         if time.perf_counter() - t0 > len(x) / sr * 4 + 120:
-            print("probe: 超時，收工", flush=True)
+            print("probe: timed out, stopping", flush=True)
             break
     time.sleep(max(0.0, st["mute_until"] - time.perf_counter()) + 1.0)
 

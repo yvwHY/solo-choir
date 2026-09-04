@@ -1,19 +1,22 @@
-"""sustain_live.py — 長音觸發同步 live 原型 v0（08-05；G28 Instead 案②）
+"""sustain_live.py - a sustain-triggered synchronous live prototype (v0).
 
-你唱到穩定長音（~0.26s 內擺動 <±30c）→ 天使（S=+8ve Soprano-3、
-B=−8ve Bass-1）batch 渲染 1.2s 塊進場跟唱；你還在撐就續塊、你收音
-它們 150ms 淡出。嘴＝你當下的母音（回文循環鋪滿塊長＝units/vol 都有
-自然微變化，不是凍結單幀）、f0＝你當下音高×固定倍率＋去同步顫音、
-全過 enhancer＝應答式終判同款音路。
+Hold a steady note - swinging less than 30 cents over about 0.26 s - and the parts
+(soprano an octave up, bass an octave down) render a 1.2 s chunk in batch and join
+in. Keep holding and they refill; stop and they fade over 150 ms. The voice is your
+current vowel, a palindromic loop filling the chunk so units and volume vary
+naturally rather than freezing one frame; f0 is your current pitch times a fixed
+ratio, with desynchronised vibrato; and everything passes through the enhancer, the
+same audio path as the answering mode.
 
-為什麼能活（vs G28 流式 WORLD 之死）：長音＝準穩態＝不需要逐幀上下文；
-音色死感已由 enhancer 解（08-05 §F）；units 直通＝你唱什麼母音天使唱
-什麼母音。判決＝Harry live（他 08-05：「即時的東西要聽 live」）。
+Why this can live where streaming WORLD resynthesis died (G28): a sustained note is
+quasi-stationary and needs no frame-by-frame context; the dead timbre was already
+solved by the enhancer; and units pass straight through, so the parts sing whatever
+vowel you sing. The verdict has to be live.
 
 Run (DDSP venv):
-  python sustain_live.py                      # USB PnP 進、AI-Micro 出
+  python sustain_live.py                      # USB PnP in, AI-Micro out
   python sustain_live.py --in-name X --out-name Y --gain 0.6
-Ctrl-C 結束。
+Ctrl-C to stop.
 """
 import argparse
 import threading
@@ -29,10 +32,10 @@ from prosody_ab import B1
 
 SR, BLK, HOP = 44100, 1024, 512
 TICK_S = 0.033
-STAB_TICKS = 8            # ~0.26s 穩定窗
-STAB_CENTS = 60.0         # 窗內 max-min
-CHUNK_S = 1.2             # 每塊渲染秒數
-REFILL_AT = 0.45          # 播剩 <0.45s 且仍穩定 → 續塊
+STAB_TICKS = 8            # about a 0.26 s stability window
+STAB_CENTS = 60.0         # max minus min within the window
+CHUNK_S = 1.2             # seconds rendered per chunk
+REFILL_AT = 0.45          # under 0.45 s left to play and still steady: refill
 RELEASE_S = 0.15
 MIN_HZ, MAX_HZ = 70.0, 500.0
 SOP = (f"{R.DDSP}/exp/combsub-m4-sop3/model_10000.pt", 2.0, 4.9, 0.75)
@@ -40,7 +43,7 @@ BAS = (B1, 0.5, 4.6, 0.5)
 
 
 def rt_f0(x):
-    """滑窗即時 f0：parselmouth ac 於最後 0.35s，回傳末端 voiced 中位。"""
+    """Sliding-window live f0: parselmouth autocorrelation over the last 0.35 s, returning the median of the voiced tail."""
     import parselmouth
     snd = parselmouth.Sound(np.ascontiguousarray(x), SR)
     p = snd.to_pitch_ac(time_step=0.02, pitch_floor=MIN_HZ,
@@ -53,7 +56,7 @@ def rt_f0(x):
 
 
 def loop_audio(x, n_samp, xf=int(0.03 * SR)):
-    """母音片段回文循環鋪到 n_samp（接縫 30ms 交叉淡化）＝units/vol 有活味。"""
+    """Loop a vowel fragment palindromically out to n_samp, with a 30 ms crossfade at the splice, so units and volume stay alive."""
     seg = x
     outs = [seg]
     fwd = False
@@ -114,9 +117,9 @@ def main():
     ap.add_argument("--attack-ms", type=float, default=80.0)
     a = ap.parse_args()
 
-    print("載入兩張嘴＋enhancer …", flush=True)
+    print("loading both voices and the enhancer...", flush=True)
     angels = [Angel(*SOP), Angel(*BAS)]
-    for an in angels:                      # MPS 預熱
+    for an in angels:                      # warm up MPS
         an.chunk(np.random.randn(int(0.4 * SR)) * 0.03, 200.0, 0.3, 0.0)
     print("ready", flush=True)
 
@@ -159,7 +162,7 @@ def main():
         with lock:
             b, p = play["buf"], play["pos"]
             keep = b[p:]
-            k = min(int(0.05 * SR), len(keep), n)   # 塊間 50ms 交叉淡化
+            k = min(int(0.05 * SR), len(keep), n)   # 50 ms crossfade between chunks
             if k:
                 r = np.linspace(0, 1, k)
                 mix[:k] = keep[-k:] * (1 - r) + mix[:k] * r
@@ -168,7 +171,7 @@ def main():
             play["pos"] = 0
             play["fade"] = False
 
-    print(f"開流：in={a.in_name!r} out={a.out_name!r}（Ctrl-C 結束）", flush=True)
+    print(f"stream open: in={a.in_name!r} out={a.out_name!r} (Ctrl-C to stop)", flush=True)
     with sd.Stream(samplerate=SR, blocksize=BLK, channels=(1, 2),
                    device=(a.in_name, a.out_name), callback=cb):
         t_start = time.time()
@@ -187,13 +190,13 @@ def main():
                     st["mode"] = "sustain"
                     st["n_join"] += 1
                     tgt = float(np.median(w))
-                    print(f"▶ 進場 #{st['n_join']}  {tgt:.0f} Hz", flush=True)
+                    print(f"join #{st['n_join']}  {tgt:.0f} Hz", flush=True)
                     threading.Thread(target=render_into,
                                      args=(tgt, now, True), daemon=True).start()
                 elif st["mode"] == "sustain":
                     if not voiced and all(f <= 0 for f in st["f0"][-4:]):
                         st["mode"] = "idle"
-                        print("■ 收", flush=True)
+                        print("stop", flush=True)
                         with lock:
                             play["fade"] = True
                     else:
