@@ -14,7 +14,14 @@ the hardware narrative is in
 
 **Not included:** the sliced G-code and the packed build-plate STLs. Both are
 derived from the part STLs — `pack.py` rebuilds the plates and the slicer
-rebuilds the G-code.
+rebuilds the G-code from them with the profiles in `slicer_profiles/`:
+
+| Profile | Used for |
+|---|---|
+| `miniis_profile.ini` | the default, organic supports |
+| `miniis_grid.ini` | anything with a vertical through hole, where organic supports grow up the hole |
+| `miniis_shell_gridbrim.ini` | the electronics shell: grid supports plus a 5 mm brim |
+| `miniis_lid_onmodel.ini` | the lid, whose bracket overhang is above the model, so support has to stand on the model |
 
 ---
 
