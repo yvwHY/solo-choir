@@ -1,23 +1,30 @@
-"""key_probe.py — 真歌定調：raw f0 音級分布（08-01 §H 的儀器，固化）
+"""key_probe.py - find the key of a real take from the raw f0 pitch-class distribution.
 
-為什麼要有這支：`--key` 必須是手動整數，而「手動」不等於「用猜的」。
-08-01 判 pair06 是 C 大調判了一整晚都不對，根因是**儀器盲點**——腦的表徵
-把音吸附進 C 音階，於是「lead 100% 在 C 調內」是循環論證。改看**未經吸附
-的 raw f0**，音級分布立刻指向 A/E 家族，A 大調確立。當晚這支是一次性分析
-沒進 repo（同 live_probe 的儀器教訓），今天補上。
+Why this exists: `--key` has to be a manual integer, and manual does not mean
+guessed. A whole evening was spent calling one take C major and being wrong, and
+the root cause was a blind instrument: the model's representation SNAPS notes into
+the C scale, so "the lead is 100% within C" is circular. Looking at the UNSNAPPED
+raw f0 instead, the pitch-class distribution pointed at the A and E family
+immediately, and A major was settled. That analysis was one-off and never went into
+the repository, which is the same instrument lesson as live_probe; this is it
+written down.
 
-判準（照 08-01 實際用的兩件）：
-  1. **涵蓋率**：每個大調的 7 個音級佔了多少發聲時間（有聲 frame 加權）。
-  2. **終止音**：樂句尾音的音級分布——調性的終止感比統計量更硬。
-兩者不一致就別選歌了，那是「這首在任何單一大調內都髒」的訊號（pair06 涵蓋
-僅 ~70%，自由唱素材的典型）。
+Two criteria, the two actually used:
+  1. **Coverage**: how much of the sounding time the seven pitch classes of each
+     major key account for, weighted by voiced frames.
+  2. **Final notes**: the pitch-class distribution of phrase endings. A sense of
+     cadence is harder evidence than a statistic.
+If the two disagree, choose a different song: it means the take is dirty in any
+single major key, which is typical of free improvisation (one take covered only
+about 70%).
 
-輸出的 shift 直接就是 `--key` 要填的數（與 EarV3._keylock 同慣例：
-shift = (0 - root) % 12，>6 減 12，讓天使的譜落回 C 大調座標）。
+The shift printed is exactly what `--key` wants, following the same convention as
+EarV3._keylock: shift = (0 - root) % 12, minus 12 above 6, so the parts' score
+lands back in C major coordinates.
 
-用法（DDSP venv，於 harmony/ 下）:
+Usage (DDSP venv, from harmony/):
     python key_probe.py <take.wav>
-    python key_probe.py <take.wav> --hop 512     # 更密（慢）
+    python key_probe.py <take.wav> --hop 512     # denser, and slower
 """
 import argparse
 
@@ -28,12 +35,13 @@ from pitch import FRAME, SR, hz_to_midi, yin_f0
 from respond2 import find_phrases
 
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-MAJOR = [0, 2, 4, 5, 7, 9, 11]          # 大調音級（相對主音）
+MAJOR = [0, 2, 4, 5, 7, 9, 11]          # major scale degrees, relative to the tonic
 
 
 def raw_pitch_classes(x, hop):
-    """未吸附的 f0 → 每 frame 的 (樣本位置, 音級)。刻意不經 VoiceToTokens／
-    腦的任何表徵：那些會把音吸附進音階，量出來的東西就只是自己的假設。"""
+    """Unsnapped f0 to (sample position, pitch class) per frame. Deliberately avoids
+    VoiceToTokens and every representation inside the model: those snap notes to the
+    scale, and what comes out is then only your own assumption."""
     out = []
     for i in range(0, len(x) - FRAME, hop):
         f = yin_f0(x[i:i + FRAME])
@@ -47,7 +55,7 @@ def main():
     ap.add_argument("wav")
     ap.add_argument("--hop", type=int, default=1024)
     ap.add_argument("--tail", type=float, default=0.30,
-                    help="樂句尾音取最後幾秒（終止感）")
+                    help="how many seconds at the end of a phrase count as the final note")
     ap.add_argument("--gap", type=float, default=0.35)
     ap.add_argument("--gate", type=float, default=0.02)
     a = ap.parse_args()
@@ -58,11 +66,11 @@ def main():
 
     pcs = raw_pitch_classes(x, a.hop)
     if not pcs:
-        raise SystemExit("沒有有聲 frame（檔案是靜音？取樣率不對？）")
+        raise SystemExit("no voiced frames (silent file? wrong sample rate?)")
     hist = np.bincount([p for _, p in pcs], minlength=12).astype(float)
     hist /= hist.sum()
-    print(f"{a.wav}｜{len(x)/SR:.1f}s，有聲 frame {len(pcs)}")
-    print("raw f0 音級分布（未吸附）:")
+    print(f"{a.wav} | {len(x)/SR:.1f}s, {len(pcs)} voiced frames")
+    print("raw f0 pitch-class distribution (unsnapped):")
     for i in np.argsort(hist)[::-1][:6]:
         print(f"  {NAMES[i]:2s} {hist[i]*100:5.1f}%")
 
@@ -76,12 +84,12 @@ def main():
             ends.append(np.bincount(seg, minlength=12).argmax())
     eh = np.bincount(ends, minlength=12).astype(float) if ends else np.zeros(12)
 
-    print(f"\n樂句 {len(ph)} 句，尾音（最後 {a.tail}s）音級:")
+    print(f"\n{len(ph)} phrases; pitch class of the final {a.tail}s:")
     for i in np.argsort(eh)[::-1][:4]:
         if eh[i]:
-            print(f"  {NAMES[i]:2s} {int(eh[i])} 句")
+            print(f"  {NAMES[i]:2s} {int(eh[i])} phrases")
 
-    print("\n候選大調（涵蓋率＝該調 7 個音級佔的發聲時間）:")
+    print("\ncandidate major keys (coverage = share of sounding time in the key's seven classes):")
     rows = []
     for root in range(12):
         cov = sum(hist[(root + d) % 12] for d in MAJOR)
@@ -91,18 +99,18 @@ def main():
         rows.append((cov, root, shift, fin, eh[root]))
     rows.sort(reverse=True)
     for cov, root, shift, fin, tonic_ends in rows[:4]:
-        print(f"  {NAMES[root]:2s} 大調  涵蓋 {cov*100:5.1f}%  "
-              f"尾音在調內 {fin*100:5.0f}%  結在主音 {int(tonic_ends)} 句  "
+        print(f"  {NAMES[root]:2s} major  coverage {cov*100:5.1f}%  "
+              f"endings in key {fin*100:5.0f}%  ending on the tonic {int(tonic_ends)} phrases  "
               f"→ --key {shift:+d}")
 
     cov, root, shift, _, _ = rows[0]
-    print(f"\n判：**{NAMES[root]} 大調 → --key {shift:+d}**")
+    print(f"\nverdict: **{NAMES[root]} major -> --key {shift:+d}**")
     if cov < 0.85:
-        print(f"⚠ 涵蓋僅 {cov*100:.0f}%：這首在單一大調內就髒（pair06 ~70% 是"
-              f"「跑通管線用、不能拿來裁決品質」的等級）。選歌時這是扣分項。")
+        print(f"coverage is only {cov*100:.0f}%: this take is dirty within any single "
+              f"major key, which is the level that runs a pipeline but cannot judge quality.")
     if rows[0][0] - rows[1][0] < 0.03:
-        print(f"⚠ 第一與第二名只差 {(rows[0][0]-rows[1][0])*100:.1f}%＝分不開，"
-              f"別靠這支硬選；看尾音那欄，或換一首調性乾淨的。")
+        print(f"first and second differ by only {(rows[0][0]-rows[1][0])*100:.1f}%, so they "
+              f"cannot be separated; read the endings column, or pick a tonally cleaner song.")
 
 
 if __name__ == "__main__":

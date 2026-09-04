@@ -1,24 +1,32 @@
-"""prosody_ab.py — prosody 移植 A/B/B2（08-05；Harry:「有 auto tune 就是不行」）
+"""prosody_ab.py - A/B/B2 for transplanting prosody.
 
-⚠ 08-05 素材翻案（Harry 抓到）：本檔 `[0::2]` 選段選到的是 dump 裡的
-**回應段**（他的重播＋兩天使同軌）＝三聲部混音被當成他的句子；
-out/prosody_ab/ 全部產物與量測作廢。重審走 bare_test.py（xcorr 選段，
-out/clean_ab/），詳 worklog 08-05 §C。本檔僅留案底，勿再執行。
+**Superseded, and its results are void.** The `[0::2]` selection here picked the
+RESPONSE segments out of the dump - his playback and both parts on one track - so a
+three-part mix was treated as his own phrase. Everything under out/prosody_ab/ and
+every number it produced is withdrawn. The re-run is bare_test.py, which selects by
+cross-correlation into out/clean_ab/. Kept as a record; do not run it.
 
-診斷（08-05 凌晨，儀器＋girl 對照 Harry 已確認）：autotune 不在模型層，在
-表現層——天使 f0 是量化譜位合成的（每音平線＋33ms 跳接＋定速顫音），
-他真實的音高曲線被整條丟棄（幀間活動 13c → 5c）。
+The diagnosis it followed: the auto-tuned quality is not in the model layer but in
+the expression layer. The parts' f0 is synthesised from quantised score positions -
+a flat line per note, a 33 ms jump between them, vibrato at a fixed rate - and his
+real pitch curve is discarded entirely (frame-to-frame activity falls from 13 to 5
+cents).
 
-修法＝把他真實 f0 的偏差曲線移植到骨架上（`phrase_render prosody_cents`）：
-- dev(t) ＝ 他的 f0（MIDI）− 他自己的量化線（hold 補洞）＝勾滑、漂、樂句
-- 移動平均去掉他的顫音（快成分仍由既有去同步顫音模板出）＋clamp ±60c
-- **兩聲部共用同一條**＝音程恆定，08-02 express 的死因（各偏各的）構造上不可能
-- B＝0.29s 窗（只留樂句慢成分；首輪量測顯示勾滑被砍半＝送到一半的人味）
-  B2＝0.12s 窗（保留 0.1–0.3s 的勾滑帶）
+The fix transplants the deviation curve of his real f0 onto that skeleton
+(`phrase_render prosody_cents`):
+- dev(t) = his f0 in MIDI minus his own quantised line, with gaps held: the scoops,
+  the drift and the phrasing
+- a moving average removes his vibrato, since the fast component still comes from
+  the existing desynchronised vibrato template, and it is clamped to +/-60 cents
+- **both parts share one curve**, so the interval is constant and the failure of the
+  earlier express layer - each part deviating on its own - is structurally impossible
+- B uses a 0.29 s window, keeping only the slow phrasing component (the first
+  measurement showed the scoops halved, so half the human quality arrives)
+  B2 uses 0.12 s, keeping the 0.1 to 0.3 s scoop band
 
-產出（素材＝16:00 場兩句，同前兩輪 trial 可對聽）：
-  segN_mix_{A,B,B2}.wav          A＝現行配方
-  segN_bass1_lower_{A,B,B2}.wav  裸 stem 近聽用
+Output (two phrases of material, comparable by ear with the two earlier trials):
+  segN_mix_{A,B,B2}.wav          A is the current recipe
+  segN_bass1_lower_{A,B,B2}.wav  bare stems for close listening
 
 Run (DDSP venv):  python prosody_ab.py
 """
@@ -38,15 +46,15 @@ from live_v3 import EarV3  # noqa: E402
 B1 = ("/Users/liaoyu-ting/Documents/GS/CA_Term2/FinalProject/SoloChoirCode/"
       "260724_ddsp_svc/exp/combsub-m4-bass1/model_11000.pt")
 OUT = H / "out" / "prosody_ab"
-GU = 0.75 * 10 ** (1.0 / 20.0)     # 現行混音：上聲部 +1 dB
+GU = 0.75 * 10 ** (1.0 / 20.0)     # the current mix: upper part +1 dB
 GL = 0.75
 DRY = 0.944
-MA_SLOW, MA_SCOOP = 25, 10         # 0.29s／0.12s 移動平均窗
+MA_SLOW, MA_SCOOP = 25, 10         # moving-average windows of 0.29 s and 0.12 s
 CLAMP = 60.0
 
 
 def prosody_curve(f0m, n_hops, ma=MA_SLOW):
-    """他的 f0（harvest, per-hop Hz）→ 偏差曲線（cents, per-hop）。"""
+    """His f0 (harvest, Hz per hop) to a deviation curve in cents per hop."""
     m = np.full(n_hops, np.nan)
     k = min(n_hops, len(f0m))
     v = f0m[:k] > 0
@@ -60,7 +68,7 @@ def prosody_curve(f0m, n_hops, ma=MA_SLOW):
             last = line[i]
     line = np.round(line)
     dev = (m - line) * 100.0
-    dev[np.isnan(dev)] = 0.0        # 無聲段＝不加料
+    dev[np.isnan(dev)] = 0.0        # add nothing over silence
     ker = np.ones(ma) / ma
     dev = np.convolve(dev, ker, mode="same")
     return np.clip(dev, -CLAMP, CLAMP)
@@ -114,21 +122,21 @@ def main():
         curves = {"A": None,
                   "B": prosody_curve(f0m, n_hops, MA_SLOW),
                   "B2": prosody_curve(f0m, n_hops, MA_SCOOP),
-                  "C": prosody_curve(f0m, n_hops, 1),   # 全移植含他的顫音
-                  "D": "dlead",                          # 連續 f0×音程比（見下）
-                  "E": "dlead+sus"}                      # D＋短空隙橋接 250ms
+                  "C": prosody_curve(f0m, n_hops, 1),   # full transplant, including his vibrato
+                  "D": "dlead",                          # continuous f0 times the interval ratio, below
+                  "E": "dlead+sus"}                      # D plus bridging gaps up to 250 ms
         kw = {v: dict(expr_gain=0.0, vib_semi=0.12, vib_onset_ms=250.0,
                       uv_dry=0.0, vib_hz=R.VIB[v][0], vib_phase=R.VIB[v][1])
               for v in R.VOICES}
         res = {}
         for ver, pc in curves.items():
             sus = isinstance(pc, str) and "sus" in pc
-            if isinstance(pc, str):      # D/E：dev＝他的連續 f0 − 腦的 lead 線
+            if isinstance(pc, str):      # D and E: dev = his continuous f0 minus the model's lead line
                 m = np.full(n_hops, np.nan)
                 kk = min(n_hops, len(f0m)); vv = f0m[:kk] > 0
                 m[:kk][vv] = 69 + 12*np.log2(f0m[:kk][vv]/440.0)
                 ll = np.full(n_hops, np.nan)
-                off = ear.v2t.shift + (ear.k_shift or 0)   # 腦空間→mic 空間
+                off = ear.v2t.shift + (ear.k_shift or 0)   # model space to microphone space
                 for h in range(n_hops):
                     t_i = min(int(h*dm.HOP/TICK_SAMPS), len(lead)-1)
                     if lead[t_i] is not None: ll[h] = lead[t_i] - off
@@ -138,12 +146,12 @@ def main():
                     else: last = ll[h]
                 pc = (m - ll) * 100.0
                 pc[np.isnan(pc)] = 0.0
-                pc = np.clip(pc, -250, 250)   # 只擋八度抓錯，不砍滑行
+                pc = np.clip(pc, -250, 250)   # catch octave errors only, without cutting the glides
             extra = {} if pc is None else {"prosody_cents": pc}
             if sus:
                 extra["sustain_ms"] = 250.0
             kw_v = kw
-            if ver in ("C", "D", "E"):   # 顫音已在他的曲線裡＝關掉合成模板
+            if ver in ("C", "D", "E"):   # the vibrato is already in his curve, so turn the synthetic template off
                 kw_v = {v: dict(kw[v], vib_semi=0.0) for v in R.VOICES}
             sh_v = {"f0m": f0m}
             ang = {v: rend[v].render(seg, d[v], TICK_SAMPS, shared=sh_v,
@@ -158,9 +166,9 @@ def main():
                      st / (np.abs(st).max() + 1e-9) * 0.7, SR,
                      subtype="PCM_16")
             res[ver] = st
-        print(f"seg{i}: 幀間 f0 活動 dry {motion(seg):.1f}c ｜ "
+        print(f"seg{i}: frame-to-frame f0 activity, dry {motion(seg):.1f}c | "
               + " ".join(f"{v} {motion(w):.1f}c" for v, w in res.items())
-              + f" ｜ 注入幅度 p50 B {np.median(np.abs(curves['B'])):.1f}c"
+              + f" | injected magnitude p50 B {np.median(np.abs(curves['B'])):.1f}c"
                 f" B2 {np.median(np.abs(curves['B2'])):.1f}c")
     print("wrote", OUT)
 

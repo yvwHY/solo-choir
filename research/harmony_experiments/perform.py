@@ -1,27 +1,35 @@
-"""perform.py — 演出模式：預渲染的天使當伴奏帶，他唱 lead，兩者同一個空間
+"""perform.py - performance mode: pre-rendered parts as a backing track, the singer takes the lead, both in one space.
 
-08-03 Harry：viva 的 open call 可能要一小段現場演出。排練預渲染的 **live 半場
-08-01 判死於譜追蹤器（命中 37.9%）**，但那個追蹤器存在的理由是「機器要跟著
-他」——**演出裡這個要求可以直接拿掉**：預渲染的和聲就是一條 backing track，
-他跟著它唱。每個帶伴奏帶的歌手都是這樣工作的。沒有追蹤，就沒有 37.9%。
-（代價是它從「即時樂器」變成「有伴奏帶的演唱」＝藝術決定，不是技術限制。）
-離線那半場 08-02 重審已耳測過（ceiling 換 target 後 Harry 裁「變好了」）。
+The live half of the rehearsal pre-render was condemned on 2026-08-01 because of
+the score tracker (37.9% hit rate). But that tracker existed only so the machine
+could follow the singer, and IN PERFORMANCE that requirement can simply be
+dropped: pre-rendered harmony is a backing track and the singer sings to it, which
+is how every singer with a backing track works. With no tracking there is no
+37.9%. The cost is that it stops being a live instrument and becomes singing with
+a backing track, which is an artistic decision rather than a technical limit. The
+offline half was re-auditioned on 08-02 and judged improved once the ceiling was
+replaced by the target recipe.
 
-**路由（這條是硬規則，不是選項）：送出/回送。**
-  乾聲走直路（麥克風 → PA），**電腦只出濕聲**。
-理由有兩條，都在墓園裡：
-  - 把他的乾聲從電腦繞一圈再放出來＝播他自己的延遲副本＝**G「--voice-delay」
-    07-16 判死的 DAF 干擾**。
-  - 麥克風與喇叭同時活著＝回授。應答式是靠「唱/播不同時」在結構上消滅它的，
-    演出模式沒有那個保護。
-而濕聲晚出來不要緊：**殘響本來就有 20ms predelay**，濕聲延遲聽感上只是
-predelay 變長。所以延遲預算全部給乾聲（直路＝0），電腦這端不需要低延遲。
-`--dry-out` 可以讓乾聲也從電腦出（沒有 PA、戴耳機自己試的時候用），預設關。
+**Routing (a hard rule, not an option): send and return.**
+  The dry voice takes the direct path, microphone to PA; **the computer outputs
+  wet only.**
+Two reasons, both in the graveyard:
+  - Sending his dry voice through the computer and back out plays him a delayed
+    copy of himself, which is the delayed auditory feedback interference condemned
+    on 2026-07-16.
+  - A live microphone and live speakers at the same time is feedback. The answering
+    mode destroys that structurally by never singing and playing at once, and
+    performance mode has no such protection.
+A late wet signal does not matter: **reverb already has a 20 ms pre-delay**, so
+latency on the wet path is heard as a longer pre-delay. The whole latency budget
+therefore goes to the dry path, which is direct and zero, and the computer needs
+no low latency at all. `--dry-out` lets the dry voice leave the computer too, for
+trying it alone on headphones with no PA; off by default.
 
-伴奏帶與他的人聲**送進同一個 send**＝同一個空間（08-03 Harry：「有空間感，
-自己也進去」）。IR 與送出量預設就是那天定案的那組。
+The backing track and his voice go into the SAME send, so they are in one space.
+The impulse response and the send level default to the pair settled on 08-03.
 
-Run（DDSP venv；其實只用到 numpy/scipy/sounddevice）:
+Run (DDSP venv, although it only uses numpy, scipy and sounddevice):
   python perform.py out/perf_stems_dry.wav --in-name "USB PnP" --list-devices
   python perform.py out/perf_stems_dry.wav --in-name "USB PnP" --wait-tap
 """
@@ -44,23 +52,24 @@ from tap_listen import TapListener  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("backing", nargs="?", help="乾的天使 stems 混音（不要先加殘響）")
+    ap.add_argument("backing", nargs="?", help="a dry mix of the part stems, with no reverb added yet")
     ap.add_argument("--in-name", default=None)
     ap.add_argument("--out-name", default=None)
     ap.add_argument("--list-devices", action="store_true")
-    ap.add_argument("--reverb", type=float, default=0.20, help="送出量（08-03 定案）")
+    ap.add_argument("--reverb", type=float, default=0.20, help="send level")
     ap.add_argument("--reverb-s", type=float, default=1.8)
     ap.add_argument("--reverb-trim", type=float, default=35.0)
     ap.add_argument("--backing-gain", type=float, default=1.0)
     ap.add_argument("--mic-send", type=float, default=1.0,
-                    help="他的人聲送進殘響的量（相對伴奏帶）")
+                    help="how much of his voice goes to the reverb, relative to the backing track")
     ap.add_argument("--dry-out", type=float, default=0.0,
-                    help="從電腦輸出的乾聲量。**預設 0＝乾聲走直路**（見檔頭）；"
-                         "沒有 PA、戴耳機自己試的時候才調大")
+                    help="dry level out of the computer. **The default 0 means the dry voice "
+                         "takes the direct path**, see the file header; raise it only when "
+                         "trying it alone on headphones with no PA")
     ap.add_argument("--gain", type=float, default=1.0)
     ap.add_argument("--io-latency", default="high")
     ap.add_argument("--wait-tap", action="store_true",
-                    help="等實體鍵才開始播（不然開場就跑）")
+                    help="wait for the physical key before playing, rather than starting immediately")
     ap.add_argument("--no-tap", action="store_true")
     a = ap.parse_args()
 
@@ -69,7 +78,7 @@ def main():
         print(sd.query_devices())
         return
     if not a.backing:
-        ap.error("要給伴奏帶 wav（乾的 stems）")
+        ap.error("a backing wav is required (dry stems)")
 
     bak, sr = sf.read(a.backing, dtype="float64", always_2d=True)
     bak = np.ascontiguousarray(bak[:, 0])
@@ -79,7 +88,7 @@ def main():
 
     tap = None if a.no_tap else TapListener()
     if tap is not None and tap.err:
-        print(f"[tap] bind {tap.port} 失敗（{tap.err}）→ 當作沒有實體鍵")
+        print(f"[tap] bind {tap.port} failed ({tap.err}), treating it as no physical key")
         tap = None
 
     lock = threading.Lock()
@@ -103,7 +112,7 @@ def main():
             b[:len(s)] = s * a.backing_gain
             with lock:
                 st["pos"] = p + len(s)
-        # 伴奏帶與人聲進同一個 send＝同一個空間
+        # backing track and voice into the same send, so they share one space
         w = conv(b + a.mic_send * mic)[:frames]
         y = b + a.reverb * w + a.dry_out * mic
         y = y * a.gain
@@ -117,14 +126,14 @@ def main():
             outdata[:, 1] = outdata[:, 0]
         n = st["n"]
         if n + frames <= len(dump):
-            dump[n:n + frames] = outdata[:, 0] + mic      # 出去的＋他唱的
+            dump[n:n + frames] = outdata[:, 0] + mic      # what went out plus what he sang
             st["n"] = n + frames
 
-    print(f"perform. 伴奏帶 {len(bak)/SR:.1f}s｜空間 T60 {a.reverb_s} 截 "
-          f"{a.reverb_trim:.0f}dB 送 {a.reverb}｜乾聲"
-          f"{'走直路（電腦不出）' if a.dry_out == 0 else f'從電腦出 {a.dry_out}'}"
-          f"｜實體鍵 {'關' if tap is None else '開'}"
-          f"｜{'等按鍵開始' if a.wait_tap else '立刻開始'} -- Ctrl-C stops.",
+    print(f"perform. backing {len(bak)/SR:.1f}s | space T60 {a.reverb_s} trimmed "
+          f"{a.reverb_trim:.0f}dB send {a.reverb} | dry "
+          f"{'direct path, not from the computer' if a.dry_out == 0 else f'from the computer at {a.dry_out}'}"
+          f" | physical key {'off' if tap is None else 'on'}"
+          f" | {'waiting for the key' if a.wait_tap else 'starting now'} -- Ctrl-C stops.",
           flush=True)
     with sd.Stream(samplerate=SR, blocksize=1024, channels=(1, 2),
                    device=(a.in_name, a.out_name), callback=cb,
@@ -136,10 +145,10 @@ def main():
                     with lock:
                         if not st["run"]:
                             st["run"] = True
-                            print("  （按鍵：開始）", flush=True)
-                        else:                       # 再按＝從頭
+                            print("  (key: start)", flush=True)
+                        else:                       # pressed again: back to the top
                             st["pos"] = 0
-                            print("  （按鍵：回到開頭）", flush=True)
+                            print("  (key: back to the top)", flush=True)
                 with lock:
                     p, run = st["pos"], st["run"]
                 if run and p >= len(bak):
@@ -149,7 +158,7 @@ def main():
                     print(f"  {p/SR:6.1f}/{len(bak)/SR:.1f}s｜mic rms "
                           f"{st['mic']:.3f}｜peak {st['peak']:.2f}"
                           f"｜io {st['iov']}/{st['oun']}"
-                          f"{'｜⚠ 削峰 ' + str(st['clip']) if st['clip'] else ''}",
+                          f"{' | clipping ' + str(st['clip']) if st['clip'] else ''}",
                           flush=True)
                 time.sleep(0.02)
         except KeyboardInterrupt:
@@ -161,12 +170,12 @@ def main():
         p.parent.mkdir(exist_ok=True)
         sf.write(str(p), dump[:n], SR, subtype="PCM_16")
         print(f"\nsession dump: {p}（{n/SR:.1f}s）")
-    print(f"peak {st['peak']:.2f}｜削峰塊數 {st['clip']}"
+    print(f"peak {st['peak']:.2f} | clipped blocks {st['clip']}"
           f"｜io overflow/underflow {st['iov']}/{st['oun']}")
     if st["clip"]:
-        print(f"⚠ 有削峰 → --gain {0.89/max(st['peak'],1e-9):.2f}")
+        print(f"clipping detected -> --gain {0.89/max(st['peak'],1e-9):.2f}")
 
 
 if __name__ == "__main__":
-    _sig.signal(_sig.SIGINT, _sig.default_int_handler)     # 07-31 §H 血訓
+    _sig.signal(_sig.SIGINT, _sig.default_int_handler)     # a lesson learned the hard way
     main()

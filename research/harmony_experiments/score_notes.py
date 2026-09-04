@@ -1,26 +1,33 @@
-"""score_notes.py — 阿卡貝拉 MIDI → 三聲部 tick 網格（08-03，譜這一側）
+"""score_notes.py - an a cappella MIDI file to a three-part tick grid (the score side).
 
-Harry 08-03：「輸入阿卡貝拉 midi 生成聲部和音這個功能還是要有」。腦（BrainV3）
-即興出來的和聲之外，再開一條「和聲由編好的譜決定」的路。
+Alongside the harmony the model improvises, this opens a second route where the
+harmony is decided by an arrangement written in advance.
 
-**下游完全不用重做**：外部音符線進系統的格式早就存在（`prerender_stems.py`
-吃的排練檔）＝`{"lead": [...], "upper": [...], "lower": [...]}`，每 tick 一個
-sounding MIDI 音高或 None。兩張嘴、target f0 配方、polish、殘響、混音平衡都已
-經耳測過，本檔只負責把譜變成那個 dict。
+**Nothing downstream has to change**: the format for an external note line already
+exists - the rehearsal file `prerender_stems.py` consumes,
+`{"lead": [...], "upper": [...], "lower": [...]}`, one sounding MIDI pitch or None
+per tick. The two voices, the target f0 recipe, the polish, the reverb and the mix
+balance have all been judged by ear already; this file only turns a score into
+that dict.
 
-本檔**只做譜這一側**（譜自己的時間軸）。把它對到他唱的那一句、換成他的節奏，
-是下一段（DTW）——那才是有風險的部分。刻意分開，因為譜這側可以拿 CPDL 那
-4016 個檔大量驗證，對位那側只能拿他的錄音驗。
+This handles ONLY the score side, on the score's own timeline. Aligning it to a
+phrase he sang and putting it in his rhythm is the next stage, DTW, and that is
+where the risk is. They are deliberately separate, because the score side can be
+validated in bulk against the 4016 CPDL files while alignment can only be
+validated against his own recordings.
 
-進門那層要猜的事（現成編曲不由你決定格式）：哪些軌是人聲、哪個是旋律、哪兩個
-給天使、要不要移調。**全部可以用旗標覆寫**——自己編的譜預設就會對，撿來的譜
-猜錯就指定。一條路徑，不是兩套。
+What the entry layer has to guess, since a found arrangement does not follow your
+format: which tracks are voices, which is the melody, which two go to the parts,
+and whether to transpose. **Every one can be overridden by a flag**: a score you
+wrote yourself works by default, and a found one is specified when the guess is
+wrong. One path, not two.
 
-⚠ 這支跑 **vcclient-dev**（pretty_midi 在那裡，DDSP venv 沒有），不是 DDSP venv。
-不衝突：它是離線步驟、產物是 json，渲染那側照樣走 DDSP venv。
+This runs under vcclient-dev, where pretty_midi lives, not the DDSP venv. There is
+no conflict: it is an offline step whose output is json, and rendering still runs
+under the DDSP venv.
 
 Run（vcclient-dev）:
-  python score_notes.py song.mid --out out/song_notes.json      # 猜
+  python score_notes.py song.mid --out out/song_notes.json      # guess
   python score_notes.py song.mid --melody 0 --upper 1 --lower 3 --transpose -5
   python score_notes.py --survey '../../260723_corpus/cpdl_sample/*.mid'
 """
@@ -38,18 +45,22 @@ from pitch import SR  # noqa: E402
 from render_v3 import GIRL_RANGE, HARRY_RANGE, fold  # noqa: E402
 from world_live import TICK_SAMPS  # noqa: E402
 
-TICK_S = TICK_SAMPS / SR                      # 0.1875s，與腦的 tick 同一格
-# 他的舒適音域（voicing_mask 註解記的 110–300 Hz ＝ A2–D4；取稍寬）。lead 移調
-# 的目標——譜的旋律不會剛好落在他的音域，而他唱不上去就整條線都不用談。
+TICK_S = TICK_SAMPS / SR                      # 0.1875 s, the same cell as the model's tick
+# His comfortable range, from the voicing_mask note: 110-300 Hz, that is A2 to D4,
+# taken slightly wider. This is the target for transposing the lead: a score's
+# melody will not happen to sit in his range, and a line he cannot reach is not
+# worth discussing.
 LEAD_RANGE = (45, 64)                         # A2–E4
 
 
 def load_parts(path, max_poly=0.15):
-    """MIDI → 單音聲部清單（每個 [(start, end, pitch)]，依中位音高由高到低）。
+    """MIDI to a list of monophonic parts, each [(start, end, pitch)], ordered by median pitch from high to low.
 
-    撿來的譜什麼都有：鋼琴縮譜、四部擠在一軌、空軌。過濾規則：
-      - 音符數太少的軌丟掉（標題軌、節拍軌）
-      - **和弦比例超過 max_poly 的軌丟掉**＝那是縮譜或多部擠一軌，不是聲部線
+    A found score contains anything: piano reductions, four parts crammed onto one
+    track, empty tracks. The filters are:
+      - drop tracks with too few notes (title tracks, click tracks)
+      - **drop tracks whose chord share exceeds max_poly**, which means a reduction
+        or several parts on one track, not a single line
     """
     import pretty_midi
     pm = pretty_midi.PrettyMIDI(str(path))
@@ -58,7 +69,7 @@ def load_parts(path, max_poly=0.15):
         if inst.is_drum or len(inst.notes) < 8:
             continue
         ns = sorted(inst.notes, key=lambda n: (n.start, n.pitch))
-        # 重疊率：起音在前一顆結束之前＝同時發聲
+        # overlap: an onset before the previous note ends means they sound together
         ov = sum(1 for a, b in zip(ns, ns[1:]) if b.start < a.end - 1e-3)
         if ov / max(1, len(ns) - 1) > max_poly:
             continue
@@ -67,21 +78,23 @@ def load_parts(path, max_poly=0.15):
             "notes": [(n.start, n.end, n.pitch) for n in ns],
             "med": float(np.median([n.pitch for n in ns])),
         })
-    parts.sort(key=lambda p: -p["med"])        # 高→低＝S A T B
+    parts.sort(key=lambda p: -p["med"])        # high to low, that is S A T B
     return parts, pm.get_end_time()
 
 
 def pick(parts, melody=None, upper=None, lower=None):
-    """挑 (lead, upper, lower) 的索引。
+    """Choose the indices of (lead, upper, lower).
 
-    預設：**旋律＝最高聲部**（撿來的編曲裡人唱的幾乎都是它），天使取它上下
-    最近的兩條＝07-27 v3 spec 定的「上下包夾」配置。旋律在最高聲部時上面沒有
-    東西，就往下再借一條、由八度摺疊把它送到 lead 之上（摺疊瞬間包夾對調是
-    spec 已接受的代價）。"""
+    By default the MELODY IS THE HIGHEST PART, which in a found arrangement is
+    almost always what a person sings, and the parts take the two nearest lines
+    above and below it, the bracketing arrangement of the v3 spec. When the melody
+    is the highest part there is nothing above it, so a line is borrowed from below
+    and folded up an octave past the lead; the bracketing swapping over at the
+    moment of folding is a cost the spec already accepts."""
     n = len(parts)
     if n < 3:
-        raise ValueError(f"只找到 {n} 條單音聲部，至少要 3 條（--melody/--upper/"
-                         f"--lower 可手動指定，或這份譜是縮譜）")
+        raise ValueError(f"only {n} monophonic parts found, at least 3 are needed "
+                         f"(--melody/--upper/--lower can specify them, or this score is a reduction)")
     li = 0 if melody is None else melody
     if upper is not None and lower is not None:
         return li, upper, lower
@@ -95,9 +108,10 @@ def pick(parts, melody=None, upper=None, lower=None):
 
 
 def to_ticks(notes, n_ticks, tick_s=TICK_S):
-    """(start, end, pitch) → 每 tick 一個 sounding 音高（None＝休止）。
-    一格內有多顆音就取**佔比最長的那顆**（tick 0.1875s 比十六分音符長，
-    快速走句本來就會被吃掉——這是 tick 網格的既有代價，不是這裡新引入的）。"""
+    """(start, end, pitch) to one sounding pitch per tick, None for a rest.
+    Where a cell holds more than one note, the one occupying most of it wins. A tick
+    of 0.1875 s is longer than a sixteenth, so a fast run gets swallowed; that is an
+    existing cost of the tick grid, not something introduced here."""
     out = []
     for k in range(n_ticks):
         t0, t1 = k * tick_s, (k + 1) * tick_s
@@ -121,14 +135,15 @@ def build(path, melody=None, upper=None, lower=None, transpose=None):
     raw = {k: to_ticks(parts[i]["notes"], n_ticks)
            for k, i in (("lead", li), ("upper", ui), ("lower", lo))}
     if transpose is None:
-        # 自動移調：把旋律的中位音高送進他的舒適音域，整份譜同幅度移動
-        # （三條線一起移＝和聲關係不變）。
+        # automatic transposition: put the melody's median pitch into his
+        # comfortable range, moving the whole score by the same amount so the three
+        # lines keep their harmonic relationship
         med = float(np.median([p for p in raw["lead"] if p is not None]))
         tgt = 0.5 * (LEAD_RANGE[0] + LEAD_RANGE[1])
-        transpose = int(round((tgt - med) / 12.0)) * 12      # 只走八度，不改調
+        transpose = int(round((tgt - med) / 12.0)) * 12      # octaves only, so the key does not change
     out = {k: [None if p is None else p + transpose for p in v]
            for k, v in raw.items()}
-    # 天使摺進各自嘴的實測音域（render_v3 同一支 fold，同樣的代價與理由）
+    # fold the parts into the measured range of their own voices, the same fold render_v3 uses, with the same cost and reasoning
     out["upper"] = fold(out["upper"], *GIRL_RANGE)
     out["lower"] = fold(out["lower"], *HARRY_RANGE)
     info = {"parts": [p["name"] for p in parts],
@@ -140,7 +155,7 @@ def build(path, melody=None, upper=None, lower=None, transpose=None):
 
 
 def survey(pattern, limit=400):
-    """拿 CPDL 那批當測試素材：進門那層到底吃得下多少現成編曲。"""
+    """Use the CPDL batch as test material: how many found arrangements the entry layer can actually take."""
     fs = sorted(glob.glob(pattern))[:limit]
     ok = bad_parse = few = 0
     npart = []
@@ -156,44 +171,44 @@ def survey(pattern, limit=400):
         else:
             ok += 1
     npart = np.array(npart) if npart else np.zeros(1)
-    print(f"{len(fs)} 個檔：可用 {ok}（{100*ok/max(1,len(fs)):.0f}%）"
-          f"｜解析失敗 {bad_parse}｜單音聲部 <3 條 {few}")
-    print(f"單音聲部數 中位 {np.median(npart):.0f}  "
-          f"分布 {np.bincount(npart.astype(int))[:9].tolist()}（index＝條數）")
+    print(f"{len(fs)} files: usable {ok} ({100*ok/max(1,len(fs)):.0f}%)"
+          f" | parse failed {bad_parse} | fewer than 3 monophonic parts {few}")
+    print(f"monophonic parts, median {np.median(npart):.0f}  "
+          f"distribution {np.bincount(npart.astype(int))[:9].tolist()} (index = count)")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mid", nargs="?")
-    ap.add_argument("--out", default=None, help="寫成排練檔格式的 notes json")
+    ap.add_argument("--out", default=None, help="write a notes json in rehearsal-file format")
     ap.add_argument("--melody", type=int, default=None,
-                    help="旋律是第幾條聲部（0＝最高，猜錯時指定）")
+                    help="which part is the melody (0 = highest); specify when the guess is wrong")
     ap.add_argument("--upper", type=int, default=None)
     ap.add_argument("--lower", type=int, default=None)
     ap.add_argument("--transpose", type=int, default=None,
-                    help="半音；不給＝自動把旋律送進他的音域（只走八度）")
-    ap.add_argument("--survey", default=None, help="glob，批次檢查可用率")
+                    help="semitones; omitted, the melody is moved into his range automatically, by octaves only")
+    ap.add_argument("--survey", default=None, help="glob, to check the usable rate in bulk")
     a = ap.parse_args()
     if a.survey:
         return survey(a.survey)
     if not a.mid:
-        ap.error("要給一個 .mid，或用 --survey")
+        ap.error("give a .mid, or use --survey")
     try:
         out, info = build(a.mid, a.melody, a.upper, a.lower, a.transpose)
     except ValueError as e:
         raise SystemExit(str(e))
-    print(f"聲部（高→低）: {list(zip(info['parts'], info['med']))}")
-    print(f"挑中 lead={info['picked']['lead']} upper={info['picked']['upper']} "
-          f"lower={info['picked']['lower']}｜移調 {info['transpose']:+d} 半音"
+    print(f"parts, high to low: {list(zip(info['parts'], info['med']))}")
+    print(f"picked lead={info['picked']['lead']} upper={info['picked']['upper']} "
+          f"lower={info['picked']['lower']} | transposed {info['transpose']:+d} semitones"
           f"｜{info['dur_s']}s = {info['ticks']} ticks")
     for k in ("lead", "upper", "lower"):
         v = [p for p in out[k] if p is not None]
-        print(f"  {k:6s} 有聲 {100*len(v)/len(out[k]):3.0f}%  "
-              f"音域 {min(v) if v else '-'}–{max(v) if v else '-'}  前 12 {out[k][:12]}")
+        print(f"  {k:6s} sounding {100*len(v)/len(out[k]):3.0f}%  "
+              f"range {min(v) if v else '-'}-{max(v) if v else '-'}  first 12 {out[k][:12]}")
     if a.out:
         json.dump({**out, "k_shift": 0, "step_samps": TICK_SAMPS},
                   open(a.out, "w"))
-        print(f"wrote {a.out}（排練檔格式，prerender_stems / respond2 可直接吃）")
+        print(f"wrote {a.out} (rehearsal-file format, ready for prerender_stems or respond2)")
 
 
 if __name__ == "__main__":

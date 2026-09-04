@@ -1,25 +1,32 @@
-"""C 案（拍手／彈指＝聲學暗號）的分離度量測 — 08-03 §J 拍板的離線判準。
+"""Separation measurement for using a clap or a finger snap as an acoustic cue.
 
-問題：展場「換你」訊號若用拍手，偵測器必須把拍手跟「他還在唱」分開。
-08-01 §K 已證能量餘裕只剩 2 dB＝能量這條路死。C 案改走起音形狀：
-寬頻銳起音（拍手/彈指）vs 諧波慢起音（歌聲）vs 慢淡入（天使 bleed）。
+The problem: if the "your turn" signal in the exhibition is a clap, the detector
+has to tell a clap apart from the singer still singing. The energy route was
+already dead, with only 2 dB of headroom. This tries attack shape instead: a
+wideband sharp attack (clap or snap) against a harmonic slow attack (singing)
+against a slow fade-in (the parts bleeding back in).
 
-誠實標準（與 08-01 量 bleed 同一招）：不是比「拍手 vs 歌聲平均」，
-是拿同一偵測器掃過全部歌聲素材，找出最像拍手的瞬間（塞音子音 /t/ /k/
-是最可能的假陽性），量它與最弱一下拍手的餘裕。餘裕 >= 6 dB 才算過。
+The honest standard, the same one used to measure bleed: not clap against average
+singing, but running the same detector across all the singing material to find the
+moment that most resembles a clap - a plosive consonant is the likeliest false
+positive - and measuring its headroom against the weakest clap. It passes at 6 dB
+or more.
 
-偵測器（兩維規則，故意簡單到能在 callback 裡逐 hop 算）：
-  rise = 短窗能量 dB 在 ~12ms 內的爬升量（銳起音）
-  hf   = 4kHz 以上頻譜能量佔比（寬頻、非諧波）
-  觸發 = rise >= R 且 hf >= H；R、H 由 grid search 找「收下全部拍手、
-  歌聲+bleed 零誤觸」的工作點，回報餘裕。
+The detector uses two dimensions, deliberately simple enough to compute per hop
+inside a callback:
+  rise = how far the short-window energy in dB climbs within about 12 ms
+  hf   = the share of spectral energy above 4 kHz, that is wideband and inharmonic
+  trigger = rise >= R and hf >= H. R and H come from a grid search for an operating
+  point that takes every clap with zero false triggers on singing and bleed, and
+  the headroom is reported.
 
-用法（conda env vcclient-dev）：
-  錄拍手：python clap_probe.py --record out/claps_$(date +%y%m%d).wav
-          （K669B 站姿、展場距離；倒數後拍 10 下，每下隔 >1s）
-  錄彈指：同上換檔名 snaps_*
-  分析：  python clap_probe.py --analyze out/claps_*.wav out/snaps_*.wav
-          （歌聲/bleed 素材已寫死為 §J 指定檔，--sing/--bleed 可換）
+Usage (conda environment vcclient-dev):
+  record claps: python clap_probe.py --record out/claps_$(date +%y%m%d).wav
+                (standing, at exhibition distance; ten claps after the countdown,
+                more than 1 s apart)
+  record snaps: as above with a snaps_* filename
+  analyse:      python clap_probe.py --analyze out/claps_*.wav out/snaps_*.wav
+                (the singing and bleed material is fixed; --sing and --bleed override)
 """
 import argparse
 import sys
@@ -28,13 +35,13 @@ import numpy as np
 import soundfile as sf
 
 SR = 44100
-WIN, HOP = 256, 128            # ~5.8ms 窗 / ~2.9ms hop
-RISE_HOPS = 4                  # rise 跨 4 hop ~= 11.6ms
+WIN, HOP = 256, 128            # about 5.8 ms window, 2.9 ms hop
+RISE_HOPS = 4                  # rise spans 4 hops, about 11.6 ms
 HF_CUT_HZ = 4000
 EPS = 1e-10
 
-SING_DEFAULT = ["out/resp2_live_260802_234841.wav"]        # 252s K669B 站姿實唱
-BLEED_DEFAULT = [                                          # 07-31 實戴、天使在播
+SING_DEFAULT = ["out/resp2_live_260802_234841.wav"]        # 252 s of real singing, standing
+BLEED_DEFAULT = [                                          # worn, with the parts playing
     "out/live_mic_260731_225804.wav",
     "out/live_mic_260731_230150.wav",
     "out/live_mic_260731_233041.wav",
@@ -42,12 +49,13 @@ BLEED_DEFAULT = [                                          # 07-31 實戴、天�
 
 
 def features(x):
-    """逐 hop 算 (rise_db, hf_ratio, db)。全 numpy 向量化，252s 約 1s 算完。"""
+    """Compute (rise_db, hf_ratio, db) per hop. Fully vectorised, so 252 s takes about a second."""
     n = (len(x) - WIN) // HOP
     frames = np.lib.stride_tricks.as_strided(
         x, shape=(n, WIN), strides=(x.strides[0] * HOP, x.strides[0]))
-    # -80 dBFS 地板：數位靜音是 -200 dB，不設地板的話「從靜音跳出來」的
-    # rise 會被灌成 100+ dB，淹沒真正要量的起音形狀差異
+    # a -80 dBFS floor: digital silence is -200 dB, and without a floor the rise
+    # out of silence inflates to over 100 dB and drowns the attack-shape difference
+    # this is actually measuring
     db = np.maximum(
         20 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + EPS), -80.0)
     rise = np.concatenate([np.zeros(RISE_HOPS), db[RISE_HOPS:] - db[:-RISE_HOPS]])
@@ -58,7 +66,7 @@ def features(x):
 
 
 def pick_events(rise, hf, db, k, min_gap_s=0.5):
-    """拍手檔裡挑 k 個事件：rise 峰值、彼此隔 min_gap，回傳各事件的 (rise, hf)。"""
+    """Pick k events from a clap file: peaks in rise, at least min_gap apart, returning (rise, hf) for each."""
     gap = int(min_gap_s * SR / HOP)
     order = np.argsort(rise)[::-1]
     picked = []
@@ -67,7 +75,7 @@ def pick_events(rise, hf, db, k, min_gap_s=0.5):
             picked.append(i)
             if len(picked) == k:
                 break
-    # 事件的 hf 取峰值附近 ±2 hop 的最大（rise 峰與頻譜峰可差半個窗）
+    # an event's hf is the maximum within 2 hops of the peak, since the rise peak and the spectral peak can be half a window apart
     return [(float(rise[i]),
              float(hf[max(0, i - 2):i + 3].max()),
              float(db[i])) for i in sorted(picked)]
@@ -86,7 +94,7 @@ def analyze(cue_paths, sing_paths, bleed_paths, n_events):
     for p in cue_paths:
         r, h, d = features(load(p))
         cues += [(*e, p) for e in pick_events(r, h, d, n_events)]
-        print(f"[cue] {p}: 取 {n_events} 事件, rise "
+        print(f"[cue] {p}: took {n_events} events, rise "
               f"{min(e[0] for e in cues[-n_events:]):.1f}–"
               f"{max(e[0] for e in cues[-n_events:]):.1f} dB")
 
@@ -97,15 +105,15 @@ def analyze(cue_paths, sing_paths, bleed_paths, n_events):
         print(f"[{kind}] {p}: {len(bg[p][0])} hops, "
               f"max rise {bg[p][0].max():.1f} dB")
 
-    # grid search：R 掃 6..40 dB、H 掃 0.05..0.6，找「全收拍手、背景零誤觸」
+    # grid search: R from 6 to 40 dB, H from 0.05 to 0.6, for "every clap taken, zero false triggers on background"
     best = None
     for R in np.arange(6, 40.5, 0.5):
         for H in np.arange(0.05, 0.61, 0.01):
             if not all(r >= R and h >= H for r, h, _, _ in cues):
-                continue                             # 漏拍手＝不合格
+                continue                             # a missed clap fails
             fp = sum(int(np.sum((rr >= R) & (hh >= H)))
                      for rr, hh, _ in bg.values())
-            # 餘裕＝最弱拍手 rise 對「背景中 hf>=H 者的最大 rise」的 dB 差
+            # headroom = the weakest clap's rise in dB above the largest background rise among hops with hf >= H
             bg_max = max((rr[hh >= H].max() if (hh >= H).any() else -np.inf)
                          for rr, hh, _ in bg.values())
             margin = min(r for r, _, _, _ in cues) - max(bg_max, R)
@@ -113,34 +121,34 @@ def analyze(cue_paths, sing_paths, bleed_paths, n_events):
             if best is None or cand > best:
                 best = cand
     if best is None:
-        print("\n判決：不通過 — 沒有任何 (R,H) 能收下全部拍手事件")
+        print("\nverdict: fail - no (R,H) takes every clap event")
         return
     ok, margin, R, H, fp = best
-    print(f"\n工作點 R={R:.1f} dB, H={H:.2f}  誤觸 {fp} hop")
+    print(f"\noperating point R={R:.1f} dB, H={H:.2f}  false triggers {fp} hops")
     weakest = min(cues, key=lambda c: c[0])
-    print(f"最弱拍手 rise {weakest[0]:.1f} dB (hf {weakest[1]:.2f}, "
+    print(f"weakest clap rise {weakest[0]:.1f} dB (hf {weakest[1]:.2f}, "
           f"level {weakest[2]:.1f} dBFS, {weakest[3]})")
     if ok:
-        print(f"判決：{'通過' if margin >= 6 else '勉強（<6dB，建議實測誤觸率）'}"
-              f" — 餘裕 {margin:.1f} dB")
+        print(f"verdict: {'pass' if margin >= 6 else 'marginal (under 6 dB; measure the false-trigger rate for real)'}"
+              f" - headroom {margin:.1f} dB")
     else:
-        print(f"判決：不通過 — 零誤觸工作點不存在（最少 {fp} 個誤觸 hop）")
+        print(f"verdict: fail - no zero-false-trigger operating point exists (at best {fp} false hops)")
 
 
 def record(path, secs):
     import sounddevice as sd
     dev = sd.query_devices(kind="input")
-    print(f"輸入裝置：{dev['name']}（確認是 K669B！）")
+    print(f"input device: {dev['name']} (check this is the right microphone)")
     for t in (3, 2, 1):
         print(f"  {t}...", flush=True)
         sd.sleep(1000)
-    print(f"錄音中 {secs}s — 拍 10 下，每下隔 1 秒以上")
+    print(f"recording {secs}s - clap ten times, more than a second apart")
     x = sd.rec(int(secs * SR), samplerate=SR, channels=1, dtype="float64")
     sd.wait()
     peak = float(np.abs(x).max())
     sf.write(path, x, SR)
-    print(f"存 {path}  peak {20*np.log10(peak+EPS):.1f} dBFS"
-          + ("  ⚠ 削波" if peak > 0.99 else ""))
+    print(f"saved {path}  peak {20*np.log10(peak+EPS):.1f} dBFS"
+          + ("  clipped" if peak > 0.99 else ""))
 
 
 if __name__ == "__main__":
