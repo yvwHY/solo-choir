@@ -6,10 +6,10 @@ kept because it is the evidence behind the decisions in `docs/`.
 | Directory | What it is |
 |---|---|
 | `eval/` | Measurement scripts: latency probe, intonation metric, predicted MOS, ablation, the listening-test page |
-| `harmony_experiments/` | Probes, labs, corpus scrapers and abandoned engine lines. Most reference paths that only existed on the development machine |
+| `harmony_experiments/` | Probes, labs, corpus tooling and abandoned engine lines, indexed in its own [README](harmony_experiments/README.md). Most reference paths that only existed on the development machine |
 | `studio/` | An offline arrange application. Built alongside the instrument, not shown with it |
 | `web/roll/` | A browser score-roll prototype |
-| `prints/` | 3D-print batches for the table rig and the wearable frame: STL, DXF, G-code and per-batch notes |
+| `prints/` | 3D-print batches for the table rig and the wearable frame: STL, DXF and the slicer profiles, with what the batches established in its [README](prints/README.md) |
 
 These files are deliberately **not** kept working against `config.py`. They ran
 once, against the machine they were written on, and the numbers they produced are
