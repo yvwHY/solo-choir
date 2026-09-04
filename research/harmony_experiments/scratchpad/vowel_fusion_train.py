@@ -1,13 +1,17 @@
-"""vowel_fusion_train — 訓練融合母音模型（v19；08-13）
+"""vowel_fusion_train - train the fused vowel model (v19)
 
-判準見 vowel_fusion_probe：融合對視覺，**欸/咿 0.79→0.94**（Harry v18
-live 抱怨的第一對）、總 acc 0.89→0.95、權重 0.86→0.94；天使 1:1 漏音
-只吃 0-1pp ⇒ 頻譜扣除不做（省一整層對齊管線）。
+The basis is in vowel_fusion_probe: fusion against visual alone takes the first pair
+the live v18 verdict complained about **from 0.79 to 0.94**, overall accuracy from
+0.89 to 0.95 and the weight from 0.86 to 0.94; and a 1:1 bleed from the parts costs
+only 0 to 1 percentage point, so spectral subtraction is dropped, saving an entire
+alignment pipeline.
 
-特徵 93D＝整圈嘴 80D（視覺、鏡頭執行緒 EMA）＋MFCC 13D（聲學、音訊
-執行緒逐 hop）。輸出 scratchpad/vowel_fusion_model.npz：
-  W (5,93) b (5,) mean scale + feat='ring+mfcc' + MFCC 參數（live 端
-  驗證用：參數不符＝拒載，免得兩份 MFCC 定義悄悄分家）。
+The 93 features are the 80-dimensional full lip ring (visual, EMA on the camera
+thread) plus 13 MFCCs (acoustic, per hop on the audio thread). It writes
+scratchpad/vowel_fusion_model.npz:
+  W (5,93), b (5,), mean, scale, feat='ring+mfcc' and the MFCC parameters, which the
+  live end checks: a mismatch refuses to load, so the two MFCC definitions cannot
+  quietly diverge.
 """
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -24,7 +28,7 @@ def main():
     V, A, y, b = load_ring()
     X = np.hstack([V, A])
     acc, soft, _p1, _t1 = blocked_cv(X, y, b, "lr")
-    print(f"分塊 CV（融合 93D）：acc {acc:.2f}  真類機率 {soft:.2f}")
+    print(f"block cross-validation (fused 93D): acc {acc:.2f}  true-class probability {soft:.2f}")
 
     sc = StandardScaler().fit(X)
     clf = LogisticRegression(max_iter=3000, C=1.0).fit(sc.transform(X), y)
@@ -36,7 +40,7 @@ def main():
     P = np.exp(L - L.max(1, keepdims=True))
     P /= P.sum(1, keepdims=True)
     err = float(np.abs(P - clf.predict_proba(sc.transform(X))).max())
-    print(f"numpy 推論 vs sklearn max err {err:.2e}")
+    print(f"numpy inference against sklearn, max error {err:.2e}")
     assert err < 1e-9
 
     np.savez("scratchpad/vowel_fusion_model.npz", W=W, b=bb,
@@ -46,8 +50,8 @@ def main():
              fmin=np.float64(200.0), fmax=np.float64(6000.0),
              ncep=np.int64(13), cv_acc=np.float64(acc),
              cv_soft=np.float64(soft))
-    print(f"訓練幀 {len(y)}、模型 → scratchpad/vowel_fusion_model.npz "
-          f"（{W.size + bb.size} 參數）")
+    print(f"{len(y)} training frames, model -> scratchpad/vowel_fusion_model.npz "
+          f"({W.size + bb.size} parameters)")
 
 
 if __name__ == "__main__":

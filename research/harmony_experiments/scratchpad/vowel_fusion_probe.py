@@ -1,23 +1,32 @@
-"""vowel_fusion_probe — 視覺＋聲學融合（含天使漏音扣除）可行性（v19 前置）
+"""vowel_fusion_probe - feasibility of fusing the visual and acoustic channels, including subtracting the parts bleeding back in
 
-Harry v18 live 判決：「欸分不出來、喔嗚也沒試出來、咿啊順」。
-＝正好是校準幾何最弱的兩對（欸↔咿 0.32、喔↔嗚 0.55；咿↔啊 0.98）。
-物理解釋：欸/咿 差在舌位（唇看不見）、喔/嗚 差在嘴唇前突（正面鏡頭
-只有 x/y＝深度丟失）。**兩者都聽得見**——聲學跨場次混淆表裡欸 0.94、
-咿 0.87，正是視覺的盲點；反過來聲學的弱項是嗚（跨場次 0.32），而視覺
-場次內嗚 100%。⇒ 假設：兩通道盲點互補，融合同時解掉他抱怨的兩對。
+The live verdict on v18: two vowels could not be told apart, another pair never
+came through, and one pair was fine. Those are exactly the two weakest pairs in the
+calibration geometry (0.32 and 0.55 apart, against 0.98 for the pair that worked).
+The physical explanation: one pair differs in tongue position, which the lips do not
+show, and the other in lip protrusion, which a front-on camera cannot see because it
+only has x and y. **Both are audible** - in the across-session acoustic confusion
+matrix those two score 0.94 and 0.87, precisely the visual blind spot; and the
+acoustic channel's own weak vowel scores 0.32 across sessions where the visual
+channel gets it right 100% of the time within a session. Hypothesis: the two
+channels' blind spots are complementary, and fusing them solves both complaints.
 
-風險：聲學在 live 會吃天使漏音。vowel_acoustic_probe 已證頻譜扣除可行
-（1:1 漏音只吃 4pp、扣除全救回、失準 20ms 仍穩）——本檔把扣除**放進
-融合的評估迴圈**，而不是假設它免費。
+The risk: live, the acoustic channel picks up the parts bleeding back in.
+vowel_acoustic_probe already showed spectral subtraction works (1:1 bleed costs only
+4 percentage points, subtraction recovers all of it, and it stays stable with 20 ms
+of misalignment). This file puts that subtraction INSIDE the evaluation loop rather
+than assuming it is free.
 
-評估（時間分塊 CV，5 塊；訓練永遠用乾淨、測試才加漏音＝模擬 live）：
-  V   視覺 80D（＝v18 現況）
-  A   聲學 MFCC 13D
-  F   融合 93D
-  F+leak      測試音混 1:1 天使、不扣除
-  F+leak+sub  測試音混 1:1 天使、頻譜扣除（延遲失準 20ms＝誠實版）
-重點指標＝他抱怨的兩對的**兩類分辨率**，不只總 acc。
+Evaluation (cross-validation over 5 time blocks; training always on clean audio and
+only the test set given bleed, which simulates live):
+  V   visual 80D (that is, v18 as it stands)
+  A   acoustic MFCC 13D
+  F   fused 93D
+  F+leak      test audio mixed 1:1 with the parts, no subtraction
+  F+leak+sub  test audio mixed 1:1, with spectral subtraction at 20 ms of
+              misalignment, which is the honest version
+The headline metric is the TWO-CLASS discrimination on the two complained-about
+pairs, not overall accuracy alone.
 """
 import numpy as np
 import soundfile as sf
@@ -29,7 +38,7 @@ exec(compile(_p.split("\ndef main()")[0], "vmp", "exec"), _ns)
  FB, WIN, NFFT) = (_ns["ring_vec"], _ns["mfcc"], _ns["blocks"],
                    _ns["fit_eval"], _ns["LABELS"], _ns["SR"], _ns["HOPF"],
                    _ns["NB"], _ns["FB"], _ns["WIN"], _ns["NFFT"])
-PAIRS = [(1, 2), (0, 3), (2, 4)]          # 欸/咿、喔/嗚、咿/啊（對照組）
+PAIRS = [(1, 2), (0, 3), (2, 4)]          # the two problem pairs, plus one control
 
 
 def spec(x):
@@ -47,7 +56,7 @@ def mfcc_from_power(P):
 
 
 def build(angel, lag_ms):
-    """→ dict of 特徵矩陣（乾淨/漏音/扣除）＋ y/blk。訓練恆用乾淨。"""
+    """To a dict of feature matrices (clean, bleed, subtracted) plus y and blk. Training always uses the clean ones."""
     z = dict(np.load("scratchpad/lip_ring_sweep.npz"))
     asp = float(z["aspect"])
     out = {k: [] for k in ("V", "A", "Aleak", "Asub")}
@@ -65,7 +74,7 @@ def build(angel, lag_ms):
         g = np.sqrt((au ** 2).mean() / max((seg ** 2).mean(), 1e-12))
         seg = seg * g
         mix = au + seg
-        known = np.roll(seg, int(lag_ms * 1e-3 * SR))   # live 對齊誤差
+        known = np.roll(seg, int(lag_ms * 1e-3 * SR))   # live alignment error
         Pm, Pk = spec(mix), spec(known)
         Ml = mfcc_from_power(Pm)
         Ms = mfcc_from_power(np.maximum(Pm - Pk, 0.0))
@@ -80,7 +89,7 @@ def build(angel, lag_ms):
 
 
 def cv(Xtr_all, Xte_all, y, blk):
-    """訓練用乾淨特徵、測試用（可能被污染的）特徵；回 acc/soft/pred。"""
+    """Train on clean features, test on the (possibly contaminated) ones; returns acc, soft and pred."""
     P = np.zeros((len(y), 5))
     for b in range(NB):
         te = blk == b
@@ -106,16 +115,16 @@ def main():
     ang = ang.mean(1).astype("float64")
     X, y, blk = build(ang, lag_ms=20.0)
     combos = [
-        ("V 視覺（v18 現況）", X["V"], X["V"]),
-        ("A 聲學（乾淨）", X["A"], X["A"]),
-        ("F 融合（乾淨）", np.hstack([X["V"], X["A"]]),
+        ("V visual (v18 as it stands)", X["V"], X["V"]),
+        ("A acoustic (clean)", X["A"], X["A"]),
+        ("F fused (clean)", np.hstack([X["V"], X["A"]]),
          np.hstack([X["V"], X["A"]])),
-        ("F 融合＋漏音不扣", np.hstack([X["V"], X["A"]]),
+        ("F fused + bleed, no subtraction", np.hstack([X["V"], X["A"]]),
          np.hstack([X["V"], X["Aleak"]])),
-        ("F 融合＋扣除(20ms失準)", np.hstack([X["V"], X["A"]]),
+        ("F fused + subtraction (20ms off)", np.hstack([X["V"], X["A"]]),
          np.hstack([X["V"], X["Asub"]])),
     ]
-    print(f"{'條件':<22}{'總acc':>7}{'權重':>7}"
+    print(f"{'condition':<34}{'acc':>7}{'weight':>8}"
           + "".join(f"{LABELS[i]}/{LABELS[j]:>4}" for i, j in PAIRS))
     for nm, Xtr, Xte in combos:
         acc, soft, pred = cv(Xtr, Xte, y, blk)

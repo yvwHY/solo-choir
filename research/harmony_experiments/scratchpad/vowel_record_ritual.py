@@ -1,18 +1,24 @@
-"""vowel_record_ritual — 刻意錄母音長音當層素材，錄完立刻渲立刻驗（08-13）
+"""vowel_record_ritual - record sustained vowels deliberately as layer material, then render and check them immediately
 
-Harry 提案「那我再錄音一次嗚呢」。分辨兩件事：
-  ①模型性格：這顆嘴吐不出圓唇後母音（喔 0/4、嗚 1/4 存活）
-  ②素材品質：0619 是唱歌中途的母音，有共構牽連、段落短
-刻意錄的穩定長音是最快的分辨器——而且對每個母音都是升級（現行欸的
-素材只是勉強及格 d=0.15）。
+The proposal was simply to record one of the vowels again. That separates two things:
+  1. the model's character: this voice cannot produce the rounded back vowels (one
+     survived 0 of 4 attempts, another 1 of 4)
+  2. the material's quality: the existing corpus holds vowels caught mid-song, with
+     coarticulation and short stretches
+A deliberately recorded steady sustain is the fastest way to tell those apart, and
+it is an upgrade for every vowel (the current material for one of them only just
+passes, at d=0.15).
 
-流程（血訓內建）：
-  報幕用描述詞（防聽混）→ 錄 4s → **立刻驗**（RMS 有聲＋共振峰對目標
-  的距離）→ 不合格當場重錄（最多 3 次）→ 全部錄完後**逐個渲一顆音再量**
-  （渲染會改變母音，源端對不算數）→ 只留渲後仍是該母音的，印出可貼進
-  bank_live 的 VOWEL_LAYERS。
+The ritual, with its lessons built in:
+  a prompt spoken as a DESCRIPTION so the vowels cannot be confused by ear, then a
+  4 s take, then an IMMEDIATE check (voicing by RMS plus formant distance to the
+  target), re-recording on the spot if it fails, up to three times. Once everything
+  is recorded, **each one is rendered as a single note and measured again**, because
+  rendering changes the vowel and being right at the source does not count. Only the
+  ones still correct after rendering are kept, printed ready to paste into
+  bank_live's VOWEL_LAYERS.
 
-跑: cd harmony && PYTHONPATH=. ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && PYTHONPATH=. ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/vowel_record_ritual.py [--vowels 喔,嗚] [--seconds 4]
 """
 import argparse
@@ -32,6 +38,8 @@ lpc_formants, nearest_vowel, REF = (_a["lpc_formants"], _a["nearest_vowel"],
 SR, HOP = 44100, 512
 MIDI = 48
 MODEL = "reflow-bass1/model_32000.pt"
+# The vowel labels stay in Chinese: they key bank_live.VOWEL_LAYERS. SAY holds the
+# spoken prompts, described by mouth shape so two vowels cannot be misheard.
 ORDER = ["喔", "欸", "咿", "嗚", "啊"]
 SAY = {"喔": "圓嘴的喔，像 oh", "欸": "扁嘴的欸，像 eh",
        "咿": "咧嘴的咿，像 ee", "嗚": "嘟嘴的嗚，像 oo",
@@ -55,7 +63,7 @@ def meas(x, fs=SR, lo=0.0, hi=None):
 
 
 def steadiest(x, win=1.0):
-    """回最穩的 win 秒窗（相鄰 0.25s 段共振峰變異最小）。"""
+    """Return the steadiest window of `win` seconds, that is the one whose adjacent 0.25 s segments vary least in formants."""
     w, h = int(win * SR), int(0.25 * SR)
     best, bi = None, 0
     for i in range(0, max(1, len(x) - w), h):
@@ -78,7 +86,7 @@ def record(vow, seconds, dev):
     for k in range(3):
         say(SAY[vow])
         time.sleep(0.3)
-        say("唱")
+        say("唱")                        # spoken: sing
         buf = []
 
         def cb(ind, n, ti, st):
@@ -91,23 +99,23 @@ def record(vow, seconds, dev):
         F1, F2 = meas(x[int(0.5 * SR):])
         v1, _v2, d = nearest_vowel(F1, F2)
         print(f"[{vow}] RMS {20*np.log10(rms+1e-9):.1f}dBFS  "
-              f"F1 {F1:.0f} F2 {F2:.0f} → 像 {v1}（對目標 d={d:.2f}）",
+              f"F1 {F1:.0f} F2 {F2:.0f} -> reads as {v1} (distance to target d={d:.2f})",
               flush=True)
         if rms < 0.005:
-            say("沒收到聲音，重來")
+            say("沒收到聲音，重來")        # spoken: no sound, again
             continue
         if d > 0.35:
-            say("這個聽起來不太對，再一次")
+            say("這個聽起來不太對，再一次")  # spoken: that does not sound right, once more
             continue
-        say("好")
+        say("好")                        # spoken: good
         return x
-    say("三次都不合格，跳過")
+    say("三次都不合格，跳過")            # spoken: failed three times, skipping
     return None
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--vowels", default="喔,欸,咿,嗚,啊")
+    ap.add_argument("--vowels", default="喔,欸,咿,嗚,啊")   # vowel labels, see ORDER
     ap.add_argument("--seconds", type=float, default=4.0)
     ap.add_argument("--in-name", default="USB PnP")
     a = ap.parse_args()
@@ -115,7 +123,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
 
     takes = {}
-    say("母音素材錄音。每個拉長四秒，音高穩定就好。")
+    say("母音素材錄音。每個拉長四秒，音高穩定就好。")   # spoken prompt
     for v in vows:
         x = record(v, a.seconds, a.in_name)
         if x is None:
@@ -124,10 +132,10 @@ def main():
         sf.write(p, x.astype("float32"), SR)
         takes[v] = p
     if not takes:
-        print("沒有可用素材")
+        print("no usable material")
         return
 
-    print("\n── 渲染驗收（渲一顆 midi 48 再量）──", flush=True)
+    print("\n-- render check: render one note at MIDI 48 and measure again --", flush=True)
     import torch
     import spike_stream6 as S
     svc = S.Svc([(f"{S.DDSP}/exp/{MODEL}", 0.0, 1.0, 1)], step=2,
@@ -155,13 +163,13 @@ def main():
         F1, F2 = meas(au[int(0.5 * SR):int(1.8 * SR)].astype("float64"))
         v1, v2, _d = nearest_vowel(F1, F2)
         ok = "✓" if v1 == v else ("~" if v2 == v else "✗")
-        print(f"  {v}  穩定窗 {t0:.1f}-{t1:.1f}s  渲後 F1 {F1:.0f} "
-              f"F2 {F2:.0f} → {v1}（次{v2}）{ok}", flush=True)
+        print(f"  {v}  steady window {t0:.1f}-{t1:.1f}s  after rendering F1 {F1:.0f} "
+              f"F2 {F2:.0f} -> {v1} (second choice {v2}) {ok}", flush=True)
         if ok == "✓":
             lines.append(f'                ("{v}", "{os.path.abspath(p)}", '
                          f'{t0:.2f}, {t1:.2f}, 0.0),')
-    print("\n渲後仍正確的層（可貼進 bank_live VOWEL_LAYERS）：")
-    print("\n".join(lines) if lines else "  （無）")
+    print("\nlayers still correct after rendering (paste into bank_live VOWEL_LAYERS):")
+    print("\n".join(lines) if lines else "  (none)")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,14 @@
-"""vowel_render_probe — 模型到底渲不渲得出圓唇後母音？（08-13）
+"""vowel_render_probe - can the model render the rounded back vowels at all?
 
-新庫驗收：喔（源 479/700）與嗚（源 317/818）渲完雙雙變成啊（F1 被撐到
-~750）。兩種可能：①我挑的那一段剛好不好 ②模型（他自己的嗓訓的 reflow）
-根本吐不出圓唇後母音。本檔用多個候選段各渲一顆音來分辨——若八個候選
-全塌＝是模型的性格，誠實砍掉這兩層，不再浪費他的耳朵。
+Checking the new bank: two vowels (sources at 479/700 and 317/818) both came out as
+a third vowel after rendering, with F1 pushed up to about 750. Two possibilities:
+the stretches I picked happened to be poor, or the model - reflow, trained on his own
+voice - simply cannot produce rounded back vowels. This renders one note from each of
+several candidate stretches to tell them apart: if all eight collapse, it is the
+model's character, and those two layers are honestly cut rather than wasting more
+listening on them.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/vowel_render_probe.py
 """
 import json
@@ -46,8 +49,8 @@ def main():
     vol[:4] = np.linspace(0, 0.06, 4)
     vol_t = torch.from_numpy(vol).float().to(svc.device)[None, :, None]
     mask = torch.ones(1, NF * HOP, device=svc.device)
-    for v in ("喔", "嗚", "啊", "咿"):        # 後兩個＝對照組（已知會活）
-        print(f"\n{v}（源 → 渲後）")
+    for v in ("喔", "嗚", "啊", "咿"):        # the last two are the control; they are known to survive
+        print(f"\n{v} (source -> rendered)")
         for r in cands[v][:4]:
             x, fs = sf.read(r["clip"], always_2d=True)
             mid = (r["t0"] + r["t1"]) / 2
@@ -66,8 +69,8 @@ def main():
             F1, F2 = meas(au[int(0.5 * SR):int(1.8 * SR)].astype("float64"))
             v1, v2, _d = nearest_vowel(F1, F2)
             print(f"  {r['clip'].split('/')[-1]} {r['t0']:.1f}s  "
-                  f"源 {r['F1']:.0f}/{r['F2']:.0f} → 渲 {F1:.0f}/{F2:.0f}"
-                  f"  ＝{v1}（次{v2}）{'✓' if v1 == v else '✗'}")
+                  f"source {r['F1']:.0f}/{r['F2']:.0f} -> rendered {F1:.0f}/{F2:.0f}"
+                  f"  = {v1} (second {v2}) {'ok' if v1 == v else 'no'}")
 
 
 if __name__ == "__main__":

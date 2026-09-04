@@ -1,16 +1,21 @@
-"""vowel_layer_rebuild — 依母音重挑五層素材（08-13，v21 前置）
+"""vowel_layer_rebuild - re-pick the five layers of material by vowel (groundwork for v21)
 
-vowel_source_scan 證實 0619 語料五個母音齊全（欸 clip_0103 F1 519/F2
-1824、嗚 clip_0035 319/796），原挑法照亮度撈才會撈到三個喔。
+vowel_source_scan confirmed that all five vowels are present in the corpus (one at
+F1 519 / F2 1824, another at 319/796); it was picking by brightness that ended up
+with three copies of the same vowel.
 
-本檔挑的是**連續穩定段**不是單一窗——渲染 encode 會抓窗中心 ±40 hop
-（≈0.93s）的上下文，300ms 的窗會把隔壁音素一起吃進去（原挑法的隱形
-坑）。做法：同母音的相鄰窗併成 run → 取 ≥0.7s 且平均距離最小的 run →
-中心 ±0.5s 當層窗。
+This picks a CONTINUOUS STEADY STRETCH rather than a single window. The render
+encoder takes context of plus or minus 40 hops (about 0.93 s) around the centre of
+the window, so a 300 ms window swallows the neighbouring phoneme with it, which was
+the hidden trap in the old method. So: adjacent windows of the same vowel are merged
+into a run, the run of at least 0.7 s with the smallest mean distance is taken, and
+its centre plus or minus 0.5 s becomes the layer window.
 
-輸出：建議的 VOWEL_LAYERS 區塊（人工貼進 bank_live.py）＋ JSON。
-渲完必須跑 layer_vowel_audit 驗收——**渲染會改變母音**，源端對不代表
-渲出來對（L3 喔 F2 829 → 渲後 1877＝欸，就是這樣壞的）。
+Output: a suggested VOWEL_LAYERS block to paste into bank_live.py, plus JSON.
+After rendering, layer_vowel_audit MUST be run to check it - **rendering changes the
+vowel**, and being right at the source does not mean being right after rendering
+(one layer went from F2 829 to 1877, which is a different vowel; that is exactly how
+this broke).
 """
 import glob
 import json
@@ -27,7 +32,7 @@ _s = {}
 exec(compile(open("scratchpad/vowel_source_scan.py").read()
              .split("\ndef main()")[0], "vss", "exec"), _s)
 dist, C, WIN, HOP = _s["dist"], _s["C"], _s["WIN"], _s["HOP"]
-ORDER = ["喔", "欸", "咿", "嗚", "啊"]      # 必須與校準 labels 同序
+ORDER = ["喔", "欸", "咿", "嗚", "啊"]      # must be in the same order as the calibration labels
 MINRUN = 0.7
 
 
@@ -81,7 +86,7 @@ def runs_of(fp):
 
 def main():
     files = sorted(glob.glob(f"{C}/*.wav"))
-    print(f"掃 {len(files)} clips（併連續段）…", flush=True)
+    print(f"scanning {len(files)} clips, merging continuous stretches...", flush=True)
     R = []
     for fp in files:
         R += runs_of(fp)
@@ -90,10 +95,10 @@ def main():
         cs = [r for r in R if r["v"] == v and r["len"] >= MINRUN]
         if not cs:
             cs = [r for r in R if r["v"] == v]
-            print(f"⚠ {v} 沒有 ≥{MINRUN}s 的穩定段，退而取最長的")
+            print(f"{v}: no steady stretch of at least {MINRUN}s; falling back to the longest")
         cs.sort(key=lambda r: (r["d"], -r["len"]))
         pick[v] = cs[0]
-    print(f"\n{'母音':<4}{'clip':<16}{'窗':<14}{'長':>5}{'F1':>6}{'F2':>7}"
+    print(f"\n{'vowel':<7}{'clip':<16}{'window':<14}{'len':>5}{'F1':>6}{'F2':>7}"
           f"{'d':>6}")
     lines = []
     for v in ORDER:
@@ -105,7 +110,7 @@ def main():
               f"{r['len']:>5.1f}{r['F1']:>6.0f}{r['F2']:>7.0f}{r['d']:>6.2f}")
         lines.append(f'                ("{v}", f"{{_C0619}}/{nm}", '
                      f'{t0:.2f}, {t1:.2f}, 0.0),')
-    print("\n貼進 bank_live.py 的 VOWEL_LAYERS：")
+    print("\nVOWEL_LAYERS to paste into bank_live.py:")
     print("VOWEL_LAYERS = [" + "\n".join(lines)[16:] + "]")
     json.dump({v: pick[v] for v in ORDER},
               open("scratchpad/vowel_layer_pick.json", "w"),

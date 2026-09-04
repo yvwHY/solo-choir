@@ -1,22 +1,29 @@
-"""vowel_ml_probe — 「要精細是不是要 ML」的離線判準實驗（08-13）
+"""vowel_ml_probe - an offline test of whether finer vowel control needs machine learning
 
-背景：兩個通道、兩種特徵，反距離最近鄰都卡在同一個天花板——
-  視覺 v17.1 live 熵 0.83（糊）、聲學 mel 最近鄰跨場次 0.60。
-假設：瓶頸不是感測資訊不足，是「五個原型點＋算距離」這個模型太弱。
-本實驗：同樣的資料、同樣的切分，把最近鄰換成小分類器，看差多少。
+Background: two channels and two kinds of feature, and inverse-distance nearest
+neighbour hits the same ceiling in both - the visual channel at a live entropy of
+0.83 (blurred) and the acoustic mel nearest neighbour at 0.60 across sessions.
+Hypothesis: the bottleneck is not a lack of sensor information but that "five
+prototype points and a distance" is too weak a model.
+This experiment: the same data and the same splits, with the nearest neighbour
+replaced by a small classifier, to see how much difference it makes.
 
-⚠ 方法論（先寫死，免得自己騙自己）：
-  1. **時間分塊 CV**，不做隨機切分——相鄰幀高度相關，隨機切分會把
-     同一個嘴形同時放進 train/test＝準確率灌水。每段掃音由低到高，
-     分塊等於也在考「換音高還認不認得」。
-  2. **跨場次**才算真泛化：聲學支線 train=lip_sweep2（08-13 凌晨）、
-     test=lip_ring_sweep（08-13 中午）。視覺支線只有中午一場有整圈
-     landmark ⇒ 只能分塊 CV，報告時明講這條沒有跨場次證據。
-  3. **基線用同一套切分**跑最近鄰（現行 v17.1 幾何），差值才可歸因。
-  4. 真正要的是**權重**不是硬標籤 ⇒ 除了 accuracy 也報「真類機率
-     平均」（soft），那才是餵給混層的東西。
+Methodology, written down in advance so as not to fool myself:
+  1. **Cross-validate over blocks of time**, never a random split: adjacent frames
+     are highly correlated, and a random split puts the same mouth shape in both
+     train and test, inflating accuracy. Each take sweeps from low to high, so
+     blocking also tests whether it still recognises the vowel at a new pitch.
+  2. Only **across sessions** counts as real generalisation: the acoustic branch
+     trains on one session and tests on another. The visual branch has full lip-ring
+     landmarks from one session only, so it can only be block cross-validated, and
+     the report says plainly that it has no across-session evidence.
+  3. **The baseline runs on the same splits** as the current nearest neighbour, so
+     the difference can be attributed.
+  4. What is actually wanted is WEIGHTS, not hard labels, so alongside accuracy it
+     reports the mean probability of the true class, which is what feeds the mixing
+     layer.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/vowel_ml_probe.py
 """
 import numpy as np
@@ -25,9 +32,9 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
 SR = 44100
-NFFT, HOPF = 2048, 1470                  # 30Hz 幀率（對齊控制通道節奏）
-LABELS = ["喔", "欸", "咿", "嗚", "啊"]
-NB = 5                                   # 時間分塊數
+NFFT, HOPF = 2048, 1470                  # a 30 Hz frame rate, matching the control channel
+LABELS = ["喔", "欸", "咿", "嗚", "啊"]   # vowel labels; they key bank_live.VOWEL_LAYERS
+NB = 5                                   # number of time blocks
 
 _src = open("scratchpad/lip_ring_calib.py").read()
 _ns = {}
@@ -58,7 +65,7 @@ WIN = np.hanning(NFFT)
 
 
 def mfcc(x):
-    """→ (T,13) MFCC c1-c13（丟 c0＝位準；DCT 低倒頻＝包絡、抑制音高梳。"""
+    """To (T,13) MFCCs c1 to c13, dropping c0 which is level; the low DCT quefrencies are the envelope and suppress the pitch comb."""
     n = (len(x) - NFFT) // HOPF
     if n <= 0:
         return np.zeros((0, 13)), np.zeros(0)
@@ -72,12 +79,12 @@ def mfcc(x):
 
 
 def blocks(n, nb=NB):
-    """連續時間分塊索引（0..nb-1）。"""
+    """Contiguous time-block indices, 0 to nb-1."""
     return np.minimum((np.arange(n) * nb) // max(n, 1), nb - 1)
 
 
 def nn_baseline(Xtr, ytr, Xte):
-    """現行 v17.1 幾何：類別均值當錨點、正規化 L1 距離最近鄰。"""
+    """The current v17.1 geometry: class means as anchors, nearest neighbour by normalised L1 distance."""
     A = np.stack([Xtr[ytr == c].mean(0) for c in range(5)])
     S = np.maximum(Xtr.std(0), 1e-6)
     d = np.abs((Xte[:, None, :] - A[None]) / S).mean(2)
@@ -157,28 +164,28 @@ def confusion(pred, true):
 def main():
     Vr, Ar, yr, br = load_ring()
     As, ys = load_sweep2()
-    print(f"資料：中午場（整圈+聲學）{len(yr)} 幀、凌晨場（聲學）{len(ys)} 幀\n")
+    print(f"data: session with the full ring and audio {len(yr)} frames, audio-only session {len(ys)} frames\n")
 
-    print("── 跨場次（train 凌晨 → test 中午）：唯一的真泛化證據 ──")
-    for kind, nm in (("nn", "最近鄰（現行）"), ("lr", "logistic"),
+    print("-- across sessions (train on the earlier, test on the later): the only real generalisation evidence --")
+    for kind, nm in (("nn", "nearest neighbour (current)"), ("lr", "logistic"),
                      ("mlp", "MLP-32")):
         a, s, pred = fit_eval(As, ys, Ar, yr, kind)
-        print(f"  聲學 {nm:<14} acc {a:.2f}  真類機率 {s:.2f}")
+        print(f"  acoustic {nm:<26} acc {a:.2f}  true-class probability {s:.2f}")
         if kind == "mlp":
-            print("   混淆（列=真 喔欸咿嗚啊）:\n",
+            print("   confusion (rows = true, in LABELS order):\n",
                   confusion(pred, yr))
 
-    print("\n── 場次內時間分塊 CV（單場、掃音低→高分塊＝順帶考跨音高）──")
-    for tag, X in (("視覺整圈 80D", Vr), ("聲學 MFCC 13D", Ar),
-                   ("融合 93D", np.hstack([Vr, Ar]))):
+    print("\n-- within-session cross-validation over time blocks (one session, swept low to high, so it also tests across pitch) --")
+    for tag, X in (("visual full ring 80D", Vr), ("acoustic MFCC 13D", Ar),
+                   ("fused 93D", np.hstack([Vr, Ar]))):
         row = []
         for kind in ("nn", "lr", "mlp"):
             a, s, pred, true = blocked_cv(X, yr, br, kind)
             row.append(f"{kind} acc {a:.2f}/soft {s:.2f}")
-            if kind == "mlp" and tag.startswith("融合"):
+            if kind == "mlp" and tag.startswith("fused"):
                 Cm = confusion(pred, true)
         print(f"  {tag:<14} " + "   ".join(row))
-    print("  融合 MLP 混淆（列=真 喔欸咿嗚啊）:\n", Cm)
+    print("  fused MLP confusion (rows = true, in LABELS order):\n", Cm)
 
 
 if __name__ == "__main__":

@@ -1,16 +1,20 @@
-"""vocoder 尾段化的邊距掃描：只 vocode 尾段 + m 幀邊距，跟整窗 vocode 的
-同一段比對，找 max-abs-diff 歸零的 m。
+"""Margin sweep for making the vocoder tail-only: vocode just the tail plus m frames
+of margin, compare it against the same stretch from a full-window vocode, and find
+the m at which the maximum absolute difference reaches zero.
 
-為什麼問這個（08-09 §K）：視窗 0.71s，但 SOLA 只取尾巴 blk+cf+sola_search
-＝0.29s ＝ **59% 的合成工作被丟掉**，而那 59% 落在全系統最貴的 NSF-HiFiGAN
-上（整塊 55%）。v23 `--enh-tail` 在 CombSub 線驗證過同一原理（−35ms/塊），
-但移植 reflow 時綁在「enhancer」這個名字上一起被丟掉了（spike_stream6.py:275
-「enh_tail 參數收下但不用」）——reflow 沒有 enhancer，但有 vocoder。
+Why ask: the window is 0.71 s, but SOLA only takes the tail, blk + cf +
+sola_search = 0.29 s, so **59% of the synthesis work is thrown away** - and that 59%
+falls on NSF-HiFiGAN, the most expensive thing in the system (55% of a block). v23's
+`--enh-tail` proved the same principle on the CombSub line, worth 35 ms a block, but
+when it was ported it was tied to the name "enhancer" and discarded with it
+(spike_stream6.py:275, "enh_tail is accepted and ignored") - reflow has no enhancer,
+but it does have a vocoder.
 
-NSF-HiFiGAN 是卷積上採樣器＝感受野有限。若 m 大於感受野，尾段單獨 vocode
-應與整窗的尾段**逐位元相同** → 那是 Regime A，不必耳測。
+NSF-HiFiGAN is a convolutional upsampler and therefore has a finite receptive field.
+If m exceeds that field, vocoding the tail alone must be BIT IDENTICAL to the tail of
+the full window - which makes it Regime A, needing no listening test.
 
-跑：260724_ddsp_svc_6x/venv/bin/python scratchpad/bench_vocoder_tail.py
+Run: 260724_ddsp_svc_6x/venv/bin/python scratchpad/bench_vocoder_tail.py
 """
 import sys
 import time
@@ -28,8 +32,8 @@ BLK = int(round(0.24 * SR / HOP)) * HOP
 CF, SOLA_SEARCH, LAST_DELAY = int(0.04 * SR), int(0.01 * SR), int(0.02 * SR)
 WIN = ((max(int(0.7 * SR), BLK + CF + SOLA_SEARCH + 2 * LAST_DELAY)
         // HOP + 1) * HOP)
-USED = BLK + CF + SOLA_SEARCH + LAST_DELAY      # SOLA 真正碰到的尾段
-USED_F = -(-USED // HOP)                        # 換算成幀（進位）
+USED = BLK + CF + SOLA_SEARCH + LAST_DELAY      # the tail SOLA actually touches
+USED_F = -(-USED // HOP)                        # in frames, rounded up
 MARGINS = [0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32]
 
 
@@ -48,18 +52,18 @@ x, sr = sf.read("scratchpad/_ab30.wav", dtype="float32", always_2d=True)
 assert sr == SR
 x = x[:, 0]
 
-print(f"視窗 {WIN} 樣本 = {WIN/SR:.2f}s = {WIN//HOP} 幀")
-print(f"SOLA 用到的尾段 {USED} 樣本 = {USED/SR:.2f}s = {USED_F} 幀"
-      f"（{100*USED/WIN:.0f}% of 視窗）\n")
+print(f"window {WIN} samples = {WIN/SR:.2f}s = {WIN//HOP} frames")
+print(f"tail used by SOLA {USED} samples = {USED/SR:.2f}s = {USED_F} frames"
+      f" ({100*USED/WIN:.0f}% of the window)\n")
 
-# 取 5 個有唱的視窗（避開靜音）
+# take 5 windows where he is singing, avoiding silence
 starts = []
 for st in range(0, len(x) - WIN, WIN):
     if float(np.abs(x[st:st + WIN]).mean()) > 0.01:
         starts.append(st)
     if len(starts) == 5:
         break
-print(f"取樣 {len(starts)} 個有聲視窗\n")
+print(f"sampled {len(starts)} voiced windows\n")
 
 torch.manual_seed(0)
 worst = {m: 0.0 for m in MARGINS}
@@ -75,7 +79,7 @@ with torch.no_grad():
         wav, _ = model.ddsp_model(units[:, :n], fv, vol_t[:, :n],
                                   spk_id=svc.spk, infer=True)
         dm = svc.vocoder.extract(wav)
-        # 種子固定＝mel 可重現（reflow 的 randn 見 08-08 血訓）
+        # fixed seed, so the mel is reproducible (reflow calls randn; a lesson learned)
         torch.manual_seed(1234)
         mel = model.reflow_model(dm, gt_spec=dm, infer=True, infer_step=2,
                                  method="euler", t_start=0.85, use_tqdm=False)
@@ -88,12 +92,12 @@ with torch.no_grad():
             d = float((tail[-USED:] - full[-USED:]).abs().max())
             worst[m] = max(worst[m], d)
 
-print(f"{'邊距 m（幀）':<14}{'m 的秒數':>10}{'max-abs-diff':>16}")
+print(f"{'margin m (frames)':<20}{'m in seconds':>14}{'max-abs-diff':>16}")
 for m in MARGINS:
     print(f"{m:<14}{m*HOP/SR:>10.3f}{worst[m]:>16.3e}"
-          + ("   ← 逐位元相同" if worst[m] == 0.0 else ""))
+          + ("   <- bit identical" if worst[m] == 0.0 else ""))
 
-# 省多少：以第一個視窗計時
+# how much it saves: timed on the first window
 zero = [m for m in MARGINS if worst[m] == 0.0]
 pick = zero[0] if zero else MARGINS[-1]
 k = USED_F + pick
@@ -121,8 +125,8 @@ with torch.no_grad():
 
     t_full = bench(lambda: svc.vocoder.infer(mel, f0m))
     t_tail = bench(lambda: svc.vocoder.infer(mel[:, -k:], f0m[:, -k:]))
-print(f"\n邊距 {pick} 幀（{pick*HOP/SR:.3f}s）→ vocode {k}/{mel.shape[1]} 幀")
-print(f"一張嘴 vocoder：整窗 {t_full:.1f}ms → 尾段 {t_tail:.1f}ms"
-      f"（省 {t_full-t_tail:.1f}ms，{100*(t_full-t_tail)/t_full:.0f}%）")
-print(f"三張嘴合計約省 {3*(t_full-t_tail):.0f}ms/塊"
-      f"（註：台架有 mps.synchronize＝絕對值偏高，只看比例）")
+print(f"\nmargin {pick} frames ({pick*HOP/SR:.3f}s) -> vocode {k}/{mel.shape[1]} frames")
+print(f"one voice, vocoder: full window {t_full:.1f}ms -> tail only {t_tail:.1f}ms"
+      f" (saving {t_full-t_tail:.1f}ms, {100*(t_full-t_tail)/t_full:.0f}%)")
+print(f"three voices save about {3*(t_full-t_tail):.0f}ms per block"
+      f" (note: the bench calls mps.synchronize, so absolutes read high; only the ratio matters)")

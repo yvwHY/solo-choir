@@ -1,15 +1,19 @@
-"""vowel_render_select — 用「渲染後」的母音挑素材（08-13，v22）
+"""vowel_render_select - choose material by the vowel AFTER rendering (v22)
 
-血訓（今天最貴的一課）：**源端像不像不是判準**。Harry 現場錄的嗚源端
-d=0.11（全場最準）渲完仍歪到 F2 1330；語料裡某段源端普通，渲完卻是
-乾淨的嗚（221/907）。哪一段的 units 能活過模型比較像抽籤——那就別猜，
-直接把候選全渲一次、用渲後距離挑贏家。
+The most expensive lesson of that day: **how it sounds at the source is not the
+criterion.** A vowel recorded deliberately, the closest of the whole session at
+d=0.11 at the source, still came out at F2 1330 after rendering; an ordinary-looking
+stretch of the corpus rendered into a clean version of the same vowel (221/907).
+Which stretch's units survive the model is close to a lottery, so do not guess:
+render every candidate once and pick the winner by its distance after rendering.
 
-流程：vowel_source_cands.json（每母音 30 候選）＋現場錄音 → 每個渲一顆
-midi 48 → 量 F1/F2 → 每母音取渲後距離最小者 → 印出 VOWEL_LAYERS。
-沒有任何候選渲後落在該母音＝誠實判死（喔的候選人已陣亡 5 次）。
+The flow: vowel_source_cands.json (30 candidates per vowel) plus the deliberate
+recordings, each rendered as one note at MIDI 48, F1 and F2 measured, and the
+smallest post-render distance taken per vowel, printing VOWEL_LAYERS.
+If no candidate lands on the vowel after rendering, that is an honest death (one
+vowel has now lost five sets of candidates).
 
-跑: cd harmony && PYTHONPATH=. ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && PYTHONPATH=. ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/vowel_render_select.py [--per 30]
 """
 import argparse
@@ -32,15 +36,17 @@ exec(compile(open("scratchpad/vowel_source_scan.py").read()
 dist = _s["dist"]
 SR, HOP, MIDI = 44100, 512, 48
 F0HZ = 440.0 * 2 ** ((MIDI - 69) / 12.0)
-DMAX = 0.25                              # 母音距離門檻（過了就比乾淨度）
+DMAX = 0.25                              # vowel distance threshold; past it, cleanliness decides
 MODEL = "reflow-bass1/model_32000.pt"
-ORDER = ["喔", "欸", "咿", "嗚", "啊"]
+ORDER = ["喔", "欸", "咿", "嗚", "啊"]      # vowel labels; they key bank_live.VOWEL_LAYERS
 
 
 def hnr(x, f0):
-    """諧波對噪音比（dB）＝音質判準。08-13 血訓：v22 只用共振峰距離挑，
-    四層 HNR 全面掉 1-6dB，Harry 當場聽出「不如上個」——**準確度與乾淨度
-    要一起管**（同一個 clip 只差窗口位置就差 6dB）。"""
+    """Harmonic-to-noise ratio in dB, the criterion for quality. The lesson: v22
+    picked on formant distance alone and all four layers lost 1 to 6 dB of HNR, which
+    was heard immediately as worse than the previous version. **Accuracy and
+    cleanliness have to be managed together** - the same clip differs by 6 dB with
+    nothing but the window position changed."""
     x = x - x.mean()
     n = len(x)
     X = np.abs(np.fft.rfft(x * np.hanning(n))) ** 2
@@ -73,15 +79,16 @@ def main():
     import torch
     import spike_stream6 as S
     cands = json.load(open("scratchpad/vowel_source_cands.json"))
-    # v21 用過的窗（Harry 耳判較好的那版）明確放進候選池，讓它有機會
-    # 憑 HNR 贏回來——不然搜索永遠只在新候選裡打轉
+    # The window used by v21, the one judged better by ear, goes into the candidate
+    # pool explicitly so it has a chance to win back on HNR; otherwise the search only
+    # ever circles among new candidates.
     for v, clip, t in (("欸", "clip_0143.wav", 2.17), ("咿", "clip_0155.wav",
                        3.97), ("嗚", "clip_0035.wav", 3.25),
                        ("啊", "clip_0009.wav", 1.43)):
         cands.setdefault(v, []).insert(0, {
             "clip": f"{_s['C']}/{clip}", "t0": t - 0.15, "t1": t + 0.15,
             "F1": 0.0, "F2": 0.0, "vowel": v, "d": 0.0, "rms": 0.0})
-    # 現場錄音（vowel_record_ritual 產）也丟進候選池：整段掃窗
+    # the deliberate recordings (from vowel_record_ritual) go into the pool too, sweeping the whole take
     for p in sorted(glob.glob("scratchpad/vowel_takes/*.wav")):
         v = os.path.basename(p)[:-4]
         if v not in cands:
@@ -129,28 +136,28 @@ def main():
             rows.append({"clip": r["clip"], "mid": mid, "F1": F1, "F2": F2,
                          "d": dist(F1, F2, v), "hnr": hnr(body, F0HZ),
                          "v": nearest_vowel(F1, F2)[0]})
-        # 判準二選一不行：先用母音正確＋距離門檻篩，**再用 HNR 挑最乾淨**
+        # the two criteria cannot be traded off: sieve on the correct vowel and the distance threshold FIRST, then pick the cleanest by HNR
         hit = sorted([q for q in rows if q["v"] == v and q["d"] <= DMAX],
                      key=lambda q: -q["hnr"])
         rows.sort(key=lambda q: q["d"])
-        print(f"\n{v}：渲了 {len(rows)} 個，母音對且 d≤{DMAX} 的有 "
-              f"{len(hit)} 個（依 HNR 排）", flush=True)
+        print(f"\n{v}: rendered {len(rows)}, of which {len(hit)} have the right vowel "
+              f"and d<={DMAX} (ordered by HNR)", flush=True)
         for q in hit[:3]:
             print(f"   {os.path.basename(q['clip'])} @{q['mid']:.1f}s  "
-                  f"渲後 {q['F1']:.0f}/{q['F2']:.0f}  d {q['d']:.2f}  "
+                  f"rendered {q['F1']:.0f}/{q['F2']:.0f}  d {q['d']:.2f}  "
                   f"HNR {q['hnr']:.1f}dB")
         if hit:
             b = hit[0]
             best[v] = b
             lines.append(f'                ("{v}", "{b["clip"]}", '
                          f'{b["mid"] - 0.5:.2f}, {b["mid"] + 0.5:.2f}, 0.0),'
-                         f'  # 渲 {b["F1"]:.0f}/{b["F2"]:.0f} '
+                         f'  # rendered {b["F1"]:.0f}/{b["F2"]:.0f} '
                          f'HNR {b["hnr"]:.0f}')
-    print("\n── 渲後選出的層 ──")
-    print("\n".join(lines) if lines else "（無）")
+    print("\n-- layers selected after rendering --")
+    print("\n".join(lines) if lines else "(none)")
     for v in ORDER:
         if v not in best:
-            print(f"⚠ {v}：{a.per}+ 個候選渲後沒有一個是{v}＝這顆嘴做不到")
+            print(f"{v}: none of the {a.per}+ candidates renders as that vowel; this voice cannot do it")
     json.dump(best, open("scratchpad/vowel_render_best.json", "w"),
               ensure_ascii=False, indent=1)
 

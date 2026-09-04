@@ -1,6 +1,6 @@
 ---
 name: live-audio-debug
-description: This skill should be used when any live-audio symptom appears in this repo — choppy/斷斷續續 output, scrape or instability on pitch changes, tremolo, comb/blur, input overflow, PortAudio errors (-10851), feedback/reverb, timbre collapse or all-voices-male after a device switch, crashes on model/speaker change, ticks, dead hardware channel toggles, "choir sounds like one person", or transcription that "looks wrong". Routes to the diagnosed symptom table before anyone touches buffers.
+description: This skill should be used when any live-audio symptom appears in this repo — choppy or broken-up output, scrape or instability on pitch changes, tremolo, comb/blur, input overflow, PortAudio errors (-10851), feedback/reverb, timbre collapse or all-voices-male after a device switch, crashes on model/speaker change, ticks, dead hardware channel toggles, "choir sounds like one person", or transcription that "looks wrong". Routes to the diagnosed symptom table before anyone touches buffers.
 ---
 
 # Live-audio-debug — look it up before theorising

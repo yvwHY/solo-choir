@@ -1,18 +1,22 @@
-"""layer_vowel_audit — 五層渲出來到底是什麼母音？（08-13）
+"""layer_vowel_audit - which vowel does each of the five layers actually render?
 
-Harry 三層輪判「喔聲音聽起來像是誒」＝踩到 v16.3 起沒人驗過的假設：
-層↔母音對應**只是按亮度順序套上去的**（0619 素材依 spectral tilt 排序
-→ 直接假設 dk2=喔 dk1=欸 mid=咿 br1=嗚 br2=啊），素材本身唱的是什麼
-母音從來沒查。嘴形認得對、庫選得對，但**庫本身標錯**＝口型與聲音對不上。
+The verdict that one layer sounded like a different vowel hit an assumption nobody
+had checked since v16.3: the layer-to-vowel mapping **was only ever applied in order
+of brightness** (the corpus was sorted by spectral tilt and the labels assumed from
+there). What vowel the material actually sings was never examined. The mouth shape
+is recognised correctly and the right bank is chosen, but **the bank itself is
+mislabelled**, so mouth and sound do not agree.
 
-本檔兩件事：
- 1. 客觀：對每層渲出的 loop 做 LPC 共振峰（降 16k、order 18）→ F1/F2，
-    對照標準母音空間給假設。
- 2. 主觀（權威）：產生**盲聽包** layer_audit.wav——只報層號不報母音名
-    （防聽混/防暗示，08-13 血訓），每層 2 秒，讓 Harry 耳標。
-    → 他標完，映射照他的答案重建（音質歸他）。
+Two things here:
+ 1. Objective: LPC formants of the loop each layer renders (downsampled to 16k,
+    order 18), giving F1 and F2, compared against the standard vowel space as a
+    hypothesis.
+ 2. Subjective, and authoritative: produce a BLIND LISTENING file, layer_audit.wav,
+    announcing only the layer number and never the vowel name (against mishearing
+    and against suggestion), two seconds per layer, for the ear to label.
+    The mapping is then rebuilt from those answers.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/layer_vowel_audit.py [--voice alto] [--midi 62]
 """
 import argparse
@@ -25,14 +29,15 @@ import soundfile as sf
 from scipy.signal import lfilter, resample_poly
 
 SR = 44100
-# 標準母音 F1/F2（男聲概略，Hz）——只當對照，不當判決
+# Standard vowel F1/F2 for a male voice, in Hz. A reference only, never the verdict.
+# The keys are the Chinese vowel labels that key bank_live.VOWEL_LAYERS.
 REF = {"啊": (730, 1090), "喔": (500, 700), "嗚": (320, 800),
        "欸": (530, 1840), "咿": (270, 2290)}
 
 
 def lpc_formants(x, order=18, fs=16000):
     x = x - x.mean()
-    x = lfilter([1, -0.97], [1], x)                 # 預強調
+    x = lfilter([1, -0.97], [1], x)                 # pre-emphasis
     w = x * np.hanning(len(x))
     r = np.correlate(w, w, "full")[len(w) - 1:][:order + 1]
     if r[0] <= 0:
@@ -72,17 +77,18 @@ def main():
     ap.add_argument("--voice", default="alto")
     ap.add_argument("--midi", type=int, default=62)
     ap.add_argument("--out", default="scratchpad/layer_audit.wav")
-    ap.add_argument("--dir", default="", help="指定層庫目錄（空=最新）")
+    ap.add_argument("--dir", default="", help="layer bank directory (empty = the newest)")
     a = ap.parse_args()
 
     cands = glob.glob(f"scratchpad/bank_*/{a.voice}_L0.npz")
-    assert cands, "找不到層庫（先跑一次 --vowels 1）"
-    # ⚠ 用 mtime 挑最新——檔名是雜湊，字典序跟新舊無關（08-13 踩過：
-    # 盲聽包差點用舊庫生成）。要指定就給 --dir。
+    assert cands, "no layer bank found (run once with --vowels 1 first)"
+    # Pick the newest by mtime: the directory names are hashes, so lexical order has
+    # nothing to do with age. The blind listening file was once nearly built from an
+    # old bank. Use --dir to be explicit.
     bd = a.dir or os.path.dirname(max(cands, key=os.path.getmtime))
-    print(f"層庫目錄 {bd}\n")
+    print(f"layer bank directory {bd}\n")
 
-    print(f"{'層':<4}{'F1':>6}{'F2':>7}   {'最近母音':<10}{'次近':<8}")
+    print(f"{'layer':<7}{'F1':>6}{'F2':>7}   {'nearest vowel':<16}{'second':<10}")
     segs = []
     for li in range(5):
         z = np.load(f"{bd}/{a.voice}_L{li}.npz")
@@ -98,9 +104,9 @@ def main():
         v1, v2, _d = nearest_vowel(F1, F2)
         print(f"L{li:<3}{F1:>6.0f}{F2:>7.0f}   {v1:<10}{v2:<8}")
 
-        # 盲聽包：只報層號（不報母音名＝不暗示）
+        # the blind file announces the layer number only, never the vowel name, so nothing is suggested
         aif = f"/tmp/_lay{li}.aiff"
-        subprocess.run(["say", "-o", aif, f"第{li + 1}個"],
+        subprocess.run(["say", "-o", aif, f"第{li + 1}個"],   # spoken: "number N"
                        check=True)
         sp, sr_ = sf.read(aif, dtype="float32", always_2d=True)
         sp = resample_poly(sp[:, 0], SR, sr_).astype("float32")
@@ -110,7 +116,7 @@ def main():
                  np.zeros(int(0.6 * SR), "float32")]
         os.remove(aif)
     sf.write(a.out, np.concatenate(segs), SR)
-    print(f"\n盲聽包 → {a.out}（每段：報層號 → 2 秒該層聲音）")
+    print(f"\nblind listening file -> {a.out} (each entry: the layer number, then 2 seconds of that layer)")
 
 
 if __name__ == "__main__":
