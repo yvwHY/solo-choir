@@ -1,15 +1,21 @@
-"""keydet.py — 調性偵測（任務6：走出 C 大調）
+"""keydet.py — key detection (task 6: leaving C major)
 
-滑動窗音高直方圖 × Krumhansl-Schmuckler 大調輪廓相關 → 24 調（12 大調×
-major/minor profile，本專案腦只懂大調系統，偵測輸出＝大調 key root）。
-用途：
-  離線  python keydet.py <wav...>              # 每檔報 key＋信心
-  模組  from keydet import KeyDetector          # live 用：push(f0_hz) → key
+A sliding-window pitch histogram correlated against Krumhansl-Schmuckler major
+profiles over 24 keys (12 roots by major and minor profile). This project's
+harmony model understands only the major system, so the detector's output is a
+major key root.
+Uses:
+  offline  python keydet.py <wav...>          # key and confidence per file
+  module   from keydet import KeyDetector     # live: push(f0_hz) -> key
 
-設計：
-- 輸入只吃 f0（YIN/遙測都有），不吃頻譜——與現有耳朵零耦合。
-- 滑動窗預設 8s（live 可信起點）＋全曲累積版；信心＝最佳/次佳相關差。
-- 輸出 root 半音數（C=0），供「輸入歸一到 C 餵腦、輸出轉回」用。
+Design:
+- The input is f0 alone, which both YIN and the telemetry provide, and never a
+  spectrum, so it is not coupled to the existing detectors.
+- A sliding window, 8 s by default as a trustworthy starting point live, plus a
+  whole-take accumulator. Confidence is the gap between the best and second-best
+  correlation.
+- The output is the root in semitones (C = 0), for normalising the input to C
+  before the model and rotating the output back.
 """
 import math, sys
 import numpy as np
@@ -20,16 +26,20 @@ MIN = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34
 NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
-SCALE = np.array([1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1], dtype=float)  # 大調音階模板
+SCALE = np.array([1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1], dtype=float)  # major scale template
 
 
 def key_from_hist(hist):
-    """12-bin 音高類直方圖 → (root, is_major, confidence)。
+    """A 12-bin pitch-class histogram to (root, is_major, confidence).
 
-    判準＝音階隸屬度（直方圖質量落在哪個大調音階集合內最多），不是 K-S
-    主音輪廓——腦要的是「哪個大調音階裝得下這段歌」（C 大調＝A 小調同一組
-    音，主音之爭與歸一無關；首測 K-S 把 A 中心的 C 大調旋律判成 A）。
-    is_major 僅為相容欄位，恆 True；conf＝最佳/次佳隸屬度差（0–1）。"""
+    The criterion is scale membership, that is, which major scale set holds the
+    most histogram mass, not the K-S tonic profile. What the model needs is
+    which major scale the melody fits into; C major and A minor are the same set
+    of notes, and the argument about which is the tonic does not affect
+    normalisation. In the first test, K-S called an A-centred melody in C major
+    "A".
+    is_major is a compatibility field and is always True. conf is the gap
+    between the best and second-best membership, from 0 to 1."""
     tot = hist.sum()
     if tot <= 0:
         return None
@@ -40,11 +50,11 @@ def key_from_hist(hist):
 
 
 class KeyDetector:
-    """live 累積器：push 每幀 f0（Hz 或 None），read key()。"""
+    """Live accumulator: push each frame's f0, in Hz or None, and read key()."""
 
     def __init__(self, win_frames=None):
         self.hist = np.zeros(12)
-        self.win = win_frames          # None = 無限累積
+        self.win = win_frames          # None = accumulate without limit
         self.buf = []
 
     def push(self, f0):

@@ -1,26 +1,34 @@
-"""respond_live — 及時 live 應答式（08-11 Harry「試試你剛剛的及時live的應答式」）
+"""respond_live — the immediate live answering mode (2026-08-11, "try your
+immediate live answering idea")
 
-你唱一句 → 句尾 ~1s 內天使用「啊」答你：你的 f0 輪廓原樣還你（melisma
-一起），三部＝bass 原八度＋alto +12＋sop 上方全音階三度（KeyTracker auto
-定調，respond2 08-04 驗過的那顆）。
+You sing a phrase; within about a second of its end the parts answer on "ah",
+returning your own f0 contour, melisma included. Three parts: bass at your
+octave, alto at +12, and soprano a diatonic third above (with KeyTracker on
+auto, the one verified in respond2 on 2026-08-04).
 
-為什麼這條能「及時」而 respond2 要等 ~5s：
-  - 材料固定＝take17 母音循環（score_sing/v7.1 stems 同款、Harry 過耳），
-    不用 harvest/hubert 整句前處理——v7.1 實測正典塊渲 RTF ~0.04/聲部，
-    4s 句 × 3 聲部 ≈ 0.5s 渲完。
-  - f0 用 parselmouth 整句抽（~0.1s），和聲＝純平移＝零成本。
-  - G33b 的重開條件在此成立：「天使晚一秒進場＝call-response 語法」，
-    延遲不是缺陷是樂句結構。
+Why this path can be immediate while respond2 waits about 5 s:
+  - The material is fixed, the take-17 vowel loop, the same as the score_sing
+    v7.1 stems, already passed by ear. There is no harvest or HuBERT
+    pre-processing of the whole phrase; v7.1 measured a reference block render
+    at an RTF of about 0.04 per part, so a 4 s phrase across 3 parts renders in
+    roughly 0.5 s.
+  - f0 is extracted for the whole phrase with parselmouth, about 0.1 s, and the
+    harmony is pure transposition, which is free.
+  - The condition for reopening G33b holds here: a part entering a second later
+    is call-and-response grammar, so the latency is not a defect but the
+    structure of the phrase.
 
-斷句走**音高門**不走能量門（08-11 血訓：USB PnP 輸入僅 ~−61dBFS、與底噪
-差 0.3dB＝能量 gate 全滅；parselmouth 對位準無感）。輸出音量＝注入 vol
-0.06（stems 同款）＝與他的輸入位準脫鉤。
+Phrases are ended by a **pitch gate rather than an energy gate** (the lesson of
+2026-08-11: a USB plug-and-play input sat at about -61 dBFS, only 0.3 dB above
+its noise floor, so every energy gate failed; parselmouth is indifferent to
+level). The output level is the injected vol of 0.06, as in the stems, which
+decouples it from the singer's input level.
 
-回應播放期間輸入硬靜音（respond2 紅線：唱/播結構上不同時活著＝回授、
-DAF、殘響滲句三殺）。
+The input is hard-muted while a response plays (respond2's red line: singing and
+playback must not be alive at the same time, or feedback, delayed auditory
+feedback and reverb bleeding into the phrase all follow).
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python respond_live.py \
-      [--key auto] [--in-name "USB PnP"] [--file in.wav out.wav]
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python respond_live.py \
 """
 import argparse
 import threading
@@ -38,25 +46,27 @@ MAJ = [0, 2, 4, 5, 7, 9, 11]
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--in-name", default="USB PnP")
+# The default is a macOS device name on a zh-Hant system; it is a match target,
+# not prose, so it is not translated.
 ap.add_argument("--out-name", default="MacBook Pro的揚聲器")
-ap.add_argument("--block", type=float, default=0.24, help="斷句判定粒度")
+ap.add_argument("--block", type=float, default=0.24, help="granularity of the phrase-end decision")
 ap.add_argument("--sblock", type=int, default=512)
 ap.add_argument("--gain", type=float, default=1.0)
 ap.add_argument("--vowel-src", default="scratchpad/take17.wav")
 ap.add_argument("--key", default="auto",
-                help="整數移調或 auto（音級分布逐句估，respond2 同款）")
+                help="an integer transposition, or auto, which estimates from the pitch-class distribution per phrase, as respond2 does")
 ap.add_argument("--gap", type=int, default=2,
-                help="斷句靜默塊數（2 塊 ≈ 0.5s）")
+                help="blocks of silence that end a phrase (2 blocks is about 0.5 s)")
 ap.add_argument("--min-voiced", type=int, default=2,
-                help="最短句（有聲塊數）；短於此當清嗓丟掉")
-ap.add_argument("--max-s", type=float, default=15.0, help="單句上限秒數")
+                help="shortest phrase, in voiced blocks; anything shorter is treated as clearing the throat and discarded")
+ap.add_argument("--max-s", type=float, default=15.0, help="maximum seconds in one phrase")
 ap.add_argument("--mute-tail", type=float, default=0.25,
-                help="回應播完再靜音的秒數（吃喇叭衰減）")
+                help="seconds to stay muted after a response finishes, to cover the speaker decay")
 ap.add_argument("--file", nargs=2, metavar=("IN", "OUT"),
-                help="離線驗證：整檔當一句渲回應")
+                help="offline check: treat the whole file as one phrase and render a response")
 a = ap.parse_args()
 
-# 三部（現役 6x 嘴）：(名, 模型, spk, gain, 半音位移, 是否全音階三度)
+# The three parts, on the current 6x voices: (name, model, spk, gain, semitone shift, diatonic third or not)
 VOICES = [("bass", f"{S.DDSP}/exp/reflow-bass1/model_32000.pt", 1, 1.0,
            0, False),
           ("alto", f"{S.DDSP}/exp/reflow-alto3/model_40000.pt", 2, 0.85,
@@ -64,11 +74,11 @@ VOICES = [("bass", f"{S.DDSP}/exp/reflow-bass1/model_32000.pt", 1, 1.0,
           ("sop", f"{S.DDSP}/exp/reflow-sop3/model_20000.pt", 1, 0.7,
            12, True)]
 
-print("載入模型…", flush=True)
+print("loading models...", flush=True)
 svcs = [S.Svc([(p, 0.0, g, sp)], step=2, t_start=0.85)
         for _, p, sp, g, *_x in VOICES]
 
-# 母音 units（同 score_sing/v7.1）
+# vowel units, as in score_sing v7.1
 mic0, _ = sf.read(a.vowel_src, dtype="float64", always_2d=True)
 mic0 = mic0[:, 0]
 _f, _v, _m, uv0 = svcs[0].prep(mic0[:60 * SR], -60.0, want_uv=True)
@@ -88,11 +98,12 @@ with torch.no_grad():
     UU = svcs[0].encode(
         mic0[max(0, (_mid - 40) * HOP):(_mid + 40) * HOP])[:, 8:-8]
 NBANK = UU.size(1)
-print(f"母音庫 {NBANK} 幀", flush=True)
+print(f"vowel bank: {NBANK} frames", flush=True)
 
 
 class KeyTracker:
-    """respond2 同款（08-04 驗過）：raw f0 音級分布 → 大調旋轉角。"""
+    """As in respond2, verified 2026-08-04: the pitch-class distribution of the
+    raw f0 to a major-key rotation."""
 
     MIN_FRAMES = 150
 
@@ -107,7 +118,7 @@ class KeyTracker:
                 69 + 12 * np.log2(v / 440.0)).astype(int) % 12, 1.0)
 
     def root(self):
-        """大調主音 pitch class；資料不足回 None。"""
+        """The pitch class of the major tonic; None when there is too little data."""
         if self.h.sum() < self.MIN_FRAMES:
             return None
         cov = [sum(self.h[(r + d) % 12] for d in MAJ) for r in range(12)]
@@ -119,26 +130,28 @@ FIXED_ROOT = 0 if kt is not None else (-int(a.key)) % 12
 
 
 def dia_third(notes, root):
-    """逐幀：大調 root 上、note 的上方全音階三度＝半音位移陣列（中值平滑）。"""
+    """Per frame: the diatonic third above note within the major root, as an
+    array of semitone shifts, median-smoothed."""
     sh = np.empty(len(notes))
     for i, m in enumerate(notes):
         rel = (int(round(m)) - root) % 12
         idx = int(np.argmin([min(abs(rel - s), 12 - abs(rel - s))
                              for s in MAJ]))
         sh[i] = MAJ[(idx + 2) % 7] + 12 * ((idx + 2) // 7) - MAJ[idx]
-    if len(sh) >= 9:                     # 換音邊界的抖動抹掉
+    if len(sh) >= 9:                     # smooth out the jitter at note boundaries
         from scipy.ndimage import median_filter
         sh = median_filter(sh, size=9, mode="nearest")
     return sh
 
 
 def render_answer(seg):
-    """一句音訊 → (回應音訊, 渲染秒數) 或 None（沒唱到東西）。"""
+    """One phrase of audio to (response audio, render seconds), or None when
+    nothing was sung."""
     p = parselmouth.Sound(seg, SR).to_pitch(
         time_step=HOP / SR, pitch_floor=60, pitch_ceiling=800)
     f0 = p.selected_array["frequency"]
     voiced = f0 > 0
-    if voiced.sum() < 20:                # <0.25s 有聲＝清嗓，不答
+    if voiced.sum() < 20:                # under 0.25 s of voiced audio is clearing the throat; no answer
         return None
     n = len(f0)
     if kt is not None:
@@ -147,7 +160,8 @@ def render_answer(seg):
         root = 0 if root is None else root
     else:
         root = FIXED_ROOT
-    # f0 內插過無聲段＋平滑（score_sing 同款）；vol＝有聲 0.06、無聲 0
+    # f0 is interpolated across unvoiced spans and smoothed, as in score_sing;
+    # vol is 0.06 where voiced and 0 where not
     idx = np.where(voiced)[0]
     f0i = np.interp(np.arange(n), idx, f0[idx])
     f0i = np.convolve(f0i, np.ones(3) / 3, "same")
@@ -185,15 +199,15 @@ def render_answer(seg):
     return y, time.perf_counter() - t0
 
 
-# ── 離線驗證模式 ──
+# -- offline check mode --
 if a.file:
     x, sr = sf.read(a.file[0], dtype="float64", always_2d=True)
     assert sr == SR
     r = render_answer(x[:, 0])
-    assert r is not None, "整檔無有聲段"
+    assert r is not None, "no voiced span in the whole file"
     y, dt = r
     sf.write(a.file[1], y, SR)
-    print(f"{len(x)/SR:.1f}s → 渲染 {dt:.2f}s（RTF {dt/(len(x)/SR):.2f}）"
+    print(f"{len(x)/SR:.1f}s -> rendered in {dt:.2f}s (RTF {dt/(len(x)/SR):.2f})"
           f" → {a.file[1]}", flush=True)
     raise SystemExit
 
@@ -221,8 +235,10 @@ dmp = {"mic": [], "ans": []}
 
 
 def worker():
-    # res＝不滿一塊的餘數。v1 bug：sblock 512 的小塊沒累積、永遠湊不滿
-    # 0.24s 判定塊＝斷句器全程沒跑（08-11 live 首試「沒反應」的根因）。
+    # res is the remainder that does not fill a block. The v1 bug: small
+    # sblock 512 chunks were never accumulated, so the 0.24 s decision block was
+    # never filled and the phrase detector never ran at all, which is why the
+    # first live attempt on 2026-08-11 did nothing.
     res = np.zeros(0, dtype="float32")
     while not st["die"]:
         with qlock:
@@ -235,13 +251,13 @@ def worker():
         if st["mode"] == "play":
             res = np.zeros(0, dtype="float32")
             if playing:
-                continue                 # 硬靜音：播放期輸入不存在
+                continue                 # hard mute: during playback the input does not exist
             st["mode"] = "listen"
             st["cap"], st["vc"], st["sq"] = [], 0, 0
             st["tickbuf"] = np.zeros(0)
-            print("（聽……）", flush=True)
+            print("(listening...)", flush=True)
             continue
-        # LISTEN：逐塊斷句（音高門）
+        # LISTEN: end the phrase block by block, on the pitch gate
         res = np.concatenate([res, pend])
         nblk = len(res) // blk
         chunks, res = ([res[i * blk:(i + 1) * blk] for i in range(nblk)],
@@ -264,10 +280,10 @@ def worker():
                 nv = st["vc"]
                 st["cap"], st["vc"], st["sq"] = [], 0, 0
                 if nv < a.min_voiced:
-                    continue             # 清嗓，不答
+                    continue             # clearing the throat; no answer
                 st["mode"] = "play"
                 st["tstop"] = time.time()
-                print(f"收句（{len(seg)/SR:.1f}s）→ 渲染…", flush=True)
+                print(f"phrase captured ({len(seg)/SR:.1f}s), rendering...", flush=True)
                 r = render_answer(seg)
                 if r is None:
                     st["mode"] = "listen"
@@ -282,10 +298,10 @@ def worker():
                     for j in range(0, len(y), blk):
                         out_q.append(y[j:j + blk])
                     st["tail"] = int(a.mute_tail * SR)
-                print(f"句{st['phr']} {len(seg)/SR:4.1f}s → 渲 {dt:.2f}s"
-                      f"（RTF {dt/(len(seg)/SR):.2f}）→ 回應 {len(y)/SR:.1f}s"
-                      f"｜句尾到開播 {wait:.2f}s", flush=True)
-                break                    # 本批剩的輸入屬於靜音期，丟
+                print(f"phrase {st['phr']} {len(seg)/SR:4.1f}s -> render {dt:.2f}s"
+                      f" (RTF {dt/(len(seg)/SR):.2f}) -> response {len(y)/SR:.1f}s"
+                      f" | phrase end to playback {wait:.2f}s", flush=True)
+                break                    # the rest of this batch belongs to the muted period; discard
 
 
 OB = [np.zeros(0, dtype="float32")]
@@ -315,7 +331,7 @@ def cb(indata, outdata, frames, tinfo, status):
 
 import sounddevice as sd  # noqa: E402
 
-# 預熱（kernel 編譯；不然第一句多付 ~2s）
+# Warm-up so the kernels compile; without it the first phrase pays about 2 s more
 with torch.no_grad():
     for v_ in svcs:
         v_.infer(np.zeros(61 * HOP), 0.0, -60.0,
@@ -325,8 +341,8 @@ with torch.no_grad():
                         torch.ones(1, 61 * HOP, device=v_.device)),
                  ratios=[None])
 threading.Thread(target=worker, daemon=True).start()
-print(f"ready（唱一句、停 {a.gap * a.block:.1f}s＝收句；天使用「啊」答你；"
-      f"Ctrl-C 結束）", flush=True)
+print(f"ready: sing a phrase and pause {a.gap * a.block:.1f}s to end it; the parts answer on 'ah'; "
+      "Ctrl-C to finish", flush=True)
 try:
     with sd.Stream(samplerate=SR, blocksize=a.sblock, channels=(1, 2),
                    device=(a.in_name, a.out_name), dtype="float32",
@@ -343,9 +359,9 @@ except KeyboardInterrupt:
             pairs_a.append(np.pad(y.astype("float64"), (0, L - len(y))))
         sf.write("scratchpad/rlive_mic.wav", np.concatenate(pairs_m), SR)
         sf.write("scratchpad/rlive_ans.wav", np.concatenate(pairs_a), SR)
-        print("\ndump: scratchpad/rlive_mic.wav / rlive_ans.wav（逐句對齊）",
+        print("\ndump: scratchpad/rlive_mic.wav / rlive_ans.wav (aligned phrase by phrase)",
               flush=True)
     w = np.array(st["wait"]) if st["wait"] else np.zeros(1)
-    print(f"共 {st['phr']} 句｜句尾到開播 p50 {np.median(w):.2f}s｜"
+    print(f"{st['phr']} phrases | phrase end to playback p50 {np.median(w):.2f}s | "
           f"xrun {st['xrun']}", flush=True)
     print("bye")

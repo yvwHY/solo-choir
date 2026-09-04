@@ -32,9 +32,10 @@
   #stage { flex: 1; display: flex; flex-direction: column; align-items: center;
            justify-content: center; gap: 10px; transition: background .25s;
            position: relative; }
-  /* 引擎讀數列（bank_st/solo_st）。08-18 Harry「UI 鏡頭顯示都拿掉」＝
-     mouthCam 影像退役（要回來：08-18 之前版本），camCap 只剩讀數、
-     搬回右上角原鏡頭的位置 */
+  /* Engine readout row (bank_st / solo_st). The camera view was removed from
+     the UI on 2026-08-18, retiring the mouthCam image; to bring it back, use a
+     version from before that date. camCap now holds the readout alone and has
+     moved to the top-right corner where the camera used to be. */
   #camCap { position: absolute; top: 10px; right: 12px; width: 200px;
             text-align: center; font-size: 11px; color: #7c8ba0; display: none; }
   #state { font-size: clamp(56px, 20vh, 170px); font-weight: 800; letter-spacing: .06em;
@@ -127,15 +128,17 @@
 <script>
 const $ = id => document.getElementById(id);
 let playTimer = null;
-let curMode = null;      // 引擎實際在跑的模式（switched/Start 更新；null＝沒開演）
+let curMode = null;      // the mode the engine is really running; updated by switched and Start, null before the piece starts
 
 // What one tap does, per state. Derived from the state class so every setState
 // call gets the right hint automatically; states absent here = tap does nothing
 // = pill hidden (better than a hint that lies).
 const TAP_VERB = { listen: 'end phrase', render: 'cancel, keep singing', play: 'skip' };
 
-// 引擎的 [tap] 行整段可以顯示，但它為 log 面板寫的，對站著唱的人太長＝狀態列
-// 只留一句。gap 照引擎實際生效的值印（顯示誠實）。認不得的原樣過。
+// The engine's [tap] line could be shown whole, but it is written for the log
+// panel and is too long for someone standing and singing, so the status bar
+// keeps one sentence. gap prints the value the engine actually applied, so the
+// display is honest. Anything unrecognised passes through unchanged.
 function tapText(s) {
   const g = (s.match(/gap ([\d.]+)s/) || [])[1];
   if (s.startsWith('connected'))
@@ -151,46 +154,56 @@ function setState(cls, word, sub) {
   $('sub').textContent = sub || '';
   const verb = TAP_VERB[cls] || '';
   $('tapVerb').textContent = verb;
-  // 膠囊只在**有句子可以結束**的模式出現。listen/render/play 這些狀態四個
-  // 模式都會用到，但取樣器與神經模式沒有斷句這回事，掛在那裡＝假提示
-  // （08-13 定的規則：表裡沒有的就整顆隱藏，寧可不提示也不給假的）。
+  // The pill appears only in modes where there is a phrase to end. The
+  // listen, render and play states are used by all four modes, but the sampler
+  // and neural modes have no phrase ending, so leaving it there would be a
+  // false prompt. The rule set on 2026-08-13: anything not in the table is
+  // hidden outright; better no prompt than a false one.
   updatePill();
 }
-function updatePill() {          // 模式或狀態任一改變都要重算
+function updatePill() {          // recompute whenever either the mode or the state changes
   const cls = document.body.className.replace(/^s-/, '');
   const verb = TAP_VERB[cls] || '';
   const keyed = $('mode').value === 'respond' || $('mode').value === 'both';
   $('tapPill').style.display = (verb && keyed) ? 'flex' : 'none';
 }
-// 欄位只在特定模式生效（shell 端 _spawn_* 誰讀誰算，08-18 稽核逐欄核對）。
-// 其他模式下整欄變灰＋鎖輸入——調了沒反應「看起來像壞掉」是這個 app 的
-// 大忌（同 mode 下拉、tapPill 的既有規則）。值照留，切回有效模式即生效。
+// Each field applies only in certain modes; which _spawn_* method on the shell
+// side reads it decides that, checked field by field in the audit of
+// 2026-08-18. In other modes the field greys out and locks. Adjusting something
+// and seeing no response looks broken, which is the cardinal sin of this app;
+// the same rule already governs the mode drop-down and tapPill. The value is
+// kept, and applies again as soon as a mode that uses it is selected.
 const FIELD_MODES = {
   gain: ['respond'], gap: ['respond'], stab: ['respond'],
   maxmin: ['respond'], reverb: ['respond'], tails: ['respond'],
-  // 分聲道（08-18 Harry 裁決）：D·U·L·S＝respond 的 dry/上/下/S，neural 下
-  // ＝乾聲/屋頂/低音/中層；B·T·A·S＝取樣合唱四聲部（bass/tenor/alto/sop）
+  // Channel routing (decided 2026-08-18): D-U-L-S is respond's dry, upper,
+  // lower and S; under neural it is dry, roof, bass and middle. B-T-A-S is the
+  // sampled choir's four parts (bass, tenor, alto, soprano).
   mapgrp: ['respond', 'solo', 'duo'],
   bmapgrp: ['stream', 'duo'],
   ngain: ['solo', 'duo'], yougain: ['solo', 'duo'],
   bankgain: ['stream', 'duo'],
   key: ['respond', 'solo', 'duo'],
 };
-function applyRelevance() {       // mode 下拉的值一變就要重算（跟 updatePill 同節奏）
+function applyRelevance() {       // recompute whenever the mode drop-down changes, in step with updatePill
   const m = $('mode').value;
   for (const [id, modes] of Object.entries(FIELD_MODES)) {
     const on = modes.includes(m), el = $(id);
     el.closest('label').style.opacity = on ? '' : '.35';
-    // disabled 只鎖輸入不清值；map 群組是 span 包四顆 select（span 本身
-    // disabled 無效，要鎖到裡面的 select——bmapgrp 上過這課）
+    // disabled locks the input without clearing the value. The map groups are
+    // a span wrapping four selects, and disabling the span itself does nothing,
+    // so each select inside has to be locked; bmapgrp taught that lesson.
     const kids = el.querySelectorAll('select');
     (kids.length && el.tagName === 'SPAN' ? [...kids] : [el])
       .forEach(x => { x.disabled = !on; });
   }
 }
-// key=auto 是 respond 專屬語意（逐句真追調）；neural（solo/duo）只認 C..B
-// 調名，其他值 shell 會默默降成 C（respond_shell._spawn_solo）——降級要講
-// 出來，不然唱別調的人整場和弦全錯還不知道為什麼（08-18 稽核）。
+// key=auto means something only in respond, where the key is really tracked
+// phrase by phrase. neural (solo and duo) accepts only the key names C..B, and
+// the shell silently downgrades anything else to C in
+// respond_shell._spawn_solo. That downgrade has to be said out loud, or someone
+// singing in another key gets every chord wrong all evening without knowing
+// why (audit, 2026-08-18).
 function warnKeyDowngrade() {
   const m = $('mode').value, k = $('key').value.trim();
   if ((m === 'solo' || m === 'duo') && k && !/^[A-Ga-g][#b]?$/.test(k))
@@ -210,25 +223,33 @@ function log(line, isWarn) {
   el.scrollTop = el.scrollHeight;
 }
 
-let keyIsUdp = false;    // 引擎退回 UDP＝你按的是 app 的 space（見下）
-let keyIsBle = false;    // 藍牙實體鍵接上（08-25，見下）
+let keyIsUdp = false;    // the engine fell back to UDP, so what is pressed is the app's space key; see below
+let keyIsBle = false;    // the Bluetooth button is connected (2026-08-25, see below)
 window.respTele = ev => {
-  // frame 事件已退役（08-18 鏡頭拿掉）。08-25：藍牙鍵那兩則（連上／掉線）是
-  // shell 直接推的，沒有 line 欄位 ⇒ 舊碼 log(undefined) 在訊息區印出
-  // 「undefined」。沒有 line 就退而用 m[0]＝那兩則變成看得懂的一行，
-  // 順便讓「鍵到底有沒有連上」在訊息區查得到。兩者都沒有就不印。
+  // The frame event is retired, with the camera removed on 2026-08-18. On
+  // 2026-08-25: the two Bluetooth button messages, connected and disconnected,
+  // are pushed by the shell directly and carry no line field, so the old code
+  // called log(undefined) and printed "undefined" in the message area. With no
+  // line, fall back to m[0]: those two become a readable line, and whether the
+  // button is connected becomes something the message area can answer. With
+  // neither, print nothing.
   const logLine = ev.line || (ev.m || [])[0];
   if (logLine) log(logLine, ev.kind === 'warn');
   const m = ev.m || [];
-  // 鍵帽上的字＝**引擎實際在聽哪一個來源**，不是「有沒有連上」。
-  // 08-14 血訓：`[tap] connected` 只代表有訊號進來，而沒插 Pico 時那個訊號
-  // 就是 app 自己每 2 秒送的 UDP heartbeat ⇒ 拿它當「實體鍵接上」會讓畫面
-  // 說 TAP、手指按的卻是 Space。引擎退回 UDP 時會在訊息裡印
-  // 「(app space key)」——用那個標記，因為它是引擎對來源的明說。
-  // 08-25 血訓：藍牙鍵**走的就是 UDP 這條路**（shell 收到 BLE TAP 後轉發
-  // UDP，見 respond_shell 的 _ble_key），所以引擎必定印「app space key」。
-  // 那句講的是「引擎在聽哪個埠」，不是「有沒有實體鍵」——BLE 接上時必須
-  // 壓過它，否則手上明明有鍵、畫面永遠寫 SPACE（Harry 實測，viva 前一天）。
+  // The word on the key cap means which source the engine is really listening
+  // to, not whether something is connected.
+  // Lesson of 2026-08-14: `[tap] connected` only means a signal is arriving,
+  // and with no Pico plugged in that signal is the app's own UDP heartbeat
+  // every 2 s. Treating it as "the physical button is connected" makes the
+  // screen say TAP while the finger is pressing Space. When the engine falls
+  // back to UDP it prints "(app space key)" in the message area; use that
+  // marker, because it is the engine stating its source.
+  // Lesson of 2026-08-25: the Bluetooth button travels this same UDP path, as
+  // the shell forwards a BLE TAP over UDP (see _ble_key in respond_shell), so
+  // the engine always prints "app space key". That sentence is about which port
+  // the engine listens on, not about whether a physical button exists, so a
+  // connected BLE button must override it. Otherwise the button is in hand and
+  // the screen says SPACE for ever, which was found the day before the viva.
   if (ev.kind === 'tap' && m[0] && m[0].indexOf('BLE key') >= 0) {
     keyIsBle = m[0].startsWith('connected');
     $('tapKey').textContent = keyIsBle ? 'BUTTON' : 'SPACE';
@@ -237,21 +258,23 @@ window.respTele = ev => {
     keyIsUdp = true;
     $('tapKey').textContent = 'SPACE';
   }
-  // 沒退回 UDP 而且鍵活著＝真的走 serial 的實體鍵
+  // not fallen back to UDP and the button is alive: a real physical button over serial
   if (!keyIsUdp && !keyIsBle && ev.kind === 'tap' && m[0] && m[0].startsWith('connected'))
     $('tapKey').textContent = 'BUTTON';
   switch (ev.kind) {
-    case 'switching': // 1-4 換模式：新引擎在起，舊的還在唱（不會有空隙）
-      // 08-17 成熟化：點下去的**那一刻**畫面就要回應——大字進 SWITCHING、
-      // 舊引擎的讀數立刻收（shell 端同步停止舊引擎驅動 UI）、下拉
-      // 鎖住到切換結束。聲音仍由舊引擎唱到新引擎 ready＝無縫不變。
+    case 'switching': // keys 1-4 change mode: the new engine is starting while the old one still sings, so there is no gap
+      // Matured on 2026-08-17: the screen has to respond at the moment of the
+      // click. The large text goes to SWITCHING, the old engine's readout is
+      // cleared at once, with the shell stopping the old engine from driving
+      // the UI, and the drop-down locks until the switch ends. The old engine
+      // still sings until the new one is ready, so the sound stays seamless.
       $('mode').disabled = true;
       $('camCap').style.display = 'none';
       $('camCap').textContent = '';
       setState('boot', 'SWITCHING…',
                m[0] + ' is loading — quiet until it is ready');
       break;
-    case 'switch_fail': { // 切換死掉/超時：舊引擎在點擊時已停＝全停回 Start
+    case 'switch_fail': { // the switch died or timed out; the old engine stopped at the click, so everything stops and returns to Start
       $('mode').disabled = false;
       clearTimeout(playTimer);
       curMode = null;
@@ -260,53 +283,61 @@ window.respTele = ev => {
       $('btnStop').disabled = false;
       break;
     }
-    case 'switched':  // 新引擎報到、舊的已退場
-      curMode = m[0];                // 08-17：JS 端記住實際模式（下拉回復用）
+    case 'switched':  // the new engine has reported ready and the old ones have retired
+      curMode = m[0];                // remember the real mode on the JS side, for restoring the drop-down
       $('mode').disabled = false;
-      $('mode').value = m[0];        // 下拉跟著走＝畫面不會跟實際不一致
+      $('mode').value = m[0];        // the drop-down follows, so the screen cannot disagree with reality
       $('sub').textContent = 'now ' + m[0];
-      updatePill();                  // 新模式可能沒有斷句鍵＝膠囊要收掉
-      applyRelevance();              // 欄位灰/亮跟著新模式走
-      warnKeyDowngrade();            // solo/duo 收到 auto/怪值＝會被降成 C，要說
-      // respond 專屬統計（句數/等待/調/分離度/IO）不跨引擎：切走不清＝凍著
-      // 上一場舊數字被當現值（08-18 稽核第 4 條）。切回 respond 時新引擎
-      // 會自己重新填。
+      updatePill();                  // the new mode may have no phrase key, so the pill is hidden
+      applyRelevance();              // grey and active fields follow the new mode
+      warnKeyDowngrade();            // solo and duo downgrade auto or an odd value to C, which must be said
+      // The respond-only statistics (phrase count, wait, key, separation, IO)
+      // do not carry across engines. Leaving them on a switch would freeze the
+      // previous run's numbers and let them read as current (audit item 4,
+      // 2026-08-18). Switching back to respond, the new engine refills them.
       ['stPhr', 'stWait', 'stKey', 'stSep', 'stIo']
         .forEach(id => { $(id).textContent = '–'; });
-      // 舊引擎的讀數殘影要收掉（respond 沒有讀數列；bank/solo 的新引擎
-      // 下一幀 bank_st/solo_st 會自己再打開）——08-17 Harry 實測：
-      // exit 降級後原本靠 exit 收畫面的路斷了，切到 respond 殘影凍著。
+      // Clear the old engine's readout. respond has no readout row, and a new
+      // bank or solo engine reopens it on its next bank_st or solo_st frame.
+      // Found on 2026-08-17: once exit was downgraded, the path that used to
+      // clear the screen through exit was broken, and switching to respond left
+      // a frozen readout.
       $('camCap').style.display = 'none';
       $('camCap').textContent = '';
       break;
-    case 'solo_on':   // 神經即時（solo_min）：兩顆嘴＋你的乾聲＝三部
+    case 'solo_on':   // neural live (solo_min): two converted parts plus the dry voice, three in all
       setState('listen', 'SING', 'Neural voices — soprano + bass follow you');
       break;
-    case 'solo_st':   // xrun 累計。持續上升＝CPU 追不上，不是啟動抖動
+    case 'solo_st':   // cumulative xruns; a steady rise means the CPU cannot keep up, not start-up jitter
       $('camCap').style.display = 'block';
       $('camCap').textContent = 'xrun ' + m[0];
       if (parseInt(m[0]) > 20) warn('Neural mode xruns ' + m[0] + ' — audio may break up');
       break;
-    case 'bank_on':   // both 模式別蓋掉應答的狀態字（bank 是配角）
+    case 'bank_on':   // in the both mode, do not cover respond's status text; bank is the supporting part
       if ($('mode').value !== 'both')
         setState('listen', 'SING', 'Sampler bank — choir follows you (~60 ms)');
       break;
-    case 'bank_st': { // 音 N cents ±C 嘴 開/閉 xrun X [backlog B[/dropped D]]
-      // 08-17 review #2：--frame-b64 0 之後只有 frame/solo_st 會解隱藏，
-      // bank 模式的讀數全寫進一個 display:none 的元素＝台上零即時讀數，
-      // 違反「不上狀態列就等於沒有」。這裡自己解隱藏（solo_st 同款）。
+    case 'bank_st': { // note N, cents +/-C, gate open/closed, xrun X, [backlog B[/dropped D]]
+      // Review #2, 2026-08-17: after --frame-b64 0, only frame and solo_st
+      // unhid the element, so bank mode wrote its readout into something with
+      // display:none, leaving no live readout on stage at all. That breaks the
+      // rule that anything not on the status bar may as well not exist. It
+      // unhides itself here, as solo_st does.
       $('camCap').style.display = 'block';
-      // m[2] 引擎印的欄名還叫 mouth，但 08-18 起它反映的是**麥克風門**
-      // 的開關（M.eff），跟嘴/鏡頭無關＝畫面上照實叫 gate
+      // The engine still prints the field name mouth in m[2], but since
+      // 2026-08-18 it reports the microphone gate (M.eff) and has nothing to do
+      // with the mouth or the camera, so the screen calls it gate.
       $('camCap').textContent = 'pitch ' + m[0] + ' · gate ' + m[2] +
                                 ' · xrun ' + m[3] +
                                 (m[5] ? ' · drop ' + m[5] : '');
-      // dropped 是「掉音訊」唯一照得到的儀器（F25）——一直漲＝CPU 追不上
-      // （duo 模式最可能），每個 drop 就是一個 35ms 的洞。
+      // dropped is the only instrument that sees audio being lost (F25). A
+      // steady rise means the CPU cannot keep up, most likely in the duo mode,
+      // and every drop is a 35 ms hole.
       if (m[5] && parseInt(m[5]) > 5)
         warn('Sampler dropped ' + m[5] + ' blocks (35 ms holes) — CPU may not keep up');
-      // 狀態列行尾的 ⚠GATE DEAD/⚠WORKER DEAD 被 bank_st 先搶走＝warn
-      // pattern 看不到；從原始行 sniff，別讓大警告條漏掉它。
+      // GATE DEAD and WORKER DEAD at the end of the line are claimed by
+      // bank_st first, so the warn pattern never sees them. Sniff the raw line
+      // instead, so the large warning bar does not miss them.
       if (ev.line.indexOf('GATE DEAD') >= 0)
         warn('⚠ mouth gate DEAD — running ungated (PA volume is the only guard)');
       if (ev.line.indexOf('WORKER DEAD') >= 0)
@@ -321,7 +352,7 @@ window.respTele = ev => {
                         .replace(/\(.*$/, '').replace(/^.*--key /, '').trim(); break;
     case 'live':      setState('listen', 'SING', ''); break;
     case 'stream_on': setState('listen', 'SING', 'Live mode — choir follows you'); break;
-    case 'stream_st': {          // infer p50 / 缺塊 / 旗標
+    case 'stream_st': {          // infer p50 / missing blocks / flags
       $('stWait').textContent = (parseInt(m[0]) / 1000).toFixed(2);
       $('stIo').textContent = m[1] + '/' + m[2];
       if (parseInt(m[1]) > 10) warn('Stream dropouts ' + m[1] + ' — output may break up');
@@ -344,20 +375,23 @@ window.respTele = ev => {
                              (parseFloat(m[1]) + 0.7) * 1000);
       break;
     }
-    case 'tap':       // 鍵的狀態上狀態列（鍵帽的字另由 keySrc 決定，見上）
+    case 'tap':       // button state on the status bar; the key cap text is decided by keySrc, see above
       $('sub').textContent = tapText(m[0]);
       break;
     case 'warn':      warn(ev.line.trim()); break;
     case 'dump':      log('dump → ' + m[0]); break;
-    // 引擎的收場行是中文長句（統計留在 log 區就好），狀態列只報句數
+    // The engine's closing line is long; the statistics can stay in the log
+    // area, and the status bar reports only the phrase count.
     case 'done':      setState('done', 'ENDED',
                                m[0] ? m[0] + ' phrases' : ev.line); break;
     case 'exit': {
-      // 審查 S1：both 模式一顆先死另一顆還在唱時，不能還原成 Start＝假
-      // ENDED＋孤兒（Start 會被 running() 擋、Stop 又不見）。ev.still＝
-      // shell 回報「還有引擎活著」。
-      if (ev.who === 'bank' || !ev.still) {       // 審查 B6：respond 死 bank
-        $('camCap').style.display = 'none';       // bank 還活時讀數照播，別藏
+      // Review S1: in the both mode, when one engine dies while the other is
+      // still singing, the button must not return to Start; that would be a
+      // false ENDED plus an orphan, since Start is blocked by running() and
+      // Stop has disappeared. ev.still is the shell reporting that an engine is
+      // still alive.
+      if (ev.who === 'bank' || !ev.still) {       // review B6: respond died while bank
+        $('camCap').style.display = 'none';       // is still alive, so keep the readout visible
         $('camCap').textContent = '';
       }
       if (ev.still) {
@@ -366,20 +400,22 @@ window.respTele = ev => {
         break;
       }
       clearTimeout(playTimer);
-      curMode = null;                             // 全部退場＝沒有實際模式
-      $('mode').disabled = false;                 // 別讓鎖跨場殘留
+      curMode = null;                             // everything retired, so there is no real mode
+      $('mode').disabled = false;                 // do not let the lock persist into the next run
       if (!document.body.className.includes('done'))
         setState('done', 'ENDED', ev.line);
       $('btnStart').style.display = ''; $('btnStop').style.display = 'none';
-      $('btnStop').disabled = false;              // 下一場可以再按
+      $('btnStop').disabled = false;              // usable again next time
       break;
     }
   }
 };
 
 async function loadDevices() {
-  // mic/out 下拉選單（08-05 Harry：打字不方便）。裝置名整串進 --in-name/
-  // --out-name（respond2 端子字串匹配，整名必中）。out 首項＝系統預設。
+  // Microphone and output drop-downs, added on 2026-08-05 because typing them
+  // was awkward. The whole device name goes into --in-name and --out-name; the
+  // respond2 side matches on the string, so a full name always hits. The first
+  // output entry is the system default.
   try {
     const dv = await window.pywebview.api.devices();
     const fill = (el, names, extra) => {
@@ -402,8 +438,10 @@ async function loadDevices() {
 
 let outDevs = [];
 function fillMap() {
-  // D/U/L/S 四路聲道下拉：選項數＝所選 out 裝置的實際聲道數（default＝8）。
-  // 全部留 — ＝不分路（單一混音）。S 可留 —（跟 upper 同道，respond2 預設）。
+  // The D/U/L/S channel drop-downs: the number of options is the real channel
+  // count of the selected output device, defaulting to 8. Leaving them all on
+  // the dash means no routing, a single mix. S may stay on the dash, sharing a
+  // channel with upper, which is respond2's default.
   const dev = outDevs.find(o => o.name === $('outname').value);
   const ch = dev ? dev.ch : 8;
   ['mapd', 'mapu', 'mapl', 'maps',
@@ -425,32 +463,40 @@ $('outname') && ($('outname').onchange = fillMap);
 
 function mapValue() {
   const mv = ['mapd', 'mapu', 'mapl'].map(i => $(i).value);
-  if (mv.some(v => v === '')) return '';        // D/U/L 沒選滿＝不分路
+  if (mv.some(v => v === '')) return '';        // D/U/L not all set: no routing
   const s = $('maps').value;
   return mv.join(',') + (s !== '' ? ',' + s : '');
 }
 function bankMapValue() {
-  // bank 四聲部（B·T·A·S＝引擎 VOICES 順序）。四格要選滿才分路——引擎端
-  // 要求每聲部一個道；沒選滿＝空＝原立體聲混音。
+  // bank's four parts (B-T-A-S, the engine's VOICES order). All four must be
+  // set to route, because the engine requires one channel per part; anything
+  // less returns empty and the original stereo mix runs.
   const mv = ['bmapb', 'bmapt', 'bmapa', 'bmaps'].map(i => $(i).value);
   return mv.some(v => v === '') ? '' : mv.join(',');
 }
 window.addEventListener('pywebviewready', loadDevices);
 if (window.pywebview) loadDevices();
-applyRelevance();   // 開場就按預設模式標灰（respond＝neural/bank/you 三欄灰）
+applyRelevance();   // grey out by the default mode from the start; under respond the neural,
+                    // bank and you fields are greyed
 
-// space＝實體鍵（沒接 Pico 時；shell 轉成 UDP TAP，respond2 同協定收）。
-// focus 才算「鍵在」：失焦停 heartbeat → 引擎 6s 後自動回純能量斷句。
-// 1-4＝演出中無縫換模式（先起新引擎、等它 ready 才殺舊的＝沒有空隙）。
-// 同一個 keydown handler，因為表單防呆那條規則對兩者都適用。
-// 3 原本是 Respond+Live，08-14 Harry 拿掉，改成 Live+neural（取樣器四聲部
-// ＋神經兩顆嘴同時響）。both 的機制還在碼裡，要回來只是加一個 option。
+// space acts as the physical button when no Pico is attached: the shell turns
+// it into a UDP TAP, which respond2 receives over the same protocol.
+// The button counts as present only while the window has focus; losing focus
+// stops the heartbeat, and after 6 s the engine returns to energy-only phrase
+// detection.
+// Keys 1-4 change mode seamlessly during a performance: the new engine starts
+// and the old one is stopped only once it is ready, so there is no gap.
+// Both share one keydown handler, because the form guard below applies to both.
+// Key 3 used to be Respond+Live; it was dropped on 2026-08-14 and became
+// Live+neural, the sampled four parts and the two neural parts sounding
+// together. The both mechanism is still in the code, and bringing it back is
+// one added option.
 const MODE_KEY = {Digit1: 'respond', Digit2: 'stream',
                   Digit3: 'duo', Digit4: 'solo'};
 window.addEventListener('keydown', e => {
   if (e.repeat) return;
   const t = e.target && e.target.tagName;
-  if (t === 'SELECT' || t === 'INPUT' || t === 'BUTTON') return;  // 別搶表單的鍵
+  if (t === 'SELECT' || t === 'INPUT' || t === 'BUTTON') return;  // do not steal keys from a form control
   if (e.code === 'Space') {
     e.preventDefault();
     if (window.pywebview) window.pywebview.api.tap();
@@ -461,33 +507,44 @@ window.addEventListener('keydown', e => {
   e.preventDefault();
   window.pywebview.api.switch_mode(m, opts());
 });
-// 演出中用滑鼠改 mode 下拉＝直接切換（跟按 1-4 同一條路）。
-// 08-14 Harry：1-4 是給他自己用的，但沒用過這個 app 的人只會去點下拉，
-// 而原本點了不會有任何事發生（要 Stop→改→Start）＝看起來像壞掉。
-// 注意：程式改 .value（switched 事件）不會觸發 change，所以不會遞迴。
-// 還沒開演時 switch_mode 自己會回 False（後端守衛），下拉的值就留給 Start
-// 用——前端不要再判斷一次「有沒有在跑」，那會跟 CSS/inline style 糾纏
-// （btnStop 初始是 CSS 隱藏，inline style 是空字串不是 'none'）。
+// Changing the mode drop-down with the mouse during a performance switches
+// directly, on the same path as keys 1-4.
+// 2026-08-14: keys 1-4 are for the performer, but anyone who has not used this
+// app reaches for the drop-down, and clicking it used to do nothing at all;
+// Stop, change, Start was required, which looks broken.
+// Note that setting .value from code, on the switched event, does not fire
+// change, so this cannot recurse.
+// Before the piece starts, switch_mode returns False on its own as a back-end
+// guard, and the drop-down value is simply kept for Start. The front end must
+// not test "is it running" a second time; that gets tangled with CSS and inline
+// style, since btnStop is hidden by CSS and its inline style is an empty string
+// rather than 'none'.
 $('mode').onchange = async () => {
   if (!window.pywebview) return;
   const ok = await window.pywebview.api.switch_mode($('mode').value, opts());
-  // 08-17 review #18：blur 是必修——btnStart.onclick 那顆 blur 的註解
-  // （08-12 審查 A8）講的就是這個 bug：<select> 抓著 focus 時 keydown 的
-  // 表單防呆會吞掉 Space 與 1-4，而 pill 還寫著「SPACE · end phrase」＝
-  // 台上按 Space 沒反應、每句只能等 6 秒 gap，看起來像 app 當了。
+  // Review #18, 2026-08-17: the blur is required. The comment on the blur in
+  // btnStart.onclick (review A8, 2026-08-12) describes this bug: while a
+  // <select> holds focus, the form guard in keydown swallows Space and 1-4
+  // while the pill still reads "SPACE - end phrase". On stage, Space does
+  // nothing, every phrase has to wait the 6 s gap, and the app looks hung.
   if (document.activeElement) document.activeElement.blur();
-  // 切換被拒（切換進行中/timeout 後）＝下拉不能停在一個引擎沒在跑的模式，
-  // 否則畫面說謊、之後 Stop→Start 會開錯引擎。開演前（curMode null）值要
-  // 留著給 Start 用（後端本來就會拒，那不是錯誤）。
+  // A refused switch, during another switch or after a timeout, must not leave
+  // the drop-down on a mode no engine is running, or the screen lies and a
+  // later Stop then Start opens the wrong engine. Before the piece starts, with
+  // curMode null, the value is kept for Start; the back end refuses by design
+  // and that is not an error.
   if (!ok && curMode) $('mode').value = curMode;
-  applyRelevance();   // 不論成功/被拒/回復，灰亮永遠跟下拉現值一致
+  applyRelevance();   // whether it succeeded, was refused or was restored, the grey and active
+                      // fields always match the drop-down's current value
 };
 window.addEventListener('focus', () => window.pywebview && window.pywebview.api.tap_presence(true));
 window.addEventListener('blur',  () => window.pywebview && window.pywebview.api.tap_presence(false));
 window.addEventListener('pywebviewready', () => window.pywebview.api.tap_presence(document.hasFocus()));
 
-// Start 與換模式共用同一組欄位讀取＝畫面上的數字永遠就是實際生效的那個
-// （分兩份寫遲早會有一邊忘了跟上，那正是今天下午修掉的那類 bug）。
+// Start and a mode change read the fields through the same code, so the number
+// on screen is always the one really in force. Written twice, one copy would
+// eventually fall behind, which is exactly the class of bug fixed that
+// afternoon.
 function opts() {
   return {
     mode: $('mode').value,
@@ -495,34 +552,40 @@ function opts() {
     in_name: $('inname').value, out_name: $('outname').value,
     out_map: mapValue(), bank_map: bankMapValue(), max_min: $('maxmin').value,
     reverb: $('reverb').value, tail_s: $('tails').value,
-    gap: $('gap').value,      // 斷句靜默秒數（引擎預設 0.35＝太快被切斷）
-    ngain: $('ngain').value,     // 神經聲部音量（Live+neural 要壓，見 shell）
-    bank_gain: $('bankgain').value,  // 取樣器輸出音量（08-18：duo 裡 bank 蓋過
-                                     // neural 的平衡鈕；1=過耳認證原值）
-    you_gain: $('yougain').value };  // 0＝不把你的 mic 直通回喇叭（回音源）
+    gap: $('gap').value,      // seconds of silence that end a phrase; the engine default of 0.35 cuts too soon
+    ngain: $('ngain').value,     // level of the neural parts; Live+neural pulls this down, see the shell
+    bank_gain: $('bankgain').value,  // sampler output level; the balance control for
+                                     // bank covering neural in duo (2026-08-18).
+                                     // 1 is the value that passed by ear.
+    you_gain: $('yougain').value };  // 0 stops your microphone passing through to the speakers, which is the echo source
 }
 $('btnStart').onclick = async () => {
   const ok = await window.pywebview.api.start(opts());
   if (ok) {
-    curMode = $('mode').value;       // 開演＝這就是實際模式
+    curMode = $('mode').value;       // the piece has started, so this is the real mode
     $('warn').style.display = 'none';
-    warnKeyDowngrade();              // 清舊警告之後再檢查，不然會被上一行蓋掉
+    warnKeyDowngrade();              // check after clearing the old warning, or the line above covers it
     $('btnStart').style.display = 'none';
-    $('btnStop').style.display = 'inline-block';   // '' 會掉回 CSS 的 display:none
-    $('btnStop').disabled = false;                 // 上一場 Stop 後殘留的鎖
-    // 焦點若留在剛用完的下拉/輸入框，space 會被表單吞掉（上面 keydown 的
-    // guard）＝開演後按鍵無聲無息失效（08-12 審查 conc A8）。開始＝收走焦點。
+    $('btnStop').style.display = 'inline-block';   // '' would fall back to CSS display:none
+    $('btnStop').disabled = false;                 // the lock left over from the previous Stop
+    // If focus stays in the drop-down or input just used, space is swallowed
+    // by the form guard in keydown above, and the key silently stops working
+    // once the piece has started (review A8, 2026-08-12). Starting takes focus
+    // away.
     if (document.activeElement) document.activeElement.blur();
   } else {
-    // 審查 S1：start 被 shell 拒絕（還有引擎活著）不能無聲無息
+    // Review S1: a start refused by the shell, because an engine is still
+    // alive, must not be silent.
     warn('An engine is still running — Stop it (or wait for it to finish) before Start');
     $('btnStop').style.display = 'inline-block';
     $('btnStop').disabled = false;
   }
 };
 $('btnStop').onclick = () => {
-  // 連點防護：STOPPING 最長 8s（CoreAudio 關流掛死），人一定會再按一次，
-  // 而第二個 SIGINT 會打進正在寫 dump 的 sf.write（08-12 審查 A7）。
+  // Guard against double clicks: STOPPING can last up to 8 s when closing a
+  // CoreAudio stream hangs, and a person will certainly press again, while a
+  // second SIGINT would land in the sf.write that is writing the dump (review
+  // A7, 2026-08-12).
   if ($('btnStop').disabled) return;
   $('btnStop').disabled = true;
   window.pywebview.api.stop();

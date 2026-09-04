@@ -189,7 +189,7 @@
 
   <button class="panelTab" id="panelTab" title="Show Voice panel" aria-label="Show Voice panel"><span class="dot"></span>Voice&nbsp;›</button>
   <aside class="panel" id="voicePanel">
-    <h3><span>Voice&nbsp;·&nbsp;轉換</span><span style="display:flex;align-items:center;gap:8px"><span class="badge">Beatrice v2</span><button class="panelClose" id="panelClose" title="Collapse panel" aria-label="Collapse panel">‹</button></span></h3>
+    <h3><span>Voice&nbsp;·&nbsp;Conversion</span><span style="display:flex;align-items:center;gap:8px"><span class="badge">Beatrice v2</span><button class="panelClose" id="panelClose" title="Collapse panel" aria-label="Collapse panel">‹</button></span></h3>
     <div class="field"><label>Your model</label><select id="modelSel"></select></div>
     <div class="field"><label>Input device <button class="devrefresh" id="devRefresh" title="Re-scan audio devices (hot-plug)" aria-label="Re-scan audio devices">↻</button></label><select id="inDev"><option>— no devices —</option></select></div>
     <div class="field"><div class="slabel">Input level <b id="inLvlV">−∞ dB</b></div><div class="pbar"><i id="inBar"></i></div></div>
@@ -222,7 +222,7 @@
       <button class="reveal" id="arrangePlay" hidden>Play arrangement</button>
     </div>
     <div class="overdub" id="overdubPanel">
-      <button class="odToggle" id="odToggle" aria-pressed="false">＋ Overdub · 疊錄</button>
+      <button class="odToggle" id="odToggle" aria-pressed="false">+ Overdub</button>
       <div class="odBody" id="odBody" hidden>
         <div class="odRow">
           <button class="recBtn" id="odRecBtn" aria-pressed="false"><span class="rd"></span>Record layer</button>
@@ -251,7 +251,7 @@
         <button class="toggle" id="scaleMaj" aria-pressed="true">Major</button>
         <button class="toggle" id="scaleMin" aria-pressed="false">Minor</button>
       </div></div>
-      <div class="group"><span class="cap">Space · 殿堂</span><input type="range" id="space" min="0" max="100" value="0"></div>
+      <div class="group"><span class="cap">Space</span><input type="range" id="space" min="0" max="100" value="0"></div>
       <button class="harm" id="harmBtn" aria-pressed="true"><span class="sw"></span>Harmonize</button>
       <button class="harm sub" id="freeBtn" aria-pressed="true" title="free harmony: the interval bends to fit the auto-inferred chord (instead of a fixed parallel interval)"><span class="sw"></span>Free</button>
       <button class="harm sub" id="soloBtn" aria-pressed="false" title="low-latency SOLO: You + one converted voice, small buffers (~46ms on the aggregate device) — vs the full choir"><span class="sw"></span>Solo</button>
@@ -267,7 +267,7 @@
             <span class="vt">fmt<input type="range" id="vtFmt" min="-2" max="2" step="0.5"><b id="vtFmtV">0</b></span>
           </div>
         </div>
-        <div class="harm" id="studyCtl" title="Study (子) logging: who is practising (subject) and through which delivery channel — written to recordings/practice_log.csv with each practice attempt." style="gap:8px;cursor:default">
+        <div class="harm" id="studyCtl" title="Sub-study logging: who is practising (subject) and through which delivery channel — written to recordings/practice_log.csv with each practice attempt." style="gap:8px;cursor:default">
           <span>Study</span>
           <input id="studySubject" placeholder="subject" autocomplete="off" style="width:62px;background:transparent;border:none;border-bottom:1px solid var(--line);color:var(--ink);font:inherit;text-transform:none;letter-spacing:0;padding:1px 2px">
           <select id="studyChannel" style="background:transparent;border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;text-transform:none;letter-spacing:0;padding:2px 4px">
@@ -320,7 +320,7 @@ const parts=[
 ];
 const state={ keyRoot:0,minor:false,harmonize:true,convert:true,pitch:0, part:'both',
   recording:false, hasTake:false, playing:false, ensemble:1, spread:0.35, autoChord:true, lowlat:false, exciter:true,   // Task 2.2: chord-aware (voice-leading) harmony is the default
-  subject:'', channel:'bone' };   // (子) study: per-attempt independent variables logged with each practice attempt
+  subject:'', channel:'bone' };   // sub-study: per-attempt independent variables logged with each practice attempt
 const scl=()=>state.minor?MINOR:MAJOR;
 const midiName=m=>{const r=Math.round(m);return NOTES[((r%12)+12)%12]+(Math.floor(r/12)-1);};
 const midiHz=m=>440*Math.pow(2,(m-69)/12);
@@ -457,7 +457,7 @@ $('soloBtn').onclick=toggleSolo;
 $('exciterBtn').onclick=toggleExciter;
 // Task 3.3: Advanced disclosure toggle (Voice·tune + Study)
 { const at=$('advToggle'); if(at) at.onclick=()=>{ const r=$('advRow'); if(!r)return; const open=r.classList.toggle('open'); at.setAttribute('aria-expanded',open?'true':'false'); at.innerHTML='Advanced&nbsp;'+(open?'⌃':'⌄'); }; }
-$('studySubject').oninput=e=>{state.subject=e.target.value.trim();};   // (子) study IVs logged per attempt
+$('studySubject').oninput=e=>{state.subject=e.target.value.trim();};   // sub-study independent variables, logged per attempt
 $('studyChannel').value=state.channel; $('studyChannel').onchange=e=>{state.channel=e.target.value;};
 $('convBtn').onclick=()=>{state.convert=!state.convert;$('convBtn').setAttribute('aria-pressed',state.convert?'true':'false');
   // ENGINE pill is now telemetry-driven (real subprocess state), not this local boolean; only the

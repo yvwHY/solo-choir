@@ -1,19 +1,28 @@
-"""reh_polish.py — 排練檔譜面後處理：持續縱向不和諧就地修協和（08-01）
+"""reh_polish.py — post-processing for a rehearsal score: resolve sustained
+vertical dissonance in place (2026-08-01)
 
-預渲染範式的紅利：排練檔是離線固定的譜 → 和音組成可以在渲染前用規則
-清理，不必動腦。規則刻意保守：
+The dividend of pre-rendering: a rehearsal file is a fixed offline score, so the
+chord content can be cleaned by rule before rendering, without the model. The
+rules are deliberately conservative:
 
-- 只修「對 lead **持續** ≥MIN_RUN tick 的不和諧」（≥375ms 的掛著撞）；
-  單 tick 的經過音/掛留是語彙，不動。
-- 修法＝同一段天使音整段改到最近的候選音：**調內**（root 決定，見下）、與該
-  段 lead 眾數音協和、盡量也不與另一天使相撞、|移動| ≤5 半音；找不到就放棄。
+- Only dissonance held against the lead for MIN_RUN ticks or more is touched,
+  that is, a clash sustained for 375 ms or longer. A single-tick passing note or
+  suspension is vocabulary and is left alone.
+- The repair moves the whole run of that part to the nearest candidate note that
+  is in key (the root decides, see below), consonant with the modal note of the
+  lead over that run, ideally not clashing with the other part either, and no
+  more than 5 semitones away. If nothing qualifies, it gives up.
 
-⚠ **呼叫端必須保證 d["lead"] 與 d["upper"]/d["lower"] 在同一個音高空間**
-（08-04 抓到的 bug：respond2 把腦空間的 lead 跟麥克風空間的天使拿來比，
-偏移＝key+octave；只有在偏移剛好是 12 的倍數時才隱形——`--key 0` 時正確，
-一填真實的調就整個比錯）。root 同理：舊版寫死絕對 C 大調，`--key` 一動就把
-天使吸附到錯的音階。root＝主音的音級（mic 空間；`--key N` ⇒ root=(-N)%12）。
-- 統計印 before/after（mod-12 口徑，同 render_v3）。
+**The caller must guarantee that d["lead"] and d["upper"]/d["lower"] are in the
+same pitch space.** The bug caught on 2026-08-04: respond2 compared a lead in
+model space with parts in microphone space, offset by key plus octave. It was
+invisible only when the offset happened to be a multiple of 12, so `--key 0` was
+correct and any real key compared wrongly throughout. The same applies to root:
+the older version hard-coded absolute C major, so any `--key` pulled the parts
+onto the wrong scale. root is the pitch class of the tonic in microphone space;
+`--key N` gives root = (-N) % 12.
+- The statistics print before and after, in the mod-12 terms used by
+  render_v3.
 
 Run:
   python reh_polish.py out/pair06_reh0_notes.json out/pair06_reh0p_notes.json
@@ -42,7 +51,7 @@ def stats(d):
 
 
 def runs(ns):
-    """(start, end, note) 的等值段，None 段略過。"""
+    """Runs of equal (start, end, note); None runs are skipped."""
     out, i = [], 0
     while i < len(ns):
         if ns[i] is None:
@@ -88,23 +97,26 @@ def polish(d, voice, other, root=0):
 
 def main(src, dst):
     d = json.load(open(src))
-    # live_v3 落檔的 lead 在腦空間、天使在 mic 空間（08-04 bug 的離線同形狀）。
-    # v2t.shift 恆為 12 的倍數 → mod-12 口徑下兩空間只差 k_shift，polish/stats
-    # 全是 mod-12 比較 → 減 k_shift 即同空間。只換算比較用的視圖；落檔的 lead
-    # 保持腦空間（ScoreTracker 等下游吃的就是腦空間）。
+    # A lead written by live_v3 is in model space while the parts are in
+    # microphone space, the offline shape of the 2026-08-04 bug. v2t.shift is
+    # always a multiple of 12, so in mod-12 terms the two spaces differ only by
+    # k_shift, and since polish and the statistics compare in mod-12 throughout,
+    # subtracting k_shift puts them in the same space. Only the view used for
+    # comparison is converted; the lead written to file stays in model space,
+    # which is what downstream consumers such as ScoreTracker expect.
     k = int(d.get("k_shift") or 0)
     root = (-k) % 12
     v = dict(d, lead=[None if x is None else int(x) - k
                       for x in d.get("lead", [])]) if k else d
-    print(f"space: k_shift {k:+d} → root {root}（lead 已換算到 mic 空間比較）"
-          if k else "space: k_shift 0＝兩空間 mod-12 重合，root 0")
+    print(f"space: k_shift {k:+d} -> root {root} (lead converted to microphone space for comparison)"
+          if k else "space: k_shift 0, the two spaces coincide in mod-12, root 0")
     b = stats(v)
     fu = polish(v, "upper", "lower", root)
     fl = polish(v, "lower", "upper", root)
     a = stats(v)
     json.dump(d, open(dst, "w"))
-    print(f"polish: upper 修 {fu} 段, lower 修 {fl} 段")
-    print(f"天使vs lead 不和諧 {b[0]:.1f}% → {a[0]:.1f}% | "
+    print(f"polish: {fu} runs repaired in upper, {fl} in lower")
+    print(f"parts vs lead dissonance {b[0]:.1f}% -> {a[0]:.1f}% | "
           f"upper vs lower {b[1]:.1f}% → {a[1]:.1f}%")
     print("wrote", dst)
 

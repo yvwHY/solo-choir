@@ -111,7 +111,7 @@ class SoloChoirHarmonizer:
     # per-chunk median in representative_f0 can't reject vibrato. A median over this many recent
     # frames (~100 hop/s) holds a sustained note's snapped pitch rock-steady under vibrato → the
     # applied semitone shift stays CONSTANT. (Every shift change glitches the neural pitch-shift;
-    # a held note flip-flopping across a scale boundary on vibrato was the sustained-note 吱吱.)
+    # a held note flip-flopping across a scale boundary on vibrato was the squeal on sustained notes.)
     # ~12 ≈ 120ms. Adds a small lag (~half the window) to genuine note changes.
     note_smooth_frames: int = 12
 

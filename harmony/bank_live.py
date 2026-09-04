@@ -1,62 +1,101 @@
-"""bank_live — G 音庫取樣器（第 1 階，08-11 雙開工 A 線）
+"""bank_live — the sampled choir (stage 1, line A of the two-track start of
+2026-08-11)
 
-原理＝v7.1「譜是定的＝不渲染」推廣到「**音高空間是定的＝不即時渲染**」：
-天使唱「啊」＋半音階和聲的可能輸出是有限集合——開場把每聲部整個音域
-逐半音預渲成可循環音庫（reflow 正典品質、磁碟快取），live 只做：
-  偵測他的音（自相關，~46ms 窗）→ 半音量化＋遲滯 → 三聲部查表觸發
-  → 循環播放＋30ms crossfade 換音 → 起音/釋音包絡 → 混音。
-零 ML 在迴圈裡＝延遲 ≈ 偵測 ~36ms（實測）＋I/O ≈ **~50-60ms**，品質＝正典。
+The principle generalises v7.1's "the score is fixed, so do not render" into
+**the pitch space is fixed, so do not render live**: the possible outputs of the
+parts singing "ah" in chromatic harmony are a finite set, so at start-up each
+part's whole range is pre-rendered semitone by semitone into loopable banks, at
+the reference quality of reflow and cached on disk. Live then only:
+  detects their note (autocorrelation over a window of about 46 ms), quantises to
+  semitones with hysteresis, looks up and triggers three parts, loops them with a
+  30 ms crossfade on a note change, applies attack and release envelopes, and
+  mixes.
+There is no machine learning in the loop, so the latency is about 36 ms of
+detection, measured, plus I/O, giving roughly **50-60 ms** at reference quality.
 
-v10（08-12 穩定性總 review 修復場）：兩位 fresh 審查員（正確性/併發＋
-行為/症狀）共 25+ findings，S 級全修——音域外 clip 順序（28.6Hz 重啟迴
-圈）、互補 crossfade（+6dB 過衝）、不應期時鐘從未寫入（v9 死碼）、v9
-新音高放行判死（bass unison/pad 和弦音自我否決＝頓挫主因，回到 v2 嘴閉
-即殺）、拒斥層納入 pads（墊放不掉主因）、鏡頭門控凍結修復＋30Hz、
-underrun 淡出、次諧波防護、cents 無聲衰減、搶拍去調內綁定（冷啟動）、
-fast 路徑補 hist、cb 鎖內配置移出。詳 review 檔＋worklog 08-12。
-⚠ 台架限制（review A15）：--file 不經嘴部門控路徑＝離線全綠不代表門控
-時序沒問題，門控類改動必須 live 驗。
+v10 (the stability review of 2026-08-12): two fresh reviewers, one on correctness
+and concurrency and one on behaviour and symptoms, produced over 25 findings and
+every severe one was fixed — the order of clipping outside the range (a restart
+loop at 28.6 Hz), the complementary crossfade (a +6 dB overshoot), a refractory
+clock that was never written (dead code from v9), v9's admission test for a new
+pitch (a bass unison or a pad chord tone vetoed itself, which was the main cause
+of the stumbling; it returns to v2, where a closed mouth kills it), pads being
+brought into the rejection layer (the main cause of pads that would not stop),
+the camera gate freeze fix plus 30 Hz, underrun fade-out, subharmonic protection,
+cents decay in silence, unbinding the pre-empt from the key (a cold start), the
+fast path filling in the history, and moving allocation out of the callback lock.
+See the review file and the worklog for 2026-08-12.
+Bench limitation (review A15): --file does not go through the mouth gate path, so
+everything passing offline does not mean the gate timing is sound. Any change to
+the gate must be verified live.
 
-v17（08-13 連續母音場，Harry 第一性定調）：反應式離散選層（v16 tilt→
-16.1 唇距→16.2 聲音指紋→16.3 嘴形二維最近鄰）整個範式判死——鏡子不是
-夥伴、永遠遲到半顆母音。母音＝連續口腔形狀不是符號：mediapipe 嘴形
-(高,寬) 連續值 → 對五母音錨點反距離權重 → 逐 hop 逐樣本連續混合五層
-loop（同 midi 各層等長＝樣本對齊、零切換事件）；分類器/遲滯/dwell 整類
-病消失。已知待驗：跨層混音可能輕微 chorus（同 seed 同 f0 應相近，耳裁）。
+v17 (the continuous vowel field of 2026-08-13, settled from first principles):
+the whole paradigm of reactive discrete layer selection — v16 tilt, then 16.1 lip
+distance, then 16.2 a voice fingerprint, then 16.3 a two-dimensional nearest
+neighbour on mouth shape — was abandoned. A mirror is not a partner, and it is
+always half a vowel late. A vowel is a continuous shape of the mouth and not a
+symbol: mediapipe's continuous mouth (height, width) values feed inverse-distance
+weights over five vowel anchors, and five loop layers are mixed continuously, per
+hop and per sample. Because the layers share a midi and are the same length, the
+samples align and there is no switching event at all, and the whole class of
+illnesses — classifier, hysteresis, dwell — disappears. Known and unverified:
+mixing across layers may add a slight chorus, since the same seed at the same f0
+should be close; to be judged by ear.
 
-聲部（v42 起四嘴；數值以 VOICES 為準）：
-  bass1＝-8（C3 區，08-16 音域定案）｜tenor＝male8 spk7｜alto3-40k(spk2)＝+12
-  ｜sop3＝+12 再上方全音階三度（KeyTracker auto 定調，respond2 08-04 驗過那顆）。
+The parts (four voices from v42; the numbers in VOICES are authoritative):
+  bass1 at -8 (the C3 region, settled 2026-08-16); tenor from male8 spk7;
+  alto3-40k (spk2) at +12; sop3 at +12 and then a diatonic third above, with
+  KeyTracker on auto, the one verified in respond2 on 2026-08-04.
 
-和弦鎖定（v6①）免費送：他的音準偏移（對量化音的 cents 差、EMA 平滑）
-乘進所有聲部的播放速率＝團跟著他的音準彎，拍頻消失。--lock 0 關。
+Chord locking (v6, item 1) comes free: their tuning deviation, the cents
+difference from the quantised note smoothed by an EMA, multiplies the playback
+rate of every part, so the ensemble bends with their tuning and the beating
+disappears. --lock 0 turns it off.
 
-音量走「有聲/無聲＋包絡」不走 mic 位準（08-11 血訓：USB PnP 輸入
-~−61dBFS＝位準不可信；偵測用自相關對位準無感）。
+The level follows voiced-or-not plus an envelope rather than the microphone
+level; the lesson of 2026-08-11 is that a USB plug-and-play input at about
+-61 dBFS makes the level untrustworthy, while autocorrelation detection is
+indifferent to it.
 
-v5（08-11 夜，自主迭代）：--file 離線台架（同一條 per-hop 管線＝離線結
-論對 live 成立）＋已知音符拒斥（第二道回授防線：偵測音貼著「離他音域
->6 半音」的在播音＝喇叭繞回來的 alto/sop，擋掉；bass unison 歸嘴部門控
-管）。台架驗證：唱聲段 rms 0.062 有聲、模擬 alto 回授段 0.015 不再自激；
-合成音頭實測演算法延遲 36ms（＋I/O ≈ 端到端 ~55-60ms）。
+v5 (the night of 2026-08-11, worked through independently): --file gives an
+offline bench along the same per-hop pipeline, so offline conclusions hold live,
+plus rejection of notes already sounding, which is the second line of defence
+against feedback: a detected pitch sitting on a sounding note more than six
+semitones outside their range is the alto or soprano coming back from the
+speakers and is blocked, while a bass unison is left to the mouth gate. Bench
+verification: the sung passage at rms 0.062 stays voiced, and a simulated alto
+feedback passage at 0.015 no longer self-oscillates. The algorithmic latency
+measured from a synthetic attack is 36 ms, giving about 55-60 ms end to end with
+I/O.
 
-v1 裸奔實測（08-11）：回授實錘——他一停，喇叭裡的天使（完美週期訊號）
-被偵測器當成他＝自激不停唱。v2 接**嘴部門控**（score_live v3.1 同款：
-mediapipe 開口度＋遲滯＋0.8s 寬限；嘴閉＝音高不算你的）＝回授騙不了
-嘴唇。鏡頭掛/--mouth 0＝退回裸奔（耳機輸出時裸奔即可）。
+v1 measured bare (2026-08-11): feedback proved outright. As soon as they stop,
+the parts coming from the speakers, being perfectly periodic, are taken by the
+detector for the singer and it sings on by itself. v2 added the **mouth gate**,
+the same as score_live v3.1: mediapipe mouth opening with hysteresis and a 0.8 s
+grace period, so a closed mouth means the pitch is not theirs. Feedback cannot
+fool the lips. If the camera dies, or with --mouth 0, it falls back to running
+bare, which is fine on headphones.
 
-門控狀態機（v14.2 明文規格；法醫腳本 bank_gate_forensics.py 對 dump 驗收）：
-  訊號：face＝mediapipe 這一幀有臉；mouth_on＝開口度過閾（開 0.015/閉 0.008
-  遲滯）；hb＝鏡頭 worker 心跳（<1s 算活）。
-  狀態（f0 是否算他的）：
-    S1 唱歌可用   face＋mouth_on            → f0 有效（last_open 刷新）
-    S2 寬限       last_open 距今 <0.8s      → f0 有效（子音閉唇/低頭不斷線）
-    S3 關門       last_open ≥0.8s（含走開） → f0 一律 0（回授/房聲免疫）
-    S4 鏡頭死     hb 斷 >1s                 → 裸奔（f0 全收）＋終端警告
-  轉移時間常數：S1→S3 恰 0.8s；S3→S1 ≤ 嘴 worker 週期 ~33ms＋偵測窗；
-  S4 進出各印一行。設計裁決（08-12 Harry）：臉不在＝關門（不是 fail-open）。
+The gate state machine (specified explicitly in v14.2; the forensic script
+bank_gate_forensics.py checks a dump against it):
+  Signals: face, meaning mediapipe found a face this frame; mouth_on, meaning the
+  opening passed the threshold, with hysteresis at 0.015 to open and 0.008 to
+  close; hb, the camera worker heartbeat, alive if under 1 s old.
+  States, that is, whether f0 counts as theirs:
+    S1 singing available  face and mouth_on          -> f0 valid (last_open refreshed)
+    S2 grace              last_open under 0.8 s ago  -> f0 valid (a consonant closing
+                                                       the lips, or looking down,
+                                                       does not break the line)
+    S3 closed             last_open 0.8 s or older,  -> f0 forced to 0 (immune to
+                          including walking away        feedback and room sound)
+    S4 camera dead        hb absent for over 1 s     -> run bare (all f0 accepted)
+                                                       plus a warning in the terminal
+  Transition time constants: S1 to S3 is exactly 0.8 s; S3 to S1 is at most one
+  mouth worker period, about 33 ms, plus the detection window; entering and
+  leaving S4 each print one line. Design decision (2026-08-12): no face means the
+  gate closes, rather than failing open.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python bank_live.py \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python bank_live.py \
       [--in-name "USB PnP"] [--lock 0.5] [--gain 1.0]
 """
 import argparse
@@ -66,9 +105,11 @@ import signal
 import threading
 import time
 
-# 非互動 shell 用 `&` 背景啟動時 SIGINT 繼承 SIG_IGN，CPython 就不裝
-# KeyboardInterrupt handler ＝ Ctrl-C/kill -INT 全聾、收場 dump 陪葬
-# （08-12 判決場 r3/r4 實案）。這裡無條件裝回，收場永遠走得到 dump。
+# When started in the background with `&` from a non-interactive shell, SIGINT is
+# inherited as SIG_IGN, so CPython never installs a KeyboardInterrupt handler and
+# Ctrl-C and kill -INT are both deaf, taking the closing dump with them (cases r3
+# and r4 of the judgement session on 2026-08-12). It is reinstalled here
+# unconditionally, so the dump is always reached.
 signal.signal(signal.SIGINT, signal.default_int_handler)
 
 import numpy as np
@@ -79,491 +120,581 @@ MAJ = [0, 2, 4, 5, 7, 9, 11]
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--in-name", default="USB PnP")
+# The default is a macOS device name on a zh-Hant system: a match target, not
+# prose, so it is not translated.
 ap.add_argument("--out-name", default="MacBook Pro的揚聲器")
 ap.add_argument("--sblock", type=int, default=512)
 ap.add_argument("--hop", type=float, default=0.035,
-                help="偵測/合成粒度（秒）。窗＝2×hop：35ms→70ms 窗仍蓋住 "
-                     "65Hz 兩週期；換音全程 ~70ms（原 46ms 時 ~92ms）")
+                help="detection and synthesis granularity in seconds. The window is twice the hop, so 35 ms gives a 70 ms window, which still covers "
+                     "two periods at 65 Hz; a note change takes about 70 ms in total, against about 92 ms when the hop was 46 ms")
 ap.add_argument("--gain", type=float, default=1.0)
 ap.add_argument("--out-map", default=None,
-                help="每聲部一個輸出聲道，逗號分隔，順序＝VOICES 現值（--tenor 1"
-                     " 時＝bass,tenor,alto,sop，例 '0,1,2,3'）。整聲部（領唱＋"
-                     "團員＋pad）進同一道；殘響 mono 匯流排回灌所有聲道。"
-                     "只路由不加寬（G11）；要單一多聲道裝置（F7）。"
-                     "None＝原立體聲 pan 路徑逐位元不變。")
+                help="one output channel per part, comma separated, in the current VOICES order (with --tenor 1 that is bass, tenor, alto, sop, "
+                     "for example '0,1,2,3'). A whole part, the lead voice, the ensemble members and the pad, goes to one channel; the "
+                     "reverb runs on a mono bus fed back into every channel. This routes only and never widens (G11), and needs a single "
+                     "multi-channel device (F7). None leaves the original stereo pan path bit-identical")
 ap.add_argument("--lock", type=float, default=0.5,
-                help="和弦鎖定量：0=天使唱平均律、1=完全跟他的 cents")
-ap.add_argument("--attack", type=float, default=0.12, help="起音（秒）")
-ap.add_argument("--release", type=float, default=0.25, help="釋音（秒）")
+                help="how much the chord locks: 0 keeps the parts in equal temperament, 1 follows their cents exactly")
+ap.add_argument("--attack", type=float, default=0.12, help="attack, in seconds")
+ap.add_argument("--release", type=float, default=0.25, help="release, in seconds")
 ap.add_argument("--vowel-src", default="scratchpad/take17.wav")
 ap.add_argument("--vowels", type=int, default=0,
-                help="v17 連續母音場（0=關＝行為完全不變）：每聲部多渲 5 個"
-                     "母音層音庫，live 用 mediapipe 嘴形連續值對五錨點反距"
-                     "離加權、逐 hop 混合五層＝嘴形連續變天使跟著變。開此"
-                     "旗標＝走另一組 bank_ 快取目錄")
+                help="v17 continuous vowel field (0 is off, and the behaviour is completely unchanged): five extra vowel-layer banks are rendered "
+                     "per part, and live, mediapipe's continuous mouth-shape values give inverse-distance weights over the five anchors "
+                     "and the five layers are mixed per hop, so the parts follow the mouth continuously. Setting this flag uses a "
+                     "separate bank_ cache directory")
 ap.add_argument("--layers", default="",
-                help="v20 只留部分母音層（逗號分隔 index；空=全部）。"
-                     "v22 起 index＝0欸 1咿 2嗚 3啊（喔渲不出來已除名）。"
-                     "Harry 08-13：「為了對應口型、音的轉換變來變去不好"
-                     "聽」＝母音愈少切換愈少。例：--layers 1,3＝只留咿/啊")
+                help="v20: keep only some vowel layers, by comma-separated index; empty keeps all. From v22 the indices are 0 for eh, 1 for ee, "
+                     "2 for oo and 3 for ah; oh could not be rendered and was removed. From 2026-08-13: the sound changing back and forth "
+                     "to match the mouth shape does not sound good, so fewer vowels mean fewer changes. For example, --layers 1,3 keeps "
+                     "only ee and ah")
 ap.add_argument("--vw-tau", type=float, default=0.0,
-                help="v20 權重平滑時間常數（秒；0=關＝跟嘴形一樣快）。"
-                     "層數減完仍覺得音色飄＝把這個開到 0.15-0.3")
+                help="v20 weight smoothing time constant in seconds (0 is off, following the mouth as fast as it moves). If the timbre still "
+                     "seems to wander after reducing the layers, set this to 0.15-0.3")
 ap.add_argument("--young", type=float, default=0.0,
-                help="v26 年輕音保護（秒；0=關＝舊行為）：剛換過去的音在這"
-                     "段時間內，要換走需要多 --young-need 票、且不給搶拍的"
-                     "一票通道。彈跳都發生在音很年輕的時候，唱穩之後完全"
-                     "不受影響＝砍來回但不犧牲反應。取代 v24 的音高死區"
-                     "（三份審查判死：靜默漏音／永久卡音／滑音率飆升）")
+                help="v26 young-note protection, in seconds (0 is off, the old behaviour): for this long after a note change, moving away needs "
+                     "--young-need more votes and cannot use the single-vote pre-empt channel. Bouncing only happens while a note is very "
+                     "young, and once it is held steadily nothing is affected, so this cuts the flapping without costing responsiveness. "
+                     "It replaces the v24 pitch dead zone, which three reviews condemned for leaking notes in silence, sticking on a note "
+                     "for good, and driving the glide rate up")
 ap.add_argument("--young-need", type=int, default=2,
-                help="v26 年輕音要多幾票才准換（配合 --young）")
+                help="how many extra votes a young note needs before it may change, used with --young")
 ap.add_argument("--deadzone", type=float, default=0.0,
-                help="v26 音高死區（半音；0=關）：離現行音不到 0.5+此值就"
-                     "算「他還在這個音」（清候選票）。**上限 0.5**——逃逸"
-                     "門檻 ≤1.0 半音＝鄰音中心，保證可達，不會像 v24 那樣"
-                     "卡音/漏音。擋的是慢速跨格線游移（票數擋不住的那種）")
+                help="v26 pitch dead zone in semitones (0 is off): anything within 0.5 plus this of the current note counts as still being on that "
+                     "note, clearing the candidate votes. **Capped at 0.5**, so the escape threshold stays at or below 1.0 semitone, the "
+                     "centre of the neighbouring note, which guarantees it is reachable and avoids v24 sticking on a note or leaking one. "
+                     "What it blocks is slow drift across a grid line, the kind votes cannot stop")
 ap.add_argument("--maxlag", type=int, default=3,
                 help="v25 output backlog cap (blocks; 1 block = 35ms). 3 = "
                      "old behaviour: one worker stall permanently adds up to "
                      "105ms and xrun cannot see it. 1 = latency clamped to "
                      "35ms, at the cost of a 5ms fade-in when a block drops")
 ap.add_argument("--rebound", type=float, default=0.25,
-                help="v24 回跳防護窗（秒）：多久內回到前一個音要算顫音抖動"
-                     "（需 4 票／擋搶拍）。⚠ 審查 A4：拉大到 0.6 會讓「換氣"
-                     "後回唱前一個音」多等 ~70ms，且蓋住 ♩=100 的八分音符"
-                     "鄰音音型——預設留 0.25，要動先用台架量")
-ap.add_argument("--rebuild", action="store_true", help="強制重渲音庫")
-ap.add_argument("--mouth", type=int, default=1, help="嘴部門控（0=關）")
+                help="v24 back-jump guard window in seconds: returning to the previous note within this time counts as vibrato chatter and needs "
+                     "four votes, with the pre-empt blocked. Review A4: raising it to 0.6 adds about 70 ms of delay to returning to the "
+                     "previous note after a breath, and covers a neighbouring-note figure of quavers at 100 bpm, so the default stays at "
+                     "0.25 and any change should be measured on the bench first")
+ap.add_argument("--rebuild", action="store_true", help="force the banks to be re-rendered")
+ap.add_argument("--mouth", type=int, default=1, help="mouth gate (0 is off)")
 ap.add_argument("--mouth-open", type=float, default=0.015,
-                help="v27 開口門檻（內唇距/臉高）：要張到這麼開才算他在唱。"
-                     "Harry 08-13：「微小張嘴就觸發」＝調高這個。原寫死 0.015")
+                help="v27 opening threshold, the inner lip distance over the face height: the mouth must open this far to count as singing. From "
+                     "2026-08-13, a very slight opening triggered it, so raise this. It used to be hard-coded at 0.015")
 ap.add_argument("--mouth-close", type=float, default=0.008,
-                help="v27 閉口門檻（遲滯下緣，要 < --mouth-open）。原寫死 0.008")
+                help="v27 closing threshold, the lower edge of the hysteresis, which must be below --mouth-open. It used to be hard-coded at 0.008")
 ap.add_argument("--min-level", type=float, default=-100.0,
-                help="v33 偵測音量門檻（dBFS；-100=關＝舊行為）。自相關"
-                     "只測週期性、對音量無感——08-13 dump 實測閉嘴時 mic "
-                     "只有 -54dBFS 仍有 43%% 的幀報出音高＝門控寬限一開，"
-                     "房間噪音就讓天使唱起來。他唱歌是 -35dBFS，取 -45 "
-                     "乾淨分開。（-100 是 08-11 麥克風壞在 -61dBFS 時代的"
-                     "遺留設計，麥克風修好後就變成漏洞）")
+                help="v33 detection level threshold in dBFS (-100 is off, the old behaviour). Autocorrelation measures periodicity only and is "
+                     "indifferent to level: measured from a dump on 2026-08-13, with the mouth closed and the microphone at only "
+                     "-54 dBFS, 43%% of frames still reported a pitch, so as soon as the gate entered its grace period the room noise "
+                     "set the parts singing. They sing at -35 dBFS, so -45 separates the two cleanly. (-100 is a leftover from the era "
+                     "of 2026-08-11 when the microphone was broken at -61 dBFS; once it was repaired it became a hole.)")
 ap.add_argument("--bleed", type=float, default=0.0,
-                help="v33 天使→麥克風的耦合量（dB，負值；0=關）。實測 -18。"
-                     "偵測要求 mic 比「天使當下輸出＋此耦合」再高 "
-                     "--bleed-margin dB 才算是他在唱＝張嘴不唱時喇叭漏音"
-                     "不會自己觸發")
+                help="v33 coupling from the parts back into the microphone, in dB and negative (0 is off); measured at -18. Detection requires the "
+                     "microphone to exceed the parts' current output plus this coupling by a further --bleed-margin dB before it counts "
+                     "as singing, so bleed from the speakers cannot trigger it while the mouth is open but silent")
 ap.add_argument("--bleed-margin", type=float, default=6.0,
-                help="v33 高過漏音多少 dB 才算數")
+                help="how many dB above the bleed it must be to count")
 ap.add_argument("--balance", type=int, default=0,
-                help="v32 依實測音庫響度自動拉齊各聲部（0=關）。設定的"
-                     "渲染增益與實際輸出對不上——每顆嘴天生響度不同，"
-                     "08-13 實測 sop 比 bass 低 7.0dB、tenor 低 3.8dB、"
-                     "alto 高 0.5dB")
+                help="v32: level the parts automatically from the measured loudness of their banks (0 is off). The render gain that was set does "
+                     "not match the real output, because each voice is naturally a different loudness: measured 2026-08-13, the soprano "
+                     "was 7.0 dB below the bass, the tenor 3.8 dB below and the alto 0.5 dB above")
 ap.add_argument("--trim", default="",
-                help="v32 逐聲部微調（dB，逗號分隔，如 sop=+2,bass=-1）"
-                     "＝耳朵說了算的那一層，疊在 --balance 之上")
+                help="v32 per-part trim in dB, comma separated, such as sop=+2,bass=-1. This is the layer the ear decides, laid over --balance")
 ap.add_argument("--tenor", type=int, default=0,
-                help="v31 多開一個 tenor 聲部；0=關＝回三聲部。v42 起領唱嘴"
-                     "＝reflow-male8 spk7（不再是同一顆 bass 嘴——bass1 在 "
-                     "65-68 是壞音）、音域 43-68、位移 +6（--vl 2 下上聲部"
-                     "的位移只剩 fallback 會讀，實際音由 voice-leading 決定）")
+                help="v31: add a tenor part; 0 is off and returns to three parts. From v42 the lead voice is reflow-male8 spk7 and no longer the "
+                     "same voice as the bass, because bass1 is broken in the 65-68 range. Its range is 43-68 with a shift of +6; under "
+                     "--vl 2 the shift of an upper part is only read as a fallback, since the actual note is decided by the voice "
+                     "leading")
 ap.add_argument("--gate-log", type=int, default=0,
-                help="v34 每次門控開/關印一行（含當下機率）＝誤觸"
-                     "可事後定位，不必靠回憶")
+                help="v34: print one line every time the gate opens or closes, including the current probability, so a false trigger can be located "
+                     "afterwards rather than recalled")
 ap.add_argument("--mic-gate", type=int, default=0,
-                help="v43 麥克風門（0=關；08-18 Harry：live 只用麥克風就能"
-                     "觸發）：門的權威從鏡頭改成 mic 電平。hop RMS 要贏過 "
-                     "max(--mic-open, 最近 8 hop 輸出電平+--bleed+"
-                     "--bleed-margin) 且連續 --mic-frames 個 hop 才開門；"
-                     "低於地板 --mic-hold 秒才關。開著時鏡頭照跑但只當畫面"
-                     "（view/frame-b64），看門狗與 sing-gate 不再管門。"
-                     "與鏡頭門不同：--file 台架也生效＝門控可離線驗證。"
-                     "誠實邊界（F26）：能量域判別抓真唱 89%%／把回授誤判"
-                     "在唱 37%%，生死判準在耳測。")
+                help="v43 microphone gate (0 is off; from 2026-08-18, live should be triggerable by the microphone alone): gate authority moves from "
+                     "the camera to the microphone level. The hop RMS must beat max(--mic-open, the output level over the last 8 hops "
+                     "plus --bleed plus --bleed-margin) for --mic-frames consecutive hops before the gate opens, and it closes after "
+                     "--mic-hold seconds below the floor. While it is on, the camera still runs but only as a picture (view and "
+                     "frame-b64); the watchdog and the sing gate no longer govern the gate. Unlike the camera gate, this also applies "
+                     "under --file, so the gate can be verified offline. Honest boundary (F26): in the energy domain it catches real "
+                     "singing 89%% of the time and mistakes feedback for singing 37%% of the time, so the decision rests on listening")
 ap.add_argument("--mic-open", type=float, default=-45.0,
-                help="麥克風門絕對開門電平 dBFS（hop RMS）。閉嘴底噪實測 "
-                     "-54、--min-level 凍結 -50，預設再留 5dB 餘裕")
+                help="absolute opening level of the microphone gate in dBFS, on the hop RMS. The noise floor with the mouth closed measures -54 and "
+                     "--min-level is frozen at -50, so the default leaves a further 5 dB of margin")
 ap.add_argument("--mic-frames", type=int, default=2,
-                help="開門要連續 N 個 hop 過地板（2×35ms=70ms）＝單 hop "
-                     "瞬態（衣物摩擦、點擊）不開門，語意同 --bs-frames")
+                help="opening requires N consecutive hops above the floor (2 x 35 ms = 70 ms), so a single-hop transient such as clothing rustle or "
+                     "a click does not open it; the same meaning as --bs-frames")
 ap.add_argument("--mic-hold", type=float, default=0.8,
-                help="低於地板多久才關門（秒）＝字間、子音的短暫落下不斬"
-                     "句，值抄鏡頭門的 0.8s 寬限。內部以 hop 計數換算＝"
-                     "--file 台架不受牆鐘影響")
+                help="how long below the floor before the gate closes, in seconds, so the brief dips between words and on consonants do not cut the "
+                     "phrase. The value is taken from the camera gate's 0.8 s grace period. Internally it is counted in hops, so the "
+                     "--file bench is unaffected by wall-clock time")
 ap.add_argument("--sing-gate", type=int, default=0,
-                help="v34 用訓練出來的『他在不在唱』模型當門控（53 參數，"
-                     "scratchpad/sing_gate_train.py 產）。手挑係數是一個"
-                     "母音一個母音打地鼠：jawOpen 撈不到咿（下巴不開）、"
-                     "pucker 撈不到啊。實測七態機率：閉嘴 0.000／微張 "
-                     "0.019／講話 0.008 vs 唱啊 0.986／咿 1.000／嗚 1.000／"
-                     "欸 0.996＝門檻 0.30 時唱過 100%%、誤觸 0.7%%")
+                help="v34: use a trained 'is this person singing' model as the gate (53 parameters, produced by "
+                     "scratchpad/sing_gate_train.py). Hand-picked coefficients were whack-a-mole, one vowel at a time: jawOpen misses ee, "
+                     "since the jaw does not open, and pucker misses ah. Measured probabilities across seven states: mouth closed 0.000, "
+                     "slightly open 0.019, speaking 0.008, against singing ah 0.986, ee 1.000, oo 1.000 and eh 0.996, so at a threshold of "
+                     "0.30 singing passes 100%% of the time with 0.7%% false triggers")
 ap.add_argument("--gate-model", default="auto",
-                help="v40 門控模型路徑；auto＝有 sing_gate_model3.npz 就用它"
-                     "（三場次＋自校＋運動否決），沒有就退回 sing_gate_model"
-                     "（08-13 單場次）。要強制回舊的就明寫路徑")
+                help="v40 gate model path; auto uses sing_gate_model3.npz if it exists, which was trained across three sessions with self-calibration "
+                     "and a movement veto, and otherwise falls back to sing_gate_model, the single session of 2026-08-13. To force the "
+                     "older one, give its path explicitly")
 ap.add_argument("--gate-calib", type=float, default=5.0,
-                help="v40 開場基線自校秒數（**這段要閉嘴**，門一律關）。"
-                     "修的是場次飄移：同一個人同一個動作 jawOpen 靜止值"
-                     "08-13=0.031 / 08-15=0.017＝閉嘴誤觸 44%%。只有新契約"
-                     "的模型（calib=1）會用它")
+                help="v40 seconds of baseline self-calibration at the start (**keep the mouth closed** during it; the gate stays shut). This corrects "
+                     "session drift: the same person making the same movement measured a resting jawOpen of 0.031 on 2026-08-13 and "
+                     "0.017 on 2026-08-15, which gave 44%% false triggers with the mouth closed. Only models on the new contract "
+                     "(calib=1) use it")
 ap.add_argument("--gate-motion-th", type=float, default=-1.0,
-                help="v40 運動否決門檻（|ΔjawOpen| 0.5s 窗均值）；"
-                     "<0＝用模型內建值（0.0025）。講話實測 0.0079-0.0173、"
-                     "唱歌最高 0.0023。調小＝更擋講話但唱歌漏接變多"
-                     "（實測 0.0020 時講話 0%%、漏接 17.5%%）")
+                help="v40 movement veto threshold, the mean |delta jawOpen| over a 0.5 s window; below 0 uses the model's built-in value of 0.0025. "
+                     "Speaking measures 0.0079-0.0173 and singing peaks at 0.0023. Lowering it blocks speech better but drops more "
+                     "singing: at 0.0020, speech triggered 0%% of the time and 17.5%% of singing was missed")
 ap.add_argument("--sing-open", type=float, default=0.7,
-                help="v34 起唱門檻（機率）")
+                help="v34 threshold to start singing, as a probability")
 ap.add_argument("--sing-hold", type=float, default=0.3,
-                help="v34 維持門檻（遲滯下緣）")
+                help="v34 threshold to keep singing, the lower edge of the hysteresis")
 ap.add_argument("--bs-gate", type=int, default=0,
-                help="v30 用 mediapipe blendshape 當門控（0=關＝用手算幾何）。"
-                     "四態實測：mouthPucker 嗚 0.932 vs 閉嘴/微張 0.415＝"
-                     "分離度 2.25（全 52 個 blendshape 最高，贏過手算嘴寬 "
-                     "2.07、開口值 1.39）；門檻 0.60 時嗚過 94%%、誤觸 3%%。"
-                     "**副作用：用嗚起唱也能開門了**（pucker 在張嘴前就到位）")
+                help="v30: use mediapipe blendshapes as the gate (0 is off and uses hand-computed geometry). Measured across four states, "
+                     "mouthPucker on oo reads 0.932 against 0.415 with the mouth closed or slightly open, a separation of 2.25, which is "
+                     "the highest of all 52 blendshapes and beats the hand-computed mouth width at 2.07 and the opening at 1.39. At a "
+                     "threshold of 0.60, oo passes 94%% of the time with 3%% false triggers. **Side effect: starting on oo can now open "
+                     "the gate**, since pucker is in place before the mouth opens")
 ap.add_argument("--bs-open", type=float, default=0.20,
-                help="v30 jawOpen 起唱門檻（實測：微張 0.131、唱啊 0.343）")
+                help="v30 jawOpen threshold to start singing (measured: slightly open 0.131, singing ah 0.343)")
 ap.add_argument("--bs-close", type=float, default=0.08,
-                help="v30 jawOpen 維持門檻（遲滯下緣）")
+                help="v30 jawOpen threshold to keep singing, the lower edge of the hysteresis")
 ap.add_argument("--bs-pucker", type=float, default=0.75,
-                help="v30.1 嘟嘴門檻。⚠ 訂門檻要看**尾巴不是中位數**："
-                     "閉嘴 pucker 中位 0.493 但 max 0.682，門檻 0.60 時每秒"
-                     "都有幀越線、而**一幀就開門 0.8s**＝Harry 實測「閉著嘴"
-                     "還是會觸發」。0.70 以上閉嘴/微張誤觸 0.0%%、唱嗚仍過 80%%")
+                help="v30.1 pucker threshold. Set thresholds from **the tail, not the median**: with the mouth closed, pucker has a median of 0.493 "
+                     "but a maximum of 0.682, so at a threshold of 0.60 some frame crosses it every second, and **one frame opens the "
+                     "gate for 0.8 s**, which is why it still triggered with the mouth closed. At 0.70 and above, a closed or slightly "
+                     "open mouth gives 0.0%% false triggers while oo still passes 80%% of the time")
 ap.add_argument("--bs-frames", type=int, default=2,
-                help="v30.1 開門防抖：要連續這麼多幀成立才開（單幀雜訊開門"
-                     "0.8s 是上一版的失敗模式）；維持不受影響")
+                help="v30.1 opening debounce: this many consecutive frames must hold before the gate opens. A single noisy frame opening it for 0.8 s "
+                     "was the failure mode of the previous version. Holding the gate open is unaffected")
 ap.add_argument("--mouth-narrow", type=float, default=0.0,
-                help="v28 嘟嘴保持（嘴寬/臉寬；0=關）：**已經在唱**時，只要"
-                     "嘴比這個窄就維持開門——唱嗚的開口值只有 0.008（跟閉嘴"
-                     "的 0.006 分不開）但嘴寬 0.279 vs 閉嘴 0.341＝窄 18%%，"
-                     "這是唯一分得開的維度。08-13 三態實測。開門仍只看張口"
-                     "＝不增加誤觸風險；代價＝**用嗚起唱仍然開不了門**（誠實"
-                     "邊界：鏡頭看不見嘟嘴與閉嘴的差別，只看得見寬窄）")
+                help="v28 pucker hold, the mouth width over the face width (0 is off): **while already singing**, the gate stays open as long as the "
+                     "mouth is narrower than this. Singing oo gives an opening of only 0.008, indistinguishable from 0.006 with the mouth "
+                     "closed, but a mouth width of 0.279 against 0.341 closed, which is 18%% narrower and the only dimension that "
+                     "separates them (measured across three states on 2026-08-13). Opening the gate still looks only at the opening, so "
+                     "this adds no false-trigger risk. The cost is that **starting on oo still cannot open the gate**; the honest "
+                     "boundary is that the camera cannot see the difference between a pucker and a closed mouth, only between wide and "
+                     "narrow")
 ap.add_argument("--view", type=int, default=1,
-                help="嘴部監看視窗（鏡頭＋內唇線＋開口度＋門控狀態；0=關）")
-ap.add_argument("--cam", type=int, default=-1, help="鏡頭 index（-1=自動）")
+                help="mouth monitor window: the camera, the inner lip line, the opening and the gate state (0 is off)")
+ap.add_argument("--cam", type=int, default=-1, help="camera index (-1 selects automatically)")
 ap.add_argument("--vl", type=int, default=1,
-                # v36：2 = 新版合唱配置（音域向心＋禁同音＋禁交叉）
+                # v36: 2 is the newer choral arrangement, with the ranges pulled
+                # towards the centre, unisons forbidden and crossing forbidden
 
-                help="v4 voice-leading：alto/sop 各自選離上一個音最近的和弦音"
-                     "（三/五/八度系候選）＝聲部小步進行；0=關＝固定 +12/+三度"
-                     "平行跳")
+                help="v4 voice leading: the alto and soprano each take the chord tone nearest their previous note, from candidates a third, a fifth "
+                     "or an octave away, so the parts move in small steps. 0 is off and they jump in parallel at a fixed +12 or a "
+                     "third")
 ap.add_argument("--mem-real", type=int, default=0,
-                help="v44 團員可否借別顆模型的真人歌手（0=一律複製領唱＝"
-                     "v38 行為）。**08-16 判決後預設改 0**：兩份不同錄音的"
-                     "同一個音疊加＝必然的微小音高差＝「一下一下的雜音」"
-                     "（干涉，五支儀器全照不到），且音樂上零損失（Harry 耳裁"
-                     "真人音色與失諧複製分不太出來）。凍結配置也是 0；"
-                     "要試真人音色必須明寫 1，且先逐音重驗 MEM_SPK 名單")
+                help="v44: whether ensemble members may borrow a real singer from another model (0 always copies the lead, the v38 behaviour). "
+                     "**The default changed to 0 after the judgement of 2026-08-16**: laying the same note from two different recordings "
+                     "on top of each other always leaves a slight pitch difference, which is the intermittent noise, an interference that "
+                     "all five instruments are blind to, and musically nothing is lost, since real timbres and detuned copies were hard "
+                     "to tell apart by ear. The frozen configuration is also 0. Trying real timbres requires writing 1 explicitly and "
+                     "re-verifying the MEM_SPK list note by note first")
 ap.add_argument("--vib-sync", type=int, default=0,
-                help="v43 團員與領唱共用同一個顫音相位（1=同步）。0＝各自"
-                     "隨機相位（原行為）＝同一個音的副本瞬時頻率互相錯開，"
-                     "在高諧波上落進 15-300Hz 差頻區＝roughness（聽得到、"
-                     "頻譜找不到，因為它不是新成分而是干涉）")
+                help="v43: ensemble members share the lead's vibrato phase (1 synchronises them). 0 gives each a random phase, the original behaviour, "
+                     "so copies of the same note have instantaneous frequencies offset from each other and, on the high harmonics, fall "
+                     "into the 15-300 Hz difference band, which is roughness: audible but invisible to a spectrum, because it is not a new "
+                     "component but interference")
 ap.add_argument("--porta", type=float, default=0.08,
-                help="v15 portamento：**前音停留 ≥0.3s** 且級進 ≤2 半音才滑"
-                     "（慢轉音＝表情滑音；正常唱速＝乾淨換音）。線性定長"
-                     "（秒；0=關）")
+                help="v15 portamento: glide only when the previous note was held for 0.3 s or more and the step is 2 semitones or fewer, so a slow "
+                     "transition is an expressive glide while normal singing changes notes cleanly. Linear and of fixed length, in "
+                     "seconds (0 is off)")
 ap.add_argument("--fold", type=int, default=1,
-                help="v37 音域外折八度（保留音級）而不是 clip（會改音級）")
+                help="v37: fold by octaves outside the range, keeping the pitch class, rather than clipping, which changes it")
 ap.add_argument("--vib", type=float, default=0.0,
-                help="v37 顫音深度（cents，0=關）。審查實測天使的 3-8Hz "
-                     "能量只有他的 2.2%%＝完全沒有顫音，是「修過音」最強"
-                     "的指紋。建議 20-30")
-ap.add_argument("--vib-rate", type=float, default=5.5, help="顫音速率 Hz")
+                help="v37 vibrato depth in cents (0 is off). The review measured the parts' energy in the 3-8 Hz band at only 2.2%% of theirs, that "
+                     "is, no vibrato at all, which is the strongest fingerprint of a corrected sound. 20-30 is suggested")
+ap.add_argument("--vib-rate", type=float, default=5.5, help="vibrato rate in Hz")
 ap.add_argument("--vib-delay", type=float, default=0.35,
-                help="音齡超過這麼久才漸入顫音（換音當下要乾淨）")
+                help="the vibrato fades in only once a note is older than this, so a note change itself stays clean")
 ap.add_argument("--human", type=float, default=6.0,
-                help="v3 人味離散：每聲部獨立微音準慢漂（±cents；0=關）"
-                     "＝殺 pad 同質感（v6② humanization）")
+                help="v3 human dispersion: each part drifts slowly in tuning on its own, in plus or minus cents (0 is off), which kills the uniform "
+                     "quality of the pad (v6, item 2, humanisation)")
 ap.add_argument("--per-part", type=int, default=1,
-                help="v38 每聲部幾個人（1=現況）。團員**共用同一份音庫**——"
-                     "不重渲、不動 VOICES（快取 key 是 repr(VOICES)，動它＝"
-                     "十五個層庫全部重渲），只在播放層多開幾個游標。差別＝"
-                     "靜態失諧＋起音錯開＋各自的微漂/顫音相位＋站位微散。"
-                     "FINDINGS F3：約 7 條去相關的線 ≈ 10 個真人，再多遞減")
+                help="v38: how many singers per part (1 is the current state). The members **share one bank**: nothing is re-rendered and VOICES is "
+                     "untouched, since the cache key is repr(VOICES) and changing it would re-render all fifteen layer banks. Only extra "
+                     "playback cursors are opened. What differs is a static detuning, a staggered attack, each member's own slow drift "
+                     "and vibrato phase, and a slightly scattered position. FINDINGS F3: about 7 decorrelated lines sound like 10 real "
+                     "people, and more brings diminishing returns")
 ap.add_argument("--spread-cents", type=float, default=25.0,
-                help="v38 團員間靜態失諧 std（cents）。F3 甜蜜點 ~25c"
-                     "（真團團員間 F0 散布 0-50c、平均 ~20c）")
+                help="v38 static detuning between members, as an std in cents. F3 puts the sweet spot at about 25; in a real ensemble the spread of "
+                     "F0 between members is 0-50 cents with a mean of about 20")
 ap.add_argument("--spread-ms", type=float, default=20.0,
-                help="v38 團員起音錯開（ms，均勻 0~2x）。F3：~20ms 是甜蜜點、"
-                     ">40ms 反而爛。它同時是延遲線＝把同一份 loop 讀在不同"
-                     "相位上，這是去相關的主力（純失諧只會拍頻）")
+                help="v38 stagger of the members' attacks in ms, uniform over 0 to twice this. F3 puts the sweet spot at about 20 ms and finds over "
+                     "40 ms worse. It is also a delay line, reading the same loop at different phases, which does most of the "
+                     "decorrelation; detuning alone only produces beating")
 ap.add_argument("--spread-pan", type=float, default=0.18,
-                help="v38 團員站位相對聲部中心的散開量（±，-1~1 座標）")
+                help="v38: how far the members are scattered around the part's centre, plus or minus, in -1 to 1 coordinates")
 ap.add_argument("--wet", type=float, default=0.3,
-                help="v3 悠遠層：殘響 send（reverb.py IR 串流卷積；0=關）")
+                help="v3 distance layer: reverb send, convolving the reverb.py IR in a stream (0 is off)")
 ap.add_argument("--pad", type=float, default=1.5,
-                help="v6 慢層和弦墊（音庫做的、零 ML）：錨音至少駐留這麼多秒"
-                     "才換和弦；0=關（只剩快層）")
-ap.add_argument("--pad-gain", type=float, default=0.45, help="慢層音量")
+                help="v6 slow-layer chord pad, built from the banks with no machine learning: the anchor note must hold for at least this many "
+                     "seconds before the chord may change; 0 is off, leaving only the fast layer")
+ap.add_argument("--pad-gain", type=float, default=0.45, help="level of the slow layer")
 ap.add_argument("--pad-hold", type=float, default=1.5,
-                help="你停多久慢層才放（快層 0.25s 就放＝墊會活得比你久）")
+                help="how long after you stop before the slow layer releases; the fast layer releases in 0.25 s, so the pad outlives you")
 ap.add_argument("--predict", default="scratchpad/melody_lm_v0.json",
-                help="v8 個人化搶拍：Harry 旋律習慣模型（melody_lm）——換音在"
-                     "模型 top-3 內＝一票 commit（涵蓋級進外的慣用跳進）。"
-                     "空字串=關（退回級進捷徑）")
+                help="v8 personalised pre-empt: a model of this singer's melodic habits (melody_lm). A note change within the model's top three "
+                     "commits on one vote, which covers the habitual leaps outside stepwise motion. An empty string turns it off and "
+                     "falls back to the stepwise shortcut")
 ap.add_argument("--fast", type=int, default=1,
-                help="v6 搶拍：級進（≤2 半音）且在調內的換音一票 commit"
-                     "（~35ms；0=關＝一律兩票 ~70ms）")
+                help="v6 pre-empt: a stepwise change of 2 semitones or fewer that stays in key commits on one vote, about 35 ms; 0 is off and every "
+                     "change needs two votes, about 70 ms")
 ap.add_argument("--frame-b64", type=float, default=0,
-                help="每秒 N 幀把嘴部畫面以「FRAME <base64 jpeg>」印到 "
-                     "stdout（respond_shell UI 用；0=關＝行為不變）")
-ap.add_argument("--dump", default="", help="收錄 mic/out 到 <path>_mic/out.wav")
+                help="print the mouth image to stdout N frames per second as \'FRAME <base64 jpeg>\', for the respond_shell UI (0 is off and the "
+                     "behaviour is unchanged)")
+ap.add_argument("--dump", default="", help="record the microphone and the output to <path>_mic.wav and <path>_out.wav")
 ap.add_argument("--dump-max-min", type=float, default=30.0,
-                help="v44 dump 累積上限（分鐘）。buffer 原本無上限（~32MB/分"
-                     "常駐），長 session 收場時 concatenate 會撐爆記憶體或"
-                     "超出 shell 的 8s SIGKILL 預算＝整份錄音陪葬。滿了停錄"
-                     "並印一行，演出不受影響")
+                help="v44 ceiling on the dump, in minutes. The buffer used to be unbounded, holding about 32 MB per minute, and concatenating it at "
+                     "the end of a long session either exhausted memory or overran the shell\'s 8 s SIGKILL budget, taking the whole "
+                     "recording with it. Once full it stops recording and prints one line; the performance is unaffected")
 ap.add_argument("--file", nargs=2, metavar=("IN", "OUT"),
-                help="離線台架：整檔跑同一條 per-hop 管線（無音訊裝置、"
-                     "無鏡頭）＝開發自驗用")
+                help="offline bench: run a whole file through the same per-hop pipeline, with no audio device and no camera, for self-verification "
+                     "during development")
 a = ap.parse_args()
-# 審查 B2：荒謬旗標值原本靜默通過（--hys 12 實測 60s 只換 7 次音、
-# 最長持音 18.45s，程式一聲不吭）。範圍檢查放這裡＝開場就死，
-# 不要讓它變成「聽起來怪但查不出原因」。
-assert 0 <= a.young <= 2.0, "--young 合理範圍 0-2 秒"
-# **0.5 是硬上限不是品味**：死區逃逸門檻 = 0.5+deadzone，超過 0.5
-# 就與合理性門（離格 ≤0.35）不相交＝回不去剛離開的音（審查 S2 實測
-# 卡死 5 秒）、且 0.55 起會靜默漏掉半音級進（S3 實測每趟漏 3 音）。
-# 實測 0.5 已開始吃真音（41 個穩定平台漏 4 個），故上限訂 0.45。
-assert 1 <= a.per_part <= 8, "--per-part 合理範圍 1-8（F3：>7 條線遞減報酬）"
-assert 0 <= a.spread_cents <= 60, "--spread-cents 合理範圍 0-60（F3：真團 0-50c）"
-assert 0 <= a.spread_ms <= 40, "--spread-ms 上限 40（F3：>40ms 起音散開反而爛）"
-assert 0 <= a.spread_pan <= 0.5, "--spread-pan 合理範圍 0-0.5"
-assert 0 <= a.deadzone <= 0.45, "--deadzone 上限 0.45（見碼內說明）"
-assert 0 <= a.young_need <= 6, "--young-need 合理範圍 0-6 票"
-assert 0 <= a.rebound <= 2.0, "--rebound 合理範圍 0-2 秒"
-assert 1 <= a.maxlag <= 16, "--maxlag 合理範圍 1-16 塊"
-# 08-17 review #11：--attack/--release 0 會在 render 的 n/(atk*SR) 除以零＝
-# worker 執行緒死、輸出永久靜音而儀表全綠。本檔的「0=關」慣用法不適用這
-# 兩個——包絡永遠存在，沒有「關」。
-assert a.attack > 0, "--attack 必須 > 0（0 會除以零殺掉音訊 worker）"
-assert a.release > 0, "--release 必須 > 0（0 會除以零殺掉音訊 worker）"
-# 審查：--bs-frames 0 會讓 `arm >= 0` 恆真＝門永遠開著，與機率無關
-assert 1 <= a.bs_frames <= 10, "--bs-frames 至少 1（0 = 門永遠開）"
-assert a.sing_hold <= a.sing_open, "--sing-hold 應 <= --sing-open（遲滯）"
-assert -120 <= a.min_level <= 0, "--min-level 合理範圍 -120~0 dBFS"   # -100 = 關
+# Review B2: absurd flag values used to pass silently. With --hys 12, a measured
+# 60 s produced only 7 note changes with a longest note of 18.45 s and the program
+# said nothing. The range checks live here so it dies at start-up, rather than
+# becoming "it sounds strange and nobody can find out why".
+assert 0 <= a.young <= 2.0, "--young must be between 0 and 2 seconds"
+# **0.5 is a hard ceiling, not a matter of taste**: the dead-zone escape threshold
+# is 0.5 + deadzone, and above 0.5 it stops intersecting the plausibility gate,
+# which allows at most 0.35 off the grid, so the note just left becomes
+# unreachable (review S2 measured it stuck for 5 seconds). From 0.55 it also
+# silently drops semitone steps (S3 measured 3 notes lost per pass). At 0.5 it
+# already eats real notes, 4 of 41 stable plateaus, so the ceiling is 0.45.
+assert 1 <= a.per_part <= 8, "--per-part must be between 1 and 8 (F3: beyond 7 lines the returns diminish)"
+assert 0 <= a.spread_cents <= 60, "--spread-cents must be between 0 and 60 (F3: a real ensemble spans 0-50 cents)"
+assert 0 <= a.spread_ms <= 40, "--spread-ms is capped at 40 (F3: staggering the attacks beyond 40 ms sounds worse)"
+assert 0 <= a.spread_pan <= 0.5, "--spread-pan must be between 0 and 0.5"
+assert 0 <= a.deadzone <= 0.45, "--deadzone is capped at 0.45 (see the note in the code)"
+assert 0 <= a.young_need <= 6, "--young-need must be between 0 and 6 votes"
+assert 0 <= a.rebound <= 2.0, "--rebound must be between 0 and 2 seconds"
+assert 1 <= a.maxlag <= 16, "--maxlag must be between 1 and 16 blocks"
+# Review #11, 2026-08-17: --attack or --release at 0 divides by zero in render's
+# n/(atk*SR), which kills the worker thread and silences the output for good while
+# every indicator stays green. This file's convention that 0 means off does not
+# apply to these two: the envelope always exists and cannot be turned off.
+assert a.attack > 0, "--attack must be above 0 (0 divides by zero and kills the audio worker)"
+assert a.release > 0, "--release must be above 0 (0 divides by zero and kills the audio worker)"
+# Review: --bs-frames 0 makes `arm >= 0` always true, so the gate is permanently
+# open regardless of the probability.
+assert 1 <= a.bs_frames <= 10, "--bs-frames must be at least 1 (0 leaves the gate permanently open)"
+assert a.sing_hold <= a.sing_open, "--sing-hold must be at or below --sing-open (hysteresis)"
+assert -120 <= a.min_level <= 0, "--min-level must be between -120 and 0 dBFS"   # -100 turns it off
 assert 0 < a.mouth_close < a.mouth_open < 0.5, \
-    "--mouth-close 必須 < --mouth-open（遲滯上下緣）"
+    "--mouth-close must be below --mouth-open (the two edges of the hysteresis)"
 
-# 聲部：(名, 模型, spk, gain, 音庫 MIDI 範圍, 半音位移, 是否加全音階三度)
-# ⚠ 快取 key 只吃前五欄（名/模型/spk/gain/音域，見 _ckv）——調位移不重渲。
-# v41（08-16）：bass 的移調從 0 改 **-8**。（當天一度因為 live 雜音被回退，
-# 雜音後來查出元兇是 **--mem-real**（不同錄音疊加的干涉，見該旗標 help；
-# --frame-b64 曾被誤判、已翻案）、與移調無關 → 接回。）Harry「bass tenor 男生的那個共鳴
-# 感一直沒有出來」——查下去不是音色也不是音量，是**音域**：08-15 dump 實測
-# bass 中位 G#3(56)＝**跟他自己一模一樣**（他 207.7Hz、bass 207.7Hz），
-# tenor A#3(58)，兩部男聲只差 2 個半音＝不是兩條線，是一條加厚的線，而且
-# 都待在中音區，男低音的共鳴（G2-C3）完全沒有人在。
-# 為什麼是 -8 不是 -12：先試 -12 他判「有了」，但掃描全部移調值後 -12 只有
-# 54.8% 落在標準 bass 核心(G2-C4)、還有 8.9% 掉出音庫下限被折八度；**-8 是
-# 最適解**（核心內 86.4%、掉出 0.4%、不進 71-75 破音區）。低頻能量兩者幾乎
-# 相同（<120Hz 13.2% vs 13.8%），所以 -8 拿到一樣的共鳴、沒有折八度瑕疵。
+# A part is (name, model, spk, gain, bank MIDI range, semitone shift, whether to
+# add a diatonic third).
+# The cache key uses only the first five fields, the name, model, spk, gain and
+# range (see _ckv), so changing the shift does not re-render.
+# v41 (2026-08-16): the bass shift changed from 0 to **-8**. It was briefly
+# reverted that day because of live noise, but the noise turned out to be caused by
+# **--mem-real**, the interference of laying different recordings on top of each
+# other (see that flag's help; --frame-b64 was wrongly blamed and has been
+# cleared), and had nothing to do with the shift, so it went back in.
+# The complaint was that the male resonance of the bass and tenor never came
+# through. It was neither the timbre nor the level but **the range**: measured
+# from the 2026-08-15 dump, the bass had a median of G#3 (56), **exactly the same
+# as the singer** (both at 207.7 Hz), and the tenor A#3 (58). Two male parts two
+# semitones apart are not two lines but one thickened line, and both sat in the
+# middle register with nobody in the bass resonance region of G2 to C3.
+# Why -8 and not -12: -12 was tried first and judged "there it is", but sweeping
+# every shift showed that -12 puts only 54.8% inside the standard bass core of
+# G2-C4 and drops 8.9% below the bank's lower limit, where it is folded by an
+# octave. **-8 is the best**: 86.4% inside the core, 0.4% dropping out, and it
+# never enters the broken 71-75 region. The low-frequency energy is almost the
+# same either way (13.2% against 13.8% below 120 Hz), so -8 gets the same
+# resonance without the octave-folding defect.
 VOICES = [("bass", "reflow-bass1/model_32000.pt", 1, 1.0, (36, 68), -8, False),
           ("alto", "reflow-alto3/model_40000.pt", 2, 0.85, (50, 80), 12,
            False),
           ("sop", "reflow-sop3/model_20000.pt", 1, 0.7, (53, 84), 12, True)]
-# v31（Harry：「男生可以多加一個聲部嗎，現在是不是只有 bass」——是，
-# 現役三嘴只有 bass 是男聲）。手上沒有第二個男聲權重（bass1 是 n_spk=1，
-# 只有 alto3 是三嗓合訓可換 spk_id），最短路徑＝**同一顆 bass 嘴多開一
-# 個聲部唱不同的線**：真實合唱團本來就同嗓分部，加上各聲部獨立的人味
-# 微漂（HUM）與站位（PAN）就是兩個人。真的要新音色＝訓 M4Singer 的
-# Tenor-1~7 / Bass-2,3（都還沒用過），那要 GPU。
+# v31, from the question "can another male part be added, is there only a bass at
+# the moment?" — yes: of the three voices in service only the bass was male. There
+# was no second male weight on hand (bass1 has n_spk=1, and only alto3 was trained
+# jointly on three voices with a selectable spk_id), so the shortest path was to
+# **open a second part on the same bass voice singing a different line**. A real
+# choir already divides parts within one voice type, and with each part's own
+# human drift (HUM) and position (PAN) they become two people. A genuinely new
+# timbre would mean training M4Singer's Tenor-1 to 7 or Bass-2 and 3, none of
+# which has been used, and that needs a GPU.
 if a.tenor:
-    # 上緣 68 不是 75：這個上限是 bass1 時代訂的（bass1 渲到 71-75 是破音
-    # 區：midi 75 迴圈內音高 SD 59.9 cents、週期性 0.51，正常音 0.99，而
-    # tenor 曾有 37% 的時間待在那裡）。v42 換 male8 spk7 後 65-68 實測乾淨
-    # （週期性 0.987-0.990），**68 以上沒量過**——要拉高上緣先逐音掃，別
-    # 沿用舊上限也別盲目放寬。
-    # v42（08-16）：領唱嘴從 **bass1 換成 male8 spk7（Tenor-5）**。
-    # Harry live「唱 B3 出現雜音、唱 C4 沒有、唱 A3 沒有」＋「B3 也有正常的
-    # 時候」→ 逐音掃音庫抓到病灶：**bass1 在 MIDI 65-68 是壞音**（週期性
-    # 0.790-0.881、音高 SD 14-25 cents，正常音是 0.99），而 voice leading
-    # 依和聲脈絡決定當下配哪個音 ⇒ 同一個唱名有時撞上、有時沒有＝「時有時無」。
-    # dump 實測撞壞音比例：舊配置 bass 18.04%／tenor 5.15%，v41 後 bass 0%／
-    # tenor 3.65%（所以 v41 其實已經改善了 bass，剩下的是 tenor）。
-    # 為什麼換模型而不是縮音域：上緣降到 64 雖然也能歸零，代價是 3.65% 的音
-    # 被折八度＝用一個瑕疵換另一個。而 **male8 spk7 在同一段音域全部乾淨**
-    # （65-68 週期性 0.987-0.990、SD 5.0-7.6c），且那顆權重已經在硬碟上
-    # （團員一直在用它），零額外成本。
-    # v31 當初用 bass1 是因為「手上沒有第二個男聲權重」——08-15 訓完 male8
-    # 之後那個前提就不成立了，這裡是補上那次沒跟到的改動。
+    # The upper limit is 68 and not 75: it was set in the bass1 era, where
+    # rendering 71-75 was a broken region (at MIDI 75 the pitch within a loop had
+    # an SD of 59.9 cents and a periodicity of 0.51, against 0.99 for a healthy
+    # note, and the tenor once spent 37% of its time there). After v42 moved to
+    # male8 spk7, 65-68 measures clean (periodicity 0.987-0.990), but **nothing
+    # above 68 has been measured**. Raising the limit means sweeping note by note
+    # first; do not simply inherit the old limit and do not widen it blindly.
+    # v42 (2026-08-16): the lead voice moved from **bass1 to male8 spk7
+    # (Tenor-5)**.
+    # Live, the report was "noise on B3, none on C4, none on A3" together with "B3
+    # is also fine sometimes". Sweeping the bank note by note found the cause:
+    # **bass1 is broken at MIDI 65-68** (periodicity 0.790-0.881, pitch SD 14-25
+    # cents, against 0.99 for a healthy note), and voice leading chooses which note
+    # to take from the harmonic context, so the same sung note sometimes lands on a
+    # broken one and sometimes does not, which is the intermittency.
+    # Measured from a dump, the share of notes landing on broken ones was 18.04%
+    # for the bass and 5.15% for the tenor in the old configuration, and after v41
+    # it was 0% for the bass and 3.65% for the tenor. So v41 had already fixed the
+    # bass, and what remained was the tenor.
+    # Why change the model rather than narrow the range: lowering the upper limit
+    # to 64 would also reach zero, at the cost of 3.65% of notes being folded by an
+    # octave, which trades one defect for another. **male8 spk7 is clean over the
+    # same range** (65-68, periodicity 0.987-0.990, SD 5.0-7.6 cents), and that
+    # weight is already on disk, since the ensemble members have been using it, so
+    # it costs nothing extra.
+    # v31 used bass1 because there was no second male weight on hand; once male8
+    # was trained on 2026-08-15 that premise no longer held, and this is the change
+    # that did not follow at the time.
     VOICES.insert(1, ("tenor", "reflow-male8/model_40000.pt", 7, 0.8,
-                      # v41（08-16）：+7 → **+6**。掃描顯示 +6 落核心 (E3-E4)
-                      # 比例最高（96.3% vs +7 的 94.9%）；與 bass(-8) 的間距
-                      # ＝14 半音（08-17 更正：原註「+9」是算錯的）。
-                      # ⚠ 08-17 review #10：**--vl 2 下這個位移是惰性的**——
-                      # sh 只有 vi==0（bass）與空候選 fallback 會讀，上聲部
-                      # 實際唱哪個音由 voice-leading 的音域/評分決定，所以那
-                      # 個 96.3% 描述的是掃描器的口徑、不是現行系統；要動
-                      # tenor 的音區，真正的旋鈕是音域 (43,68) 與其中心。
+                      # v41 (2026-08-16): +7 became **+6**. The sweep showed +6
+                      # puts the highest share inside the core E3-E4, 96.3%
+                      # against 94.9% for +7, and the interval from the bass at -8
+                      # is 14 semitones (corrected 2026-08-17; the original note
+                      # of "+9" was an arithmetic error).
+                      # Review #10, 2026-08-17: **under --vl 2 this shift is
+                      # inert**. sh is read only for vi == 0, the bass, and as a
+                      # fallback when the candidate set is empty; which note an
+                      # upper part actually sings is decided by voice leading from
+                      # the range and the scoring. So that 96.3% describes the
+                      # sweeper's terms and not the current system. To move the
+                      # tenor's register, the real control is the range (43, 68)
+                      # and its centre.
                       (43, 68), 6, False))
-# --out-map（08-18 Harry：「neural/live/live+neural 都要能分聲道」）。要在
-# VOICES 定案（--tenor 插入）之後才解析，長度才對得上。None＝下面所有
-# OMAP 分支都不走＝原路徑逐位元不變（Regime A，--file 前後比對驗證）。
+# --out-map (2026-08-18: neural, live and live+neural should all be routable). It
+# must be parsed after VOICES is settled, that is, after --tenor has inserted its
+# part, so the lengths match. None skips every OMAP branch below and leaves the
+# original path bit-identical (regime A, verified by comparing --file runs before
+# and after).
 OMAP = None
 NCH = 2
 if a.out_map:
     OMAP = [int(t) for t in str(a.out_map).split(",")]
     if len(OMAP) != len(VOICES) or min(OMAP) < 0:
-        raise SystemExit(f"--out-map 要 {len(VOICES)} 個非負聲道（順序 "
+        raise SystemExit(f"--out-map needs {len(VOICES)} non-negative channels, in the order "
                          f"{','.join(nm for nm, *_x in VOICES)}），"
-                         f"拿到 {a.out_map!r}")
+                         f"got {a.out_map!r}")
     NCH = max(max(OMAP) + 1, 2)
-NOTE_S = 2.0                             # 每音渲染秒數
-LOOP_A, LOOP_B = int(0.5 * SR), int(1.8 * SR)   # 循環區間
-XF = int(0.05 * SR)                      # 循環回捲 crossfade
+NOTE_S = 2.0                             # seconds rendered per note
+LOOP_A, LOOP_B = int(0.5 * SR), int(1.8 * SR)   # the loop region
+XF = int(0.05 * SR)                      # crossfade at the loop wrap
 
-# v16 多母音層（--vowels 開才用）：0619 素材的明暗五層，Harry 08-13 耳測
-# 認可。(tag, src_wav, t0, t1, src_tilt_dB)。⚠ src_tilt 欄位 v17 起已無
-# 消費者（tilt 選層判死），但整個 tuple 的 repr 進快取 hash（下方 _ck）
-# ——動任何一欄＝十五個層庫全部重渲，別動。
-# ⚠ 這條路徑的字串進 VOWEL_LAYERS 的 repr、再進下方 _ck 的快取 hash。
-# 換機器＝快取 key 換一次＝層庫重渲一次（凍結配置不帶 --vowels，不影響上台）。
+# v16 multiple vowel layers, used only with --vowels: five layers from the
+# 2026-06-19 material spanning dark to bright, approved by ear on 2026-08-13.
+# Each is (tag, src_wav, t0, t1, src_tilt_dB). The src_tilt field has had no
+# consumer since v17, when selecting a layer by tilt was abandoned, but the repr
+# of the whole tuple enters the cache hash below (_ck), so changing any field
+# re-renders all fifteen layer banks. Do not change them.
+# This path's string enters the repr of VOWEL_LAYERS and then the cache hash in
+# _ck below. Moving to another machine changes the cache key once and re-renders
+# the layer banks once; the frozen configuration does not pass --vowels, so this
+# does not affect a performance.
 import sys as _sys, pathlib as _pl  # noqa: E402
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent.parent))
 from config import VOWEL_CLIPS as _VOWEL_CLIPS  # noqa: E402
 _C0619 = str(_VOWEL_CLIPS)
-# v21（08-13 驗屍後重挑）：**依母音挑，不再依亮度**。舊版五層是照
-# spectral tilt 排序撈的，實測母音＝[嗚,喔,咿,喔,啊]——沒有欸、喔佔三席，
-# 「喔欸咿嗚啊」標籤純屬順序假設（Harry 三次耳判逐條命中：咿啊順、欸分
-# 不出來、喔嗚沒試出來、喔聽起來像欸）。新選法＝vowel_layer_rebuild：
-# 對語料每 300ms 窗量 F1/F2 → 併同母音連續段 → 取 ≥0.7s 最像的 run 的
-# 中心 ±0.5s（渲染 encode 會吃窗中心 ±0.93s 上下文，短窗會混進隔壁音素）。
-# 括號內＝該段實測 (F1,F2)；順序必須與校準 labels 同序（層 i ↔ 類 i）。
-# ⚠ v22 選法改成**渲後選**（vowel_render_select）：源端像不像不是判準
-#   ——Harry 現場錄的嗚源端 d=0.11（全場最準）渲完仍歪，語料某段源端普通
-#   渲完卻乾淨＝哪段 units 活得過模型像抽籤。所以候選全渲一遍、用渲後
-#   距離挑。存活率（每母音 30-38 候選）：啊 33、欸 29、咿 29、嗚 6、
-#   **喔 0＝判死**（最佳候選也只渲成嗚 381/943）。這是模型邊界不是
-#   發音問題，別再拿他的耳朵試。
-# ⚠ v23 血訓（Harry「這版本不如上個」，當場量出四層 HNR 全掉 1-6dB）：
-#   只用共振峰距離挑＝優化了準確度、賠掉乾淨度（同一個 clip 只差窗口
-#   位置就差 6dB）。判準改**兩段式**：先過母音正確＋d≤0.25，再取 HNR
-#   最高者。現行四層有兩層來自他 08-13 現場錄音（欸/嗚），憑音質贏。
+# v21 (re-selected after the post-mortem of 2026-08-13): **chosen by vowel, no
+# longer by brightness**. The older five layers were taken by sorting on spectral
+# tilt, and measured they were [oo, oh, ee, oh, ah]: no eh at all, and oh took
+# three of the five slots, so the labels "oh, eh, ee, oo, ah" were purely an
+# assumption about the ordering. Three rounds of listening confirmed it item by
+# item: ee and ah were right, eh could not be told apart, oo and oh were never
+# reached, and oh sounded like eh. The new selection is vowel_layer_rebuild:
+# measure F1 and F2 over 300 ms windows of the corpus, merge consecutive spans of
+# the same vowel, and take the centre plus or minus 0.5 s of the most
+# representative run of 0.7 s or longer. The rendering encoder takes plus or minus
+# 0.93 s of context around the window centre, so a short window mixes in the
+# neighbouring phoneme.
+# The values in brackets are that span's measured (F1, F2); the order must match
+# the calibration labels, so that layer i corresponds to class i.
+# v22 changed the selection to **choosing after rendering**
+#   (vowel_render_select): how close the source is turns out not to be the
+#   criterion. An oo recorded live measured d = 0.11 at the source, the closest of
+#   the whole session, and still came out wrong after rendering, while an ordinary
+#   span of the corpus rendered cleanly. Which units survive the model is close to
+#   a lottery, so every candidate is rendered and chosen on the rendered distance.
+#   Survival rates, from 30-38 candidates per vowel: ah 33, eh 29, ee 29, oo 6,
+#   and **oh 0, which is fatal** (even the best candidate rendered as oo, 381 of
+#   943). This is a boundary of the model and not a problem of pronunciation, so
+#   stop testing it by ear.
+# The lesson of v23 ("this version is worse than the last", and all four layers
+#   measured 1-6 dB down in harmonic-to-noise ratio on the spot): selecting on
+#   formant distance alone optimised accuracy and paid for it in cleanliness; the
+#   same clip differs by 6 dB with only the window position changed. The criterion
+#   became **two-stage**: first require the vowel to be correct with d at or below
+#   0.25, then take the highest harmonic-to-noise ratio. Two of the current four
+#   layers come from the live recordings of 2026-08-13, the eh and the oo, and they
+#   won on sound quality.
+# The vowel tags below stay in Chinese on purpose: the repr of each tuple enters
+# the cache hash (_ck), so changing one character would re-render all fifteen
+# layer banks. They read oh, eh, ee, oo, ah.
 VOWEL_LAYERS = [("喔", f"{_C0619}/clip_0022.wav", 1.75, 2.75, 0.0),   # 479/700
                 ("欸", f"{_C0619}/clip_0143.wav", 1.67, 2.67, 0.0),   # 609/1749
                 ("咿", f"{_C0619}/clip_0155.wav", 3.47, 4.47, 0.0),   # 264/2331
                 ("嗚", f"{_C0619}/clip_0035.wav", 2.75, 3.75, 0.0),   # 320/794
                 ("啊", f"{_C0619}/clip_0009.wav", 0.93, 1.93, 0.0)]   # 717/1101
-# ⚠ Harry 08-13 耳裁：**回 v21 這組**（HNR 量測說 v23 那組每層乾淨 1-3dB，
-# 他聽起來仍偏好這組＝指標與耳朵不一致時以耳朵為準，量測只擋工程退化）。
-# v23 那組（欸/咿/嗚/啊，兩層來自他現場錄音）留在 commit 10bdf953 可回。
-# 分類器的五個類別（校準儀式 lip_ring_calib.LABELS 同序）——層可以比類別
-# 少（喔渲不出來），所以層→類別要明寫，不能再靠 index 相同的巧合。
+# Judged by ear on 2026-08-13: **return to this v21 set**. The harmonic-to-noise
+# measurement said the v23 set was 1-3 dB cleaner per layer, and this set was still
+# preferred by ear. When the metric and the ear disagree, the ear decides and the
+# measurement only guards against engineering regressions.
+# The v23 set (eh, ee, oo, ah, two of them from live recordings) is preserved in
+# commit 10bdf953 and can be restored.
+# The classifier has five classes, in the same order as lip_ring_calib.LABELS in
+# the calibration ritual. There may be fewer layers than classes, since oh cannot
+# be rendered, so the layer-to-class mapping is written out explicitly rather than
+# relying on the indices happening to match.
+# Class labels, oh / eh / ee / oo / ah, kept in Chinese to match VOWEL_LAYERS.
 VOWEL_NAMES = ["喔", "欸", "咿", "嗚", "啊"]
-L_MID = 4                                # 無鏡頭/退路層＝啊（正典音庫同款）
-# v20 母音子集（--layers）：模型仍出五類機率，取子集後重正規化＝
-# 「在這幾個母音之中他唱的是哪個」的條件機率。庫/快取一個 byte 不動，
-# 換子集不用重渲。
+L_MID = 4                                # the fallback layer with no camera: ah, the same
+                                         # as the reference bank
+# v20 vowel subset (--layers): the model still produces five class probabilities,
+# and taking a subset and renormalising gives the conditional probability of which
+# of these vowels is being sung. Not one byte of the banks or the cache changes, so
+# switching subsets needs no re-rendering.
 _LSEL = list(range(len(VOWEL_LAYERS)))
 if a.layers.strip():
     _LSEL = sorted({int(s) for s in a.layers.split(",") if s.strip() != ""})
     assert _LSEL and all(0 <= i < len(VOWEL_LAYERS) for i in _LSEL), _LSEL
 _NSEL = len(_LSEL)
-# v22：層 → 分類器類別（層數 < 類別數，喔沒有層＝它的機率被重正規化掉）
+# v22: layer to classifier class. There are fewer layers than classes, since oh
+# has no layer, so its probability is renormalised away.
 _LCLS = [VOWEL_NAMES.index(t) for (t, *_r) in VOWEL_LAYERS]
-assert len(set(_LCLS)) == len(_LCLS), "兩層對到同一個母音類別"
-_LDEF = _LSEL.index(L_MID) if L_MID in _LSEL else _NSEL // 2   # 退路層
-# v17：無鏡頭/無校準檔時的權重退路＝預設層一熱向量
+assert len(set(_LCLS)) == len(_LCLS), "two layers map to the same vowel class"
+_LDEF = _LSEL.index(L_MID) if L_MID in _LSEL else _NSEL // 2   # fallback layer
+# v17: with no camera or no calibration file, the weights fall back to a one-hot
+# vector on the default layer.
 _VW_MID = np.zeros(_NSEL, dtype="float32")
 _VW_MID[_LDEF] = 1.0
 
 
 def _sub(p5):
-    """分類器五類機率 → 在用層的權重（取對應類別後重正規化；近零＝退
-    預設層）。喔沒有層＝它的機率在這裡被歸掉＝「在做得到的母音之中，
-    他唱的是哪個」。"""
+    """The classifier's five class probabilities to weights over the layers in
+    use: take the corresponding classes and renormalise, falling back to the
+    default layer when they are near zero. oh has no layer, so its probability is
+    zeroed here, which makes this the conditional probability of which of the
+    achievable vowels is being sung."""
     q = p5[[_LCLS[i] for i in _LSEL]]
     s = float(q.sum())
     return (q / s).astype("float32") if s > 1e-6 else _VW_MID
 
 
-_SEL_NAMES = [VOWEL_NAMES[_LCLS[i]] for i in _LSEL]   # 層 index → 母音名
+_SEL_NAMES = [VOWEL_NAMES[_LCLS[i]] for i in _LSEL]   # layer index to vowel name
 if a.vowels:
     print(f"[field] vowel set {'/'.join(_SEL_NAMES)}"
           + (f", weight smoothing {a.vw_tau}s" if a.vw_tau > 0 else ""),
           flush=True)
 
-# vowels 開＝快取 key 納入層定義＋"vowels1"＝落到**不同的 bank_ 目錄**
-# ＝現行快取一個 byte 都不動＝隨時 --vowels 0 退回
-# 08-17（review #3）：key 只取**會進渲染**的欄位（名/模型/spk/gain/音域）。
-# sh 與 th 是播放層的和聲邏輯，改它們渲出來的音庫一個 byte 都不變——舊 key
-# 用 repr(VOICES) 整包，v41/v42 調移調時八個 bank 全部陪葬重渲（~1 分鐘/個），
-# 首次切進 bank 模式還會撞 respond_shell 的 30s 切換看門狗。
+# With vowels on, the cache key includes the layer definitions plus "vowels1", so
+# it lands in **a different bank_ directory**, not one byte of the existing cache
+# changes, and --vowels 0 can be used to go back at any time.
+# Review #3, 2026-08-17: the key takes only the fields that **enter the render**,
+# that is, the name, model, spk, gain and range. sh and th are harmony logic in the
+# playback layer, and changing them leaves the rendered banks byte-identical. The
+# old key used the whole repr(VOICES), so adjusting the shift in v41 and v42
+# re-rendered all eight banks, about a minute each, and the first switch into bank
+# mode then hit respond_shell's 30 s switch watchdog.
 _ckv = [(nm, mdl, sp, g, rng) for nm, mdl, sp, g, rng, _sh, _th in VOICES]
 _ck = hashlib.md5((repr(_ckv) + a.vowel_src + str(NOTE_S) + "perloop1"
                    + (repr(VOWEL_LAYERS) + "vowels1" if a.vowels else ""))
                   .encode()).hexdigest()[:10]
 BANK_DIR = f"scratchpad/bank_{_ck}"
-BANKS = {}                               # name -> {midi: np.ndarray(loop 段)}
-LBANKS = {}                              # v16: name -> [層][midi] -> ndarray
+BANKS = {}                               # name -> {midi: np.ndarray of the loop span}
+LBANKS = {}                              # v16: name -> [layer][midi] -> ndarray
 XBANKS = {}                              # v39: (name, model, spk) -> {midi: …}
-# v38 團員音色（--per-part）：**其他 speaker 就是真的其他歌手**（M4Singer
-# 的不同人合訓）。08-14 耳審 reflow-alto3（n_spk=3）：
-#   spk1 / spk2 ＝兩個人、都乾淨（Harry：「聽起來有像不同人」）
-#   spk3 **判死**——「明顯非人聲雜音以及音扭曲」。旁證：它的訓練資料最少
-#     （1182 檔 vs 1890/1933）、質心 3564Hz 三者最高＝高頻垃圾。沒吃飽。
+# v38 ensemble timbres (--per-part): **another speaker really is another singer**,
+# since these are different M4Singer people trained jointly. Reviewed by ear on
+# 2026-08-14 for reflow-alto3 (n_spk=3):
+#   spk1 and spk2 are two people, both clean ("they do sound like different
+#     people")
+#   spk3 was **rejected**: "clearly non-vocal noise and distorted pitch".
+#     Corroborating evidence: it has the least training data, 1182 files against
+#     1890 and 1933, and the highest spectral centroid of the three at 3564 Hz,
+#     which is high-frequency rubbish. It was undertrained.
 #
-# v39（08-15）：欄位從 spk 擴成 **(模型, spk)** ＝借的人不必再跟領唱同一顆
-# 模型。v38 那句「bass/sop 的模型 n_spk=1＝沒有第二個人可借」就此作廢——
-# reflow-fem8 / reflow-male8（各 8 位 M4Singer 真人，40000 步）已訓好，
-# Harry 08-15 耳裁 fem8「都可以用」、male8「都先過，分得開但不明顯」。
-# **領唱刻意不換**（他的裁決）：現行三個聲音是他一路耳裁通過的，viva 前
-# 11 天不動既有路徑。所以這是純加法——領唱照舊，團員從「複製領唱＋失諧」
-# 升級成真的別人。
+# v39 (2026-08-15): the field widened from spk to **(model, spk)**, so a borrowed
+# singer need not share the lead's model. v38's remark that the bass and soprano
+# models have n_spk=1 and therefore no second person to borrow is now void:
+# reflow-fem8 and reflow-male8, each 8 real M4Singer people at 40000 steps, have
+# been trained, and on 2026-08-15 fem8 was judged "all usable" and male8 "all pass
+# for now, distinguishable but not markedly".
+# **The lead voices are deliberately unchanged**, by decision: the three current
+# voices each passed by ear along the way, and eleven days before the viva the
+# existing path is not touched. So this is purely additive: the leads stay as they
+# are while the ensemble members are upgraded from a detuned copy of the lead to
+# genuinely other people.
 #
-# 借誰照**音域**配，不照檔案數量（08-15 血訓：檔數不是門檻，455 檔的
-# Soprano-2 在 40k 可用）：
-#   bass (36-68) ← male8 三位 Bass
-#   tenor(43-68) ← male8 的 Tenor-1/3/5（中位 61/57/52＝散開）
-#   alto (50-80) ← fem8 的 Alto-1/4/5（避開 Alto-6＝領唱 alto3 spk2 同一人）
-#   sop  (53-84) ← fem8 三位 Soprano
-# ⚠ 團員音庫是照**該聲部的音域**渲的（lo/hi 取領唱那欄），不是照借來那位
-#   的舒適區——F24：音域才是決定音色類型的東西。借高音的人來唱低聲部會
-#   進破音區，所以上面才照中位數配，不是隨便抓三個。
+# Who is borrowed is matched by **range**, not by the number of files (the lesson
+# of 2026-08-15: file count is not the criterion, and Soprano-2 with 455 files is
+# usable at 40k):
+#   bass  (36-68) <- the three basses of male8
+#   tenor (43-68) <- male8's Tenor-1, 3 and 5 (medians 61, 57 and 52, well spread)
+#   alto  (50-80) <- fem8's Alto-1, 4 and 5, avoiding Alto-6, who is the same
+#                    person as the lead alto3 spk2
+#   sop   (53-84) <- the three sopranos of fem8
+# The members' banks are rendered over **that part's range**, taking lo and hi
+#   from the lead's entry, and not over the borrowed singer's comfortable region.
+#   F24: the range is what decides the type of timbre. Borrowing a high voice for a
+#   low part pushes it into the broken region, which is why the assignments above
+#   follow the medians rather than taking any three.
 _M8 = "reflow-male8/model_40000.pt"   # 1-3 Bass-1/2/3；4-8 Tenor-1/2/3/5/7
 _F8 = "reflow-fem8/model_40000.pt"    # 1-3 Soprano-1/2/3；4-8 Alto-1/4/5/6/7
-# ⚠ 08-15 耳裁（v39c）：初版一部借三位，Harry live 判「有雜音」，離線逐位
-# 單獨聽（各在**該聲部音域**渲一段、等響）判出 **12 位裡 8 位是壞的**：
-#   壞 Bass-1 Bass-3 / Tenor-1 Tenor-3 / Alto-1 Alto-4 / Soprano-1 Soprano-2
-#   留 Bass-2      / Tenor-5        / Alto-5        / Soprano-3
-# **同一批人早上在 probe 全部判可用**（fem8「都可以用」、male8「都先過」）。
-# probe 用一組共用音、音庫用整個聲部音域跑滿 ⇒ **probe 的合格不轉移到音庫**，
-# 新歌手一律要在音庫這條路徑上重聽一次（F26）。
-# 音域假設被自己的資料推翻：Bass-1(壞)/Bass-2(留) 音域統計幾乎相同；被推得
-# 最遠的 Tenor-5 反而是留下的那個。唯一與判決相關的是**訓練檔數**——存活四位
-# 全 ≥1165 檔、判壞八位除 Bass-1(1758) 外全 ≤1073。當挑候選的線索，不當預測器
-# （今天已被三支儀器騙過：週期性、頻譜平坦度、dump）。
-MEM_SPK = {"bass":  [(_M8, 2)],      # Bass-2    1656 檔 ⚠ C2-D2 有壞音——
-           #   bass -8（v41）之後那段可達；--mem-real 1 之前要先逐音重驗
-           "tenor": [(_M8, 7)],      # Tenor-5   1224 檔 ⚠ v42 起＝領唱同一人
-           #   （領唱嘴換成 male8 spk7）——播放端會自動排除（見 _avail 的
-           #   領唱排除），留在名單只當紀錄；male8 其餘 Tenor 全數耳裁判壞
-           #   ＝tenor 現況**沒有**可借的真人
-           "alto":  [(_F8, 6)],      # Alto-5    1934 檔
-           "sop":   [(_F8, 3)]}      # Soprano-3 1165 檔
+# Judged by ear on 2026-08-15 (v39c): the first version borrowed three singers per
+# part and was judged noisy live. Listening to each one separately offline, with a
+# span rendered over **that part's range** at matched loudness, found **8 of the 12
+# to be bad**:
+#   bad  Bass-1, Bass-3 / Tenor-1, Tenor-3 / Alto-1, Alto-4 / Soprano-1, Soprano-2
+#   kept Bass-2        / Tenor-5          / Alto-5         / Soprano-3
+# **The same people had all passed the probe that morning** (fem8 "all usable",
+# male8 "all pass for now"). The probe uses one shared set of notes while a bank
+# runs the whole range of a part, so **passing the probe does not transfer to the
+# bank**, and a new singer must always be listened to again on the bank path
+# (F26).
+# The range hypothesis was overturned by its own data: the range statistics of
+# Bass-1, rejected, and Bass-2, kept, are almost identical, and Tenor-5, pushed
+# furthest from its own region, is the one that was kept. The only thing that
+# correlates with the judgement is **the number of training files**: all four
+# survivors have 1165 or more, and all eight rejected have 1073 or fewer except
+# Bass-1 at 1758. Treat it as a hint when choosing candidates and never as a
+# predictor; three instruments have already been fooled today, periodicity,
+# spectral flatness and the dump.
+MEM_SPK = {"bass":  [(_M8, 2)],      # Bass-2, 1656 files. C2-D2 contains broken notes;
+           #   that region is reachable after the bass moved to -8 in v41, so
+           #   re-verify note by note before using --mem-real 1
+           "tenor": [(_M8, 7)],      # Tenor-5, 1224 files. From v42 this is the same person as the lead
+           #   (the lead voice became male8 spk7). The playback side excludes it
+           #   automatically (see the lead exclusion in _avail); it stays on the
+           #   list only as a record. Every other tenor in male8 was rejected by
+           #   ear, so the tenor currently has **no** real singer to borrow.
+           "alto":  [(_F8, 6)],      # Alto-5, 1934 files
+           "sop":   [(_F8, 3)]}      # Soprano-3, 1165 files
 
 
 def _savez_atomic(path, bank):
-    """快取落檔（原子）：先寫 tmp 再 os.replace。np.savez 寫到一半被打斷
-    （切換看門狗 SIGINT、關機、磁碟滿）會留下半個 zip——之後每次啟動都在
-    np.load 炸掉；更糟的一型是「殘缺但合法」：zip entry 邊界被斷＝短 bank
-    靜默載入＝某聲部整場被折進殘存的低八度、無任何錯誤（08-17 review #14
-    三種毒法都實際重現過）。"""
+    """Write the cache atomically: write a temporary file, then os.replace.
+    An np.savez interrupted half-way, by the switch watchdog's SIGINT, a shutdown
+    or a full disk, leaves half a zip, and every later start then fails inside
+    np.load. The worse form is "incomplete but valid": a zip entry cut at its
+    boundary loads silently as a short bank, and one part spends the whole evening
+    folded into whatever low octave survived, with no error at all. Review #14,
+    2026-08-17, reproduced all three failure modes."""
     tmp = path + ".tmp.npz"
     np.savez(tmp, **{str(k): v for k, v in bank.items()})
     os.replace(tmp, path)
 
 
 def _load_bank(path, lo, hi, what):
-    """快取載入＋完整性驗證：載得起來、且音符正好蓋滿 lo..hi 才算命中；
-    否則回 None＝當 cache miss 重渲（壞檔由 _savez_atomic 原子覆蓋）。"""
+    """Load the cache and verify it: a hit requires that it loads and that the
+    notes cover lo..hi exactly. Otherwise it returns None and is treated as a cache
+    miss and re-rendered; a corrupt file is overwritten atomically by
+    _savez_atomic."""
     try:
         z = np.load(path)
         bank = {int(k): z[k] for k in z.files}
-    except Exception as e:                   # BadZipFile／半截 entry／權限…
+    except Exception as e:                   # BadZipFile, a truncated entry, permissions and so on
         print(f"⚠ [bank] {what} cache unreadable ({e}) → re-rendering",
               flush=True)
         return None
@@ -575,12 +706,15 @@ def _load_bank(path, lo, hi, what):
 
 
 def _render_layer(svc, UU, lo, hi):
-    """v16：用給定單元 UU 渲整個音域 → {midi: 純循環段}（--vowels 專用）。
+    """v16: render the whole range from the given units UU into {midi: the loop
+    span alone}; used only by --vowels.
 
-    ⚠ 本體是下面 _build_banks 主渲染迴圈的**刻意逐行複製**——「預設路徑
-    零行為變化」是硬約束，優先於 DRY：既有那圈一個字都不動，正典品質就
-    不可能被這次改動碰到。渲法（f0/vol/mask/seed/迴圈裁剪）若要改，兩處
-    都要改。
+    The body is a **deliberate line-for-line copy** of the main render loop in
+    _build_banks below. "No behavioural change on the default path" is a hard
+    constraint that outranks avoiding repetition: with not one character of the
+    existing loop touched, this change cannot possibly reach the reference quality.
+    If the rendering (f0, vol, mask, seed, loop trimming) is ever changed, both
+    places must change.
     """
     import torch
     nb = UU.size(1)
@@ -590,7 +724,7 @@ def _render_layer(svc, UU, lo, hi):
         for m in range(lo, hi + 1):
             f0 = np.full(NF, 440.0 * 2 ** ((m - 69) / 12.0))
             vol = np.full(NF, 0.06)
-            vol[:4] = np.linspace(0, 0.06, 4)      # 去 onset 突波
+            vol[:4] = np.linspace(0, 0.06, 4)      # remove the onset spike
             vol_t = (torch.from_numpy(vol).float()
                      .to(svc.device)[None, :, None])
             mask = torch.ones(1, NF * HOP, device=svc.device)
@@ -612,14 +746,19 @@ def _render_layer(svc, UU, lo, hi):
 
 
 def _build_mem_banks():
-    """v38：團員用的「其他歌手」音庫（--per-part ≥2 且該模型 n_spk>1 才跑）。
+    """v38: the "other singer" banks used by the ensemble members; built only when
+    --per-part is 2 or more and that model has n_spk above 1.
 
-    ⚠ 渲染本體是 _build_banks 主迴圈的**刻意逐行複製**（同 _render_layer
-    的理由）：既有那圈一個字都不動＝正典品質不可能被這次改動碰到。渲法
-    （f0/vol/mask/seed/迴圈裁剪）若要改，三處都要改。
-    快取檔名帶模型與 spk（`<nm>_<模型>_s<spk>.npz`，v39 起加模型）＝跟領唱
-    的音庫、跟別顆模型的同號 spk 都互不覆蓋，也不必動 BANK_DIR 的 hash
-    （換模型或換 spk 就是換檔名，不會讀到過期的東西）。
+    The rendering body is a **deliberate line-for-line copy** of the main loop in
+    _build_banks, for the same reason as _render_layer: not one character of the
+    existing loop is touched, so this change cannot reach the reference quality. If
+    the rendering (f0, vol, mask, seed, loop trimming) is ever changed, all three
+    places must change.
+    The cache file name carries the model and the spk, `<nm>_<model>_s<spk>.npz`,
+    with the model added in v39, so it can never overwrite the lead's bank or the
+    same spk number from another model, and the BANK_DIR hash need not change:
+    switching model or spk simply changes the file name, so nothing stale is ever
+    read.
     """
     import torch
     import spike_stream6 as S
@@ -627,7 +766,8 @@ def _build_mem_banks():
              for (m2, s2) in MEM_SPK.get(nm, [])]
     if not pairs:
         return
-    # v39：模型改由 MEM_SPK 那欄決定，這裡只留領唱的 gain 與**音域**
+    # v39: the model now comes from the MEM_SPK entry, so only the lead's gain and
+    # **range** are kept here.
     spec = {nm: (g, lo, hi)
             for nm, _mdl, _sp, g, (lo, hi), _sh, _th in VOICES}
     mic0, _ = sf.read(a.vowel_src, dtype="float64", always_2d=True)
@@ -689,7 +829,7 @@ def _build_mem_banks():
                 out_[:xfs] = seg[:xfs] * lin + seg[L_:L_ + xfs] * (1 - lin)
                 bank[m] = out_
                 del au
-                if (m - lo) % 8 == 7:        # 進度列印＝餵 shell 的切換看門狗
+                if (m - lo) % 8 == 7:        # progress printing, which feeds the shell's switch watchdog
                     print(f"[bank] {nm} {tag} spk{sp2} rendering "
                           f"{m - lo + 1}/{hi - lo + 1}", flush=True)
         _savez_atomic(path, bank)
@@ -699,9 +839,12 @@ def _build_mem_banks():
 
 
 def _norm_layers(nm):
-    """v17（審查 A4）：同 midi 各層 rms 對齊 mid 層——實測層間響度差可達
-    4dB，權重和恆 1 仍會「改口型＝改音量」。只動記憶體不動快取檔；mid 層
-    一個 byte 不動＝一熱退化仍與單層逐位元同。"""
+    """v17 (review A4): at a given midi note, align the rms of every layer to the
+    middle layer. Measured, the loudness between layers differs by as much as 4 dB,
+    so even with the weights summing to 1, changing the mouth shape changes the
+    level. This touches memory only and never the cache files, and the middle layer
+    is left byte-identical, so degenerating to one-hot is still bit-identical to a
+    single layer."""
     for m_, ref in LBANKS[nm][L_MID].items():
         r0 = float(np.sqrt((ref ** 2).mean()))
         for li in range(len(VOWEL_LAYERS)):
@@ -714,7 +857,8 @@ def _norm_layers(nm):
 
 
 def _build_banks():
-    """正典渲音庫（首次 ~1 分鐘；之後快取秒開）。"""
+    """Render the banks at reference quality: about a minute the first time, and
+    seconds from cache afterwards."""
     import torch
     import spike_stream6 as S
     os.makedirs(BANK_DIR, exist_ok=True)
@@ -724,7 +868,8 @@ def _build_banks():
     NF = int(NOTE_S * SR / HOP)
     for nm, mdl, sp, g, (lo, hi), _sh, _th in VOICES:
         path = f"{BANK_DIR}/{nm}.npz"
-        # v16：層庫各存一檔；要全齊才算命中（缺一就整個 voice 走渲染補齊）
+        # v16: each layer bank is stored in its own file, and a hit requires all
+        # of them; if one is missing the whole voice is re-rendered.
         lp = ([f"{BANK_DIR}/{nm}_L{li}.npz"
                for li in range(len(VOWEL_LAYERS))] if a.vowels else [])
         if (os.path.exists(path) and all(os.path.exists(p) for p in lp)
@@ -735,7 +880,7 @@ def _build_banks():
                 for li, p_ in enumerate(lp):
                     b_ = _load_bank(p_, lo, hi, f"{nm} L{li}")
                     if b_ is None:
-                        lb0 = None           # 任一層壞＝整個 voice 走重渲
+                        lb0 = None           # any bad layer means the whole voice is re-rendered
                         break
                     lb0.append(b_)
             if bk0 is not None and lb0 is not None:
@@ -771,7 +916,7 @@ def _build_banks():
             for m in range(lo, hi + 1):
                 f0 = np.full(NF, 440.0 * 2 ** ((m - 69) / 12.0))
                 vol = np.full(NF, 0.06)
-                vol[:4] = np.linspace(0, 0.06, 4)      # 去 onset 突波
+                vol[:4] = np.linspace(0, 0.06, 4)      # remove the onset spike
                 vol_t = (torch.from_numpy(vol).float()
                          .to(svc.device)[None, :, None])
                 mask = torch.ones(1, NF * HOP, device=svc.device)
@@ -780,11 +925,15 @@ def _build_banks():
                                units_override=UU[:, np.arange(NF) % nb],
                                feats=(f0, vol_t, mask), ratios=[None]
                                )[0].cpu().numpy()
-                # 取循環區、回捲 crossfade 藏接縫 → 存純循環段
+                # Take the loop region and hide the wrap join with a crossfade,
+                # then store the loop span alone.
                 seg = au[LOOP_A:LOOP_B + XF].astype("float32")
-                # R2B v2：整數週期迴圈——頭尾相關實測 0.96＝近週期素材，
-                # 等功率縫反而 +3dB 凸包；迴圈長取基頻週期整數倍＝相位
-                # 對齊，殘餘噪聲成分 5ms 線性小縫收掉
+                # R2B v2: an integer-period loop. The correlation between the head
+                # and the tail measures 0.96, so the material is nearly periodic and
+                # an equal-power join actually adds a +3 dB bump. Taking the loop
+                # length as a whole number of fundamental periods aligns the phase,
+                # and the residual noise component is closed with a 5 ms linear
+                # join.
                 T_ = SR / (440.0 * 2 ** ((m - 69) / 12.0))
                 L_ = int(round(round((LOOP_B - LOOP_A) / T_) * T_))
                 xfs = int(0.005 * SR)
@@ -793,7 +942,7 @@ def _build_banks():
                 out_[:xfs] = seg[:xfs] * lin + seg[L_:L_ + xfs] * (1 - lin)
                 bank[m] = out_
                 del au
-                if (m - lo) % 8 == 7:        # 進度列印＝餵 shell 的切換看門狗
+                if (m - lo) % 8 == 7:        # progress printing, which feeds the shell's switch watchdog
                     print(f"[bank] {nm} rendering {m - lo + 1}/{hi - lo + 1}",
                           flush=True)
         _savez_atomic(path, bank)
@@ -801,7 +950,8 @@ def _build_banks():
         print(f"[bank] {nm} rendered {len(bank)} notes "
               f"({time.time() - t0:.0f}s) → {path}", flush=True)
         if a.vowels:
-            # v16：同一張嘴、同一套渲法，只換單元來源＝五個明暗層音庫
+            # v16: the same voice and the same rendering, changing only the source
+            # of the units, gives five banks from dark to bright.
             LBANKS[nm] = []
             for li, (tag, src, lt0, lt1, _tl) in enumerate(VOWEL_LAYERS):
                 lpath = f"{BANK_DIR}/{nm}_L{li}.npz"
@@ -813,7 +963,7 @@ def _build_banks():
                         continue
                 mv, _sr = sf.read(src, dtype="float64", always_2d=True)
                 mv = mv[:, 0]
-                mid = int((lt0 + lt1) / 2 * SR / HOP)   # 窗中點（hop 座標）
+                mid = int((lt0 + lt1) / 2 * SR / HOP)   # the centre of the window, in hop coordinates
                 with torch.no_grad():
                     UL = svc.encode(mv[max(0, (mid - 40) * HOP):
                                        (mid + 40) * HOP])[:, 8:-8]
@@ -828,17 +978,26 @@ def _build_banks():
 
 
 def _norm_mem_banks():
-    """v39（Harry 08-15 live：「女聲好像蓋過男聲，至少我沒聽到男聲」）：
-    把借來的團員音庫**逐音**對齊該聲部領唱音庫的 rms。
+    """v39, from a live comment on 2026-08-15 ("the female voices seem to cover the
+    male ones; at least I could not hear the men"): align the rms of a borrowed
+    member bank to the lead bank of that part, **note by note**.
 
-    為什麼需要：下面的 MIXG 聲部平衡是拿**領唱**音庫量的，借來的音庫沒進
-    那個計算。實測（bank_853950ed4f 平均 rms）sop 借的三位比領唱大
-    4.3/4.8/4.9dB、tenor 借的兩位小 1.9/2.0dB ⇒ sop 整部約 +3.9dB、tenor
-    約 -1dB ＝中間開了 5dB 的縫。這是 --balance 被判死那條血訓的同一個坑
-    （量錯音庫），差別只在這次量漏了新加的那半。
-    ⚠ 逐音不是整體：不同歌手在音域兩端的響度曲線不一樣，整體對齊會讓某位
-      在高音處消失（同 _norm_layers 選逐音的理由）。
-    只動記憶體不動快取檔（同 _norm_layers）＝領唱與快取一個 byte 不動。
+    Why it is needed: the MIXG part balance below is measured from **the lead**
+    banks, and the borrowed banks never entered that calculation. Measured on the
+    mean rms of bank_853950ed4f, the three sopranos borrowed are louder than the
+    lead by
+    Why it is needed: the MIXG part balance below is measured from the lead banks,
+    and the borrowed banks never entered that calculation. Measured on the mean rms
+    of bank_853950ed4f, the three borrowed sopranos are 4.3, 4.8 and 4.9 dB louder
+    than the lead while the two borrowed tenors are 1.9 and 2.0 dB quieter, so the
+    soprano part sits about +3.9 dB and the tenor about -1 dB, opening a 5 dB gap.
+    This is the same trap as the lesson that killed --balance, measuring the wrong
+    bank; the difference is that this time the newly added half was left out.
+    Note by note, not overall: different singers have different loudness curves at
+    the ends of a range, and aligning overall makes one of them vanish in the high
+    register. The same reason _norm_layers works note by note.
+    This touches memory only and never the cache files, as _norm_layers does, so
+    the lead and the cache stay byte-identical.
     """
     for (nm, mdl, sp), bk in XBANKS.items():
         ref_bank = BANKS.get(nm)
@@ -855,23 +1014,29 @@ def _norm_mem_banks():
                 bk[m_] = (b_ * np.float32(r0 / r_)).astype("float32")
                 ds.append(20.0 * np.log10(r0 / r_))
         if ds:
-            # 印出來＝這一步有沒有真的做到看得見（裸奔是無聲的失敗）
+            # Print it, so whether this step really happened is visible; running
+            # bare is a silent failure.
             print(f"[mem-norm] {nm} {mdl.split('/')[0]} spk{sp}: "
-                  f"{np.mean(ds):+.1f}dB (逐音 {np.min(ds):+.1f}~"
+                  f"{np.mean(ds):+.1f}dB (per note {np.min(ds):+.1f} to "
                   f"{np.max(ds):+.1f})", flush=True)
 
 
 _build_banks()
 if a.per_part > 1 and a.mem_real and not a.vowels:
-    # --mem-real 0＝誰都不借（凍結配置）＝連渲/載都跳過（08-17 review #3：
-    # 原本照樣實例化 fem8+male8、渲/載 122 個音、常駐 ~28MB，而輸出端
-    # _avail=[] 讓它們永遠播不出來；展場機器缺 fem8 權重時甚至開機即死）。
-    # --vowels 開著時不借別的歌手：層庫（LBANKS）只有領唱那個 spk 的，
-    # 團員會拿到別人的嘴配自己的層＝混層對不上。要並存得先渲團員的層庫，
-    # 那是另一件事。母音線 08-13 已由 Harry 判「回到全啊」，不擋這次。
+    # --mem-real 0 borrows nobody, which is the frozen configuration, and skips
+    # rendering and loading entirely. Review #3, 2026-08-17: it used to instantiate
+    # fem8 and male8 anyway, render or load 122 notes and keep about 28 MB
+    # resident, while _avail = [] at the output meant they could never sound; on an
+    # exhibition machine without the fem8 weights it even died at start-up.
+    # With --vowels on, no other singer is borrowed: LBANKS holds layers only for
+    # the lead's spk, so a member would get someone else's voice against its own
+    # layers and the mixing would not line up. Supporting both would mean rendering
+    # the members' layer banks first, which is another matter. The vowel line was
+    # judged on 2026-08-13 as "back to ah throughout", so it does not block this.
     _build_mem_banks()
     _norm_mem_banks()
-# v32 聲部平衡：用**實測**音庫 rms 拉齊（+ --trim 的耳朵層）
+# v32 part balance: level using the **measured** rms of the banks, plus the ear
+# layer of --trim.
 MIXG = {nm: 1.0 for nm, *_x in VOICES}
 if a.balance or a.trim:
     _rms = {nm: float(np.mean([np.sqrt((b ** 2).mean())
@@ -884,7 +1049,7 @@ if a.balance or a.trim:
         if "=" in _t:
             _k, _v = _t.split("=")
             _k = _k.strip()
-            assert _k in MIXG, f"--trim 不認得的聲部 {_k}"
+            assert _k in MIXG, f"--trim does not recognise the part {_k}"
             MIXG[_k] *= 10 ** (float(_v) / 20.0)
     print("[mix] " + "  ".join(
         f"{nm} {20 * np.log10(MIXG[nm]):+.1f}dB" for nm, *_x in VOICES),
@@ -910,7 +1075,8 @@ class KeyTracker:
 
 
 def dia_step(m, root, deg):
-    """大調 root 上、m 的上方全音階 deg 度＝半音位移（deg 2=三度、4=五度）。"""
+    """Within the major root, the semitone offset to the note deg diatonic steps
+    above m (deg 2 is a third, 4 is a fifth)."""
     rel = (m - root) % 12
     idx = int(np.argmin([min(abs(rel - s), 12 - abs(rel - s)) for s in MAJ]))
     return MAJ[(idx + deg) % 7] + 12 * ((idx + deg) // 7) - MAJ[idx]
@@ -921,7 +1087,8 @@ def dia_third(m, root):
 
 
 def f0_autocorr(x):
-    """~46ms 窗的正規化自相關 f0（65–800Hz）；無聲回 0。零 ML、位準無感。"""
+    """f0 by normalised autocorrelation over a window of about 46 ms, from 65 to
+    800 Hz; silence returns 0. No machine learning, and indifferent to level."""
     x = x - x.mean()
     e = float(np.sqrt(np.mean(x * x)))
     if e < 1e-5:
@@ -934,15 +1101,16 @@ def f0_autocorr(x):
     ac = ac / ac[0]
     lo, hi = int(SR / 800), min(int(SR / 65), n - 1)
     k0 = lo + int(np.argmax(ac[lo:hi]))
-    if ac[k0] < 0.45:                     # 有聲判定只看原始峰（R2A#4：
-        return 0.0                        # 防護不得把弱聲降格成無聲）
+    if ac[k0] < 0.45:                     # voicing is decided on the raw peak alone (R2A#4:
+        return 0.0                        # the guard must not demote a weak voice to silence)
     k = k0
-    # review A14：次諧波防護——k/2 的峰若幾乎一樣高＝真基頻在高八度
+    # Review A14, subharmonic protection: if the peak at k/2 is almost as high, the
+    # real fundamental is an octave up.
     while k >= 2 * lo and ac[int(round(k / 2))] > 0.85 * ac[k]:
         k = int(round(k / 2))
     if ac[k] < 0.45:
-        k = k0                            # 減半候選太弱＝退回原峰
-    # 拋物線內插精化
+        k = k0                            # the halved candidate is too weak, so keep the original peak
+    # parabolic interpolation to refine it
     if 0 < k < n - 1:
         d = (ac[k - 1] - ac[k + 1]) / (2 * (ac[k - 1] - 2 * ac[k]
                                             + ac[k + 1]) + 1e-12)
@@ -951,16 +1119,22 @@ def f0_autocorr(x):
 
 
 hopN = max(1, int(a.hop * SR))
-# v17：嘴形二維錨點（lip_sweep2 全音域掃描校準；anchors 第 i 列對應
-# VOWEL_LAYERS 第 i 層＝v16.3 建立的對應，不動）。缺檔＝權重釘 mid 一熱
-# 並警告，不猜。（v16.2 聲音指紋 vowel_calib.npz 備用不再載——死於天使
-# 漏音污染，屍檢 Daily 08-13；嘴看不到喇叭。）
+# v17 two-dimensional mouth-shape anchors, calibrated by the full-range
+# lip_sweep2 sweep; row i of anchors corresponds to layer i of VOWEL_LAYERS, the
+# mapping established in v16.3, and is not changed. A missing file pins the
+# weights to a one-hot on the middle layer and warns, rather than guessing.
+# (The v16.2 voice fingerprint vowel_calib.npz is no longer loaded as a fallback:
+# it died of contamination by bleed from the parts, post-mortem in the daily note
+# for 2026-08-13. The mouth cannot see the speakers.)
 if a.vowels:
     try:
         _zl = np.load("scratchpad/vowel_lip_calib.npz")
         _VL_A, _VL_S = _zl["anchors"], _zl["scales"]
-        # 審查 S1/A5：錨點數不等於層數＝權重形狀炸 worker（全靜音假活著）；
-        # scale ≤0 或非有限＝NaN 三重放大。校準檔不合格＝停用不猜。
+        # Review S1/A5: if the number of anchors does not equal the number of
+        # layers, the weight shape blows up the worker, which then appears alive
+        # while silent; a scale at or below 0, or non-finite, amplifies NaN three
+        # times over. An invalid calibration file disables the feature rather than
+        # guessing.
         if (_VL_A.shape != (len(VOWEL_NAMES), 2)
                 or not np.isfinite(_VL_A).all()
                 or not np.isfinite(_VL_S).all() or (_VL_S <= 0).any()):
@@ -974,9 +1148,11 @@ if a.vowels:
         _VL_A = None
         print("⚠ [field] no vowel_lip_calib.npz = vowel field disabled (fixed mid)",
               flush=True)
-    # v17.1 整圈嘴錨點（scratchpad/lip_ring_calib.py 產；Harry 08-13
-    # 「為什麼不測整圈嘴」）：有此檔＝優先走整圈嘴、2D 留退路。驗證同
-    # S1/A5 標準（形狀/有限性/scale>0，不合格＝退 2D 不猜）。
+    # v17.1 full lip-ring anchors, produced by scratchpad/lip_ring_calib.py after
+    # the question "why not measure the whole ring of the mouth?" on 2026-08-13.
+    # If the file exists the ring is preferred and the 2D version is the fallback.
+    # Validation follows the same S1/A5 standard, shape, finiteness and scale above
+    # 0, and an invalid file falls back to 2D rather than guessing.
     _VR_A = None
     try:
         _zr = np.load("scratchpad/vowel_ring_calib.npz")
@@ -992,19 +1168,23 @@ if a.vowels:
             print(f"[field] full-ring mouth anchors loaded ({_VR_A.shape[0]} vowels x"
                   f" {_VR_A.shape[1]} dims)", flush=True)
     except FileNotFoundError:
-        pass                                 # 沒整圈校準＝用 2D
+        pass                                 # no ring calibration, so use the 2D version
 
-# ⚠ 與 scratchpad/lip_ring_calib.py 的 LIP_RING/ring_vec 是**刻意複製**，
-# 改一處要改兩處（_render_layer 同款紀律：校準與 live 特徵必須逐位元同）
+# LIP_RING and ring_vec here are a **deliberate copy** of the ones in
+# scratchpad/lip_ring_calib.py; changing one means changing both. The same
+# discipline as _render_layer: the calibration and the live features must be
+# bit-identical.
 LIP_RING = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405,
-            314, 17, 84, 181, 91, 146,           # 外圈 20
+            314, 17, 84, 181, 91, 146,           # outer ring, 20 points
             78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402,
-            317, 14, 87, 178, 88, 95]            # 內圈 20
+            317, 14, 87, 178, 88, 95]            # inner ring, 20 points
 
 
 def _ring_vec(LA, aspect):
-    """LA=(478,2) 正規化座標 → 80 維整圈嘴形：去平移（唇心）/去旋轉
-    （太陽穴連線）/去尺度（太陽穴距離）。x 乘長寬比＝幾何等距。"""
+    """LA, normalised (478, 2) coordinates, to an 80-dimensional lip-ring shape:
+    translation removed by the lip centre, rotation by the line between the
+    temples, and scale by the distance between them. x is multiplied by the aspect
+    ratio so the geometry is isometric."""
     pts = LA[LIP_RING].copy()
     pts[:, 0] *= aspect
     e0 = np.array([LA[234, 0] * aspect, LA[234, 1]])
@@ -1017,10 +1197,13 @@ def _ring_vec(LA, aspect):
     return ((pts - pts.mean(0)) @ R.T / sc).ravel()
 
 
-# v18 個人母音模型（scratchpad/vowel_ml_train.py 產，logistic 405 參數）：
-# 有此檔＝機率直接當混層權重，優先於錨點幾何。實驗判準（vowel_ml_probe，
-# 同資料同時間分塊 CV）：最近鄰 acc 0.81/**真類機率 0.57**、本模型
-# 0.89/**0.86**——live 那團「糊」量出來就是那個 0.57。驗證同 S1/A5。
+# v18 personal vowel model, produced by scratchpad/vowel_ml_train.py, a logistic
+# model with 405 parameters. If the file exists its probabilities are used directly
+# as the layer-mixing weights, in preference to the anchor geometry. Experimental
+# criterion (vowel_ml_probe, same data, blocked cross-validation over time):
+# nearest neighbour scored an accuracy of 0.81 with a **true-class probability of
+# 0.57**, this model 0.89 and **0.86**. The blur heard live is that 0.57 measured.
+# Validation follows the same S1/A5 standard.
 _VM_W = None
 if a.vowels:
     try:
@@ -1041,70 +1224,84 @@ if a.vowels:
             print(f"[field] vowel model loaded ({_VM_W.size + _VM_B.size} params, "
                   f"CV acc {float(_zm['cv_acc']):.2f})", flush=True)
     except FileNotFoundError:
-        pass                                 # 沒模型＝用錨點幾何
+        pass                                 # no model, so use the anchor geometry
 
-# v19 融合母音模型（scratchpad/vowel_fusion_train.py 產）：整圈嘴 80D
-# ＋MFCC 13D。Harry v18 live 判「欸分不出來、喔嗚也沒試出來、咿啊順」＝
-# 唇物理盲點（欸/咿 差在舌位、喔/嗚 差在前突＝正面鏡頭無深度）；聲學
-# 恰補這兩處（融合探針：欸/咿 0.79→0.94、總 acc 0.89→0.95、權重 0.94）。
-# 天使 1:1 漏音實測只吃 0-1pp ⇒ **不做頻譜扣除**（省一層對齊管線）。
-# ⚠ 下面的 MFCC 是 scratchpad/vowel_ml_probe.py::mfcc 的**刻意複製**——
-# 參數存在模型檔裡逐項核對，不符即拒載，免得兩份定義悄悄分家。
+# v19 fused vowel model, produced by scratchpad/vowel_fusion_train.py: the
+# 80-dimensional lip ring plus 13 MFCC dimensions. Live on v18 the judgement was
+# "eh cannot be told apart, oh and oo were never reached, ee and ah are fine",
+# which is a blind spot of lip physics: eh and ee differ in tongue position, and oh
+# and oo in protrusion, neither of which a frontal camera has depth for. The
+# acoustics cover exactly those two (fusion probe: eh and ee rose from 0.79 to
+# 0.94, overall accuracy from 0.89 to 0.95, weight 0.94).
+# Measured, 1:1 bleed from the parts costs only 0-1 percentage points, so **no
+# spectral subtraction is done**, which saves a whole alignment pipeline.
+# The MFCC below is a **deliberate copy** of scratchpad/vowel_ml_probe.py::mfcc.
+# Its parameters are stored in the model file and checked item by item, and a
+# mismatch refuses the load, so the two definitions cannot quietly diverge.
 _SG_W = None
-_SG_BASE = None          # v40 開場基線（校正完才不是 None）
-_SG_CAL = []             # v40 校正期間累積的特徵
-_SG_JAWQ = []            # v40 jawOpen 的滑動窗（算運動量）
-_SG_MTH = 0.0            # v40 運動否決門檻（0＝不否決＝舊行為）
+_SG_BASE = None          # v40 opening baseline; not None only once calibration has finished
+_SG_CAL = []             # features accumulated during v40 calibration
+_SG_JAWQ = []            # sliding window of jawOpen, for the movement measure
+_SG_MTH = 0.0            # v40 movement veto threshold (0 does not veto, the old behaviour)
 _SG_JC = 2
 _SG_MW = 15
 _SG_NEEDCAL = False
 if a.sing_gate:
     try:
-        # v40：auto **刻意仍指向舊模型**＝這個 commit 不改變任何現行行為。
-        # model3（三場次＋自校＋運動否決）要明寫路徑才會生效——它 08-15 live
-        # 實測仍會連續誤觸（sp 飽和到 1.00，閉嘴與手遮嘴都中），沒有資格
-        # 當預設。要試：--gate-model scratchpad/sing_gate_model3.npz
+        # v40: auto **deliberately still points at the older model**, so this
+        # commit changes no current behaviour. model3, trained across three
+        # sessions with self-calibration and a movement veto, takes effect only if
+        # its path is written out: measured live on 2026-08-15 it still triggered
+        # repeatedly by mistake, with sp saturating at 1.00 on both a closed mouth
+        # and a hand over the mouth, so it does not qualify as the default. To try
+        # it: --gate-model scratchpad/sing_gate_model3.npz
         _sgp = (a.gate_model if a.gate_model != "auto"
                 else "scratchpad/sing_gate_model.npz")
         _zs = np.load(_sgp)
         _SG_W, _SG_B = _zs["W"], float(_zs["b"])
         _SG_M, _SG_S, _SG_N = _zs["mean"], _zs["scale"], list(_zs["names"])
-        # v34.1：模型只吃**嘴/下巴**維度（idx）——全 52 維那版把眉毛/臉頰
-        # 也學進去（佔總權重 49%），同場次 acc 98.8% 但**跨場次只有 72.2%、
-        # 沒唱誤觸 47.5%**＝Harry 閉著嘴看到 sing 1.00 的原因。只留嘴/下巴
-        # 後跨場次 acc 93.4%、誤觸 0.0%。
+        # v34.1: the model takes only the **mouth and jaw** dimensions (idx). The
+        # full 52-dimension version also learned the eyebrows and cheeks, which
+        # carried 49% of the total weight, and scored 98.8% accuracy within a
+        # session but **only 72.2% across sessions with 47.5% false triggers while
+        # not singing**, which is why a closed mouth showed sing 1.00. Keeping only
+        # the mouth and jaw gives 93.4% across sessions with 0.0% false triggers.
         _SG_I = _zs["idx"]
         if (_SG_W.shape != _SG_M.shape or _SG_S.shape != _SG_M.shape
                 or len(_SG_N) != _SG_W.size or _SG_I.shape != _SG_W.shape
                 or not np.isfinite(_SG_W).all() or (_SG_S <= 0).any()):
-            print("⚠ [gate] 唱歌模型不合格＝退回幾何門控", flush=True)
+            print("! [gate] the singing model failed validation; falling back to the geometric gate", flush=True)
             _SG_W = None
         else:
-            _SG_CHK = [str(x) for x in _SG_N]   # 首幀對照（見下）
-            # v40：新契約的四個欄位。舊模型沒有＝全部退回舊行為（校正關、
-            # 否決關）＝**同一支碼同時支援兩顆模型**，不必分支兩條路。
+            _SG_CHK = [str(x) for x in _SG_N]   # checked against the first frame, see below
+            # v40: the four fields of the new contract. An older model has none of
+            # them and falls back to the old behaviour throughout, with calibration
+            # and the veto off, so **one piece of code supports both models**
+            # without branching into two paths.
             _SG_NEEDCAL = bool(int(_zs["calib"])) if "calib" in _zs else False
             _SG_JC = int(_zs["jaw_col"]) if "jaw_col" in _zs else 2
             _SG_MW = int(_zs["motion_win"]) if "motion_win" in _zs else 15
             _SG_MTH = (float(_zs["motion_th"]) if "motion_th" in _zs else 0.0)
-            if a.gate_motion_th >= 0:            # 旗標覆蓋（現場可調）
+            if a.gate_motion_th >= 0:            # the flag overrides it, adjustable live
                 _SG_MTH = a.gate_motion_th
-            # ⚠ cv 的語意：舊模型存的是**同場次**時間分塊 CV，卻被這行印成
-            #   cross-session（08-15 查出的誤標）。新模型存的是**留一場**
-            #   平均。所以標籤跟著模型走，不要再一律印 cross-session。
+            # What cv means: the older model stores blocked cross-validation
+            #   **within one session** while this line used to print it as
+            #   cross-session, a mislabelling found on 2026-08-15. The newer model
+            #   stores a **leave-one-session-out** mean. So the label follows the
+            #   model rather than always printing cross-session.
             _cvlab = "leave-one-session-out" if _SG_NEEDCAL else "same-session"
             print(f"[gate] sing model loaded ({_SG_W.size + 1} params, "
                   f"mouth/jaw only, {_cvlab} acc {float(_zs['cv']):.3f}) "
                   f"← {os.path.basename(_sgp)}", flush=True)
             if _SG_NEEDCAL:
-                print(f"[gate] v40：開場 {a.gate_calib:.0f}s 基線自校（**閉嘴**）"
-                      f"＋運動否決 {_SG_MTH:.4f}", flush=True)
+                print(f"[gate] v40: {a.gate_calib:.0f}s baseline self-calibration at the start "
+                      f"(**keep the mouth closed**) plus a movement veto at {_SG_MTH:.4f}", flush=True)
     except FileNotFoundError:
-        print("⚠ [gate] 無 sing_gate_model.npz＝門控退回 blendshape 幾何門檻",
+        print("! [gate] no sing_gate_model.npz; the gate falls back to the blendshape geometric thresholds",
               flush=True)
-    except Exception as _e:                      # 審查：npz 損毀/缺鍵原本
-        _SG_W = None                             #   直接 traceback 開不起來
-        print(f"⚠ [gate] 唱歌模型載入失敗（{_e}）＝退回 blendshape 幾何門檻",
+    except Exception as _e:                      # Review: a corrupt npz or a missing key
+        _SG_W = None                             #   used to raise and prevent start-up
+        print(f"! [gate] could not load the singing model ({_e}); falling back to the blendshape geometric thresholds",
               flush=True)
 
 _VF_W = None
@@ -1149,28 +1346,32 @@ if a.vowels:
             _FWIN = np.hanning(_FN)
             _FDCT = np.cos(np.pi / _NM * (np.arange(_NM) + 0.5)[None, :]
                            * np.arange(1, _NC + 1)[:, None])
-            _ABUF = [np.zeros(_FN, dtype="float32")]   # 最近 NFFT 樣本
+            _ABUF = [np.zeros(_FN, dtype="float32")]   # the most recent NFFT samples
             print(f"[field] fusion model loaded ({_VF_W.size + _VF_B.size} params, "
                   f"CV acc {float(_zf['cv_acc']):.2f}, vision+acoustic)",
                   flush=True)
     except FileNotFoundError:
-        pass                                 # 沒融合模型＝用視覺模型
+        pass                                 # no fused model, so use the visual one
 kt = KeyTracker()
 st = {"die": False, "xrun": 0, "cents": 0.0, "note": None, "cand": None,
       "cc": 0, "quiet": 0, "lastm": None, "pada": None, "padt": -1e9,
       "hist": [], "tsw": -1e9, "pn": None, "porta_ok": True}
 
-# ── 嘴部門控（score_live v3.1 同款）：嘴閉＝音高不算你的＝回授殺 ──
+# -- the mouth gate, as in score_live v3.1: a closed mouth means the pitch is not
+#    yours, which kills feedback --
 M = {"ok": a.mouth == 0 or bool(a.file), "on": False, "last_open": 0.0,
      "val": -1.0, "t_on": -1e9, "face": False}
 
 
 def _mouth_worker():
-    # 這兩個在函式裡會被指派（模型不合格時停用）＝必須宣告 global，
-    # 否則整個函式把它們當區域變數 ⇒ 第一幀 UnboundLocalError ⇒ 執行緒
-    # 死在寬鬆 except 裡 ⇒ **沒畫面且整場門控全開**（08-13 實案）。
-    # ⚠ _SG_BASE 在下面是**賦值**（不是 mutate）＝沒有這行就是
-    # UnboundLocalError＝鏡頭執行緒整場死掉、門控全開（v35 被咬過一次）
+    # These two are assigned inside the function, to disable the model when it
+    # fails validation, so they must be declared global. Otherwise the whole
+    # function treats them as local, the first frame raises UnboundLocalError, the
+    # thread dies inside a broad except, and the result is **no picture and the
+    # gate wide open all evening** (a real case on 2026-08-13).
+    # _SG_BASE below is **assigned**, not mutated, so without this line it is
+    # likewise an UnboundLocalError, the camera thread dies for the whole session
+    # and the gate stays open. v35 was bitten by exactly this.
     global _SG_W, _SG_CHK, _SG_BASE
     try:
         import cv2
@@ -1185,7 +1386,7 @@ def _mouth_worker():
         lmk = vision.FaceLandmarker.create_from_options(opts)
         if a.cam >= 0:
             cap = cv2.VideoCapture(a.cam)
-            assert cap.isOpened(), f"鏡頭 {a.cam} 打不開"
+            assert cap.isOpened(), f"camera {a.cam} will not open"
         else:
             best = None
             for ci in range(3):
@@ -1198,7 +1399,7 @@ def _mouth_worker():
                 c.release()
                 if best is None or b > best[1]:
                     best = (ci, b)
-            assert best and best[1] > 10, f"找不到有畫面的鏡頭 {best}"
+            assert best and best[1] > 10, f"no camera with a picture was found {best}"
             print(f"[mouth] camera index {best[0]} (brightness {best[1]:.0f})",
                   flush=True)
             cap = cv2.VideoCapture(best[0])
@@ -1208,27 +1409,32 @@ def _mouth_worker():
         while not st["die"]:
             okf, frame = cap.read()
             now = time.time()
-            M["face"] = now - last_face < 0.3     # 臉通道（dump/畫面用）
+            M["face"] = now - last_face < 0.3     # the face channel, for the dump and the picture
             if okf:
-                M["hb"] = now    # R4A#1：心跳＝「真的讀到 frame」。read()
-                #   失敗（鏡頭被搶/掉線常態）＝心跳停＝看門狗開火裸奔＋
-                #   警告，而不是永久關門的無聲死亡
-            if okf and now - last_det >= 0.033:      # ~30Hz（原 20Hz）
+                M["hb"] = now    # R4A#1: the heartbeat means a frame was really read.
+                #   If read() fails, which happens routinely when the camera is
+                #   taken or dropped, the heartbeat stops, the watchdog fires and
+                #   it runs bare with a warning, rather than closing the gate for
+                #   good in silence.
+            if okf and now - last_det >= 0.033:      # about 30 Hz, previously 20
                 last_det = now
                 img = mp.Image(image_format=mp.ImageFormat.SRGB,
                                data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 res = lmk.detect_for_video(img, int((now - t0) * 1000))
                 if (a.view or a.frame_b64 > 0) and not res.face_landmarks:
-                    # R4A#8：臉丟也更新畫面（原本凍在最後一張 FACE Y）
+                    # R4A#8: update the picture even when the face is lost; it
+                    # used to freeze on the last frame with a face.
                     h2 = int(frame.shape[0] * 480 / frame.shape[1])
                     fr2 = cv2.resize(frame, (480, h2))
                     cv2.putText(fr2, "NO FACE - gate closing", (10, 24),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
                     M["frame"] = fr2
                 if not res.face_landmarks:
-                    # 審查：臉丟時 M["on"]/M["arm"] 原本停在舊值，臉一回來
-                    # 走的是「維持」分支（門檻低、不吃防抖）＝轉頭再回正、
-                    # 閉著嘴也會開門。丟臉＝重新來過。
+                    # Review: with the face lost, M["on"] and M["arm"] used to hold
+                    # their old values, so when the face returned it took the
+                    # "holding" branch, with a lower threshold and no debounce, and
+                    # turning away and back with the mouth closed opened the gate.
+                    # A lost face starts again.
                     M["on"] = False
                     M["arm"] = 0
                 if res.face_landmarks:
@@ -1244,41 +1450,54 @@ def _mouth_worker():
                           if ((a.bs_gate or a.sing_gate)
                               and res.face_blendshapes) else None)
                     if bs is not None and _SG_W is not None:
-                        # v34：訓練出來的「在不在唱」機率當門控（52 維
-                        # blendshape → logistic）。負樣本含**講話**——手刻
-                        # 判準從來擋不掉的那個。名稱順序啟動時已驗。
+                        # v34: a trained "is this person singing" probability as
+                        # the gate, 52 blendshape dimensions through a logistic
+                        # model. The negative samples include **speech**, which
+                        # hand-written criteria never managed to block. The order
+                        # of the names is verified at start-up.
                         if _SG_CHK is not None:
-                            # 審查：註解宣稱「名稱順序啟動時已驗」但實際
-                            # 沒驗——mediapipe 換版就會靜默錯位。首幀真的
-                            # 對一次，不符就停用模型（不猜）。
+                            # Review: the comment claimed the order of the names
+                            # was verified at start-up, and it was not. A change of
+                            # mediapipe version silently shifts the layout. Check
+                            # once, for real, on the first frame, and disable the
+                            # model on a mismatch rather than guessing.
                             _live = [bs[i].category_name for i in _SG_I]
                             if _live != _SG_CHK:
-                                print("⚠ [gate] blendshape 名稱順序與模型不符"
-                                      "＝停用唱歌模型", flush=True)
+                                print("! [gate] the blendshape name order does not match the model; "
+                                      "the singing model is disabled", flush=True)
                                 _SG_W = None
                             _SG_CHK = None
                         if _SG_W is None:
                             bs = None
                     if bs is not None and _SG_W is not None:
                         _v = np.array([c.score for c in bs])[_SG_I]
-                        # v40①：開場基線自校。08-15 量到同一個人同一個動作
-                        # jawOpen 靜止值 08-13=0.031 / 08-15=0.017＝逐幀
-                        # logistic 吃絕對值就會整批翻盤（閉嘴誤觸 44%）。
-                        # 校正期間**門一律關**（他被要求閉嘴），校完才放行。
-                        # ⚠ 一定要先給 _p 一個值：校正**完成的那一幀**會在
-                        # 這個分支裡把 _SG_BASE 填上，下面的判斷式就不再是
-                        # 「校正中」＝掉進 else 去讀 _p＝UnboundLocalError＝
-                        # 鏡頭執行緒整場死掉、門控全開（今天真的炸過一次）
+                        # v40, item 1: baseline self-calibration at the start. On
+                        # 2026-08-15 the same person making the same movement
+                        # measured a resting jawOpen of 0.031 on 2026-08-13 and
+                        # 0.017 on 2026-08-15, so a per-frame logistic model taking
+                        # absolute values flips wholesale, with 44% false triggers
+                        # on a closed mouth. During calibration **the gate stays
+                        # shut**, since the singer is asked to keep the mouth
+                        # closed, and it opens only once calibration is done.
+                        # _p must be given a value first: on the frame that
+                        # **completes** calibration, this branch fills in
+                        # _SG_BASE, so the test below is no longer "calibrating",
+                        # execution falls into the else and reads _p, which is an
+                        # UnboundLocalError, the camera thread dies for the whole
+                        # session and the gate stays open. That really happened
+                        # once.
                         _p = 0.0
                         if _SG_NEEDCAL and _SG_BASE is None:
                             _SG_CAL.append(_v)
-                            # 用**時間**不是幀數：幀率隨機器/光線變動，用幀數
-                            # 會讓實際校正時間跟印出來的秒數不符
+                            # Use **time** and not a frame count: the frame rate
+                            # varies with the machine and the light, so counting
+                            # frames makes the real calibration time disagree with
+                            # the seconds printed.
                             if now - M.setdefault("calt0", now) >= a.gate_calib \
                                     and len(_SG_CAL) >= 20:
                                 _SG_BASE = np.mean(_SG_CAL, axis=0)
-                                print(f"[gate] 基線校正完成（{len(_SG_CAL)} 幀 / "
-                                      f"{now - M['calt0']:.1f}s）＝門控啟用",
+                                print(f"[gate] baseline calibration complete ({len(_SG_CAL)} frames / "
+                                      f"{now - M['calt0']:.1f}s); the gate is now active",
                                       flush=True)
                             M["sp"] = 0.0
                             M["on"] = False
@@ -1287,10 +1506,14 @@ def _mouth_worker():
                         else:
                             if _SG_BASE is not None:
                                 _v = _v - _SG_BASE
-                            # v40②：運動否決。講話＝3-8Hz 音節開闔，唱歌＝
-                            # 姿勢維持。實測 |ΔjawOpen| 0.5s 窗均值：講話
-                            # 0.0173/0.0130/0.0079（三場），唱歌最高的「啊」
-                            # 只有 0.0023。差分量不吃基線＝跨場次站得住。
+                            # v40, item 2: the movement veto. Speech opens and
+                            # closes the mouth at 3-8 Hz per syllable, while
+                            # singing holds a posture. Measured mean |delta
+                            # jawOpen| over a 0.5 s window: speech 0.0173, 0.0130
+                            # and 0.0079 across three sessions, while the highest
+                            # for singing, on ah, is only 0.0023. A difference
+                            # measure does not depend on the baseline, so it holds
+                            # across sessions.
                             _SG_JAWQ.append(float(bs[_SG_I[_SG_JC]].score))
                             del _SG_JAWQ[:-(_SG_MW + 1)]
                             _mo = (float(np.abs(np.diff(_SG_JAWQ)).mean())
@@ -1300,10 +1523,10 @@ def _mouth_worker():
                             _p = 1.0 / (1.0 + np.exp(
                                 -(np.dot((_v - _SG_M) / _SG_S, _SG_W) + _SG_B)))
                             M["sp"] = float(_p)
-                            if _veto:            # 你在講話＝一律不算你
+                            if _veto:            # you are speaking, so it never counts
                                 _p = 0.0
                         if _SG_NEEDCAL and _SG_BASE is None:
-                            pass                 # 校正中，nv 已設 False
+                            pass                 # calibrating; nv is already False
                         elif M["on"]:
                             nv = _p > a.sing_hold
                             if not nv:
@@ -1313,9 +1536,11 @@ def _mouth_worker():
                                         if _p > a.sing_open else 0)
                             nv = M["arm"] >= a.bs_frames
                     elif bs is not None:
-                        # v30：blendshape 門控——jawOpen 管張口、mouthPucker
-                        # 管嘟嘴。兩者都是訓練出來的量、對頭部角度與距離
-                        # 已正規化，不像手算比值那樣被鏡頭位置影響。
+                        # v30: the blendshape gate. jawOpen covers the opening and
+                        # mouthPucker the pucker. Both are trained quantities,
+                        # normalised for head angle and distance, so unlike a
+                        # hand-computed ratio they are not affected by where the
+                        # camera sits.
                         _b = {c.category_name: c.score for c in bs}
                         jaw = _b.get("jawOpen", 0.0)
                         puc = _b.get("mouthPucker", 0.0)
@@ -1327,16 +1552,18 @@ def _mouth_worker():
                             if not raw:
                                 M["arm"] = 0
                         else:
-                            # 開門要連續 N 幀（防單幀雜訊開門 0.8s）
+                            # opening needs N consecutive frames, so a single
+                            # noisy frame cannot open it for 0.8 s
                             M["arm"] = (M.get("arm", 0) + 1) if raw else 0
                             nv = M["arm"] >= a.bs_frames
                     elif M["on"]:
-                        # v28 幾何退路：在唱之中——張口夠大 或 嘴夠窄
+                        # v28 geometric fallback, while already singing: the mouth
+                        # is either open enough or narrow enough
                         nv = (val > a.mouth_close
                               or (a.mouth_narrow > 0 and wd_ < a.mouth_narrow
                                   and val > 0.004))
                     else:
-                        nv = val > a.mouth_open      # 起唱一律看張口
+                        nv = val > a.mouth_open      # starting to sing always looks at the opening
                     if nv != M["on"] and a.gate_log:
                         print(f"[gate] {'open' if nv else 'close'}"
                               f"  p {M.get('sp', -1):.3f}"
@@ -1344,12 +1571,13 @@ def _mouth_worker():
                               f"  t {time.time() - t0:.1f}s",
                               flush=True)
                     if nv and not M["on"]:
-                        M["t_on"] = now  # v7 呼吸預備：開口瞬間＝預告
+                        M["t_on"] = now  # v7 breath preparation: the instant the mouth opens is the cue
                     M["on"] = nv
                     if M["on"]:
                         M["last_open"] = now
-                    # v19：有融合模型＝權重由音訊執行緒逐 hop 算（要當下
-                    # 的 MFCC），這裡只維護嘴形 EMA 供它取用
+                    # v19: with the fused model, the weights are computed per hop
+                    # on the audio thread, since they need the current MFCC, and
+                    # this only maintains the mouth-shape EMA for it to read.
                     if a.vowels and _VF_W is not None:
                         _rv = _ring_vec(
                             np.array([[p.x, p.y] for p in f]),
@@ -1358,17 +1586,22 @@ def _mouth_worker():
                                    M["rv"] + 0.35 * (_rv - M["rv"]))
                     elif a.vowels and (_VM_W is not None
                                        or _VR_A is not None):
-                        # v17.1 整圈嘴（Harry 08-13）：內外唇 40 點 → 80 維
-                        # ——母音靠圓唇度/嘴角形狀/唇曲率分，不只高寬
-                        # （欸↔咿在 2D 重疊 0.37 的解）。
+                        # v17.1 the full lip ring (2026-08-13): 40 points on the
+                        # inner and outer lips into 80 dimensions. Vowels are
+                        # separated by roundedness, the shape of the corners and
+                        # the curvature of the lips, not by height and width alone;
+                        # this is the answer to eh and ee overlapping at 0.37 in
+                        # two dimensions.
                         _rv = _ring_vec(
                             np.array([[p.x, p.y] for p in f]),
                             frame.shape[1] / frame.shape[0])
                         M["rv"] = (_rv if M.get("rv") is None else
                                    M["rv"] + 0.35 * (_rv - M["rv"]))
                         if _VM_W is not None:
-                            # v18：個人模型的類別機率＝混層權重（五行純
-                            # numpy，~30μs；render 迴圈仍零 ML）
+                            # v18: the personal model's class probabilities are
+                            # the layer-mixing weights, five lines of plain numpy
+                            # at about 30 microseconds, so the render loop still
+                            # contains no machine learning.
                             _l = _VM_W @ ((M["rv"] - _VM_M) / _VM_S) + _VM_B
                             _e = np.exp(_l - _l.max())
                             M["vw"] = _sub(_e / _e.sum())
@@ -1377,10 +1610,14 @@ def _mouth_worker():
                             _w = 1.0 / (_dl * _dl + 1e-6)
                             M["vw"] = _sub(_w / _w.sum())
                     elif a.vowels and _VL_A is not None:
-                        # v17 連續母音場（2D 退路）：嘴形 (高,寬) 對五錨點
-                        # 正規化 L1 距離 → 平方反比權重（在錨點上＝近一熱、
-                        # 錨點間＝連續混合）。無分類、無遲滯、無 dwell——
-                        # 離散選層範式 08-13 判死（鏡子永遠遲到半顆母音）。
+                        # v17 continuous vowel field, the 2D fallback: normalised
+                        # L1 distances from the mouth shape (height, width) to the
+                        # five anchors give inverse-square weights, so on an anchor
+                        # it is nearly one-hot and between anchors it mixes
+                        # continuously. No classifier, no hysteresis, no dwell: the
+                        # discrete layer-selection paradigm was abandoned on
+                        # 2026-08-13, because a mirror is always half a vowel
+                        # late.
                         _wd = (abs(f[61].x - f[291].x)
                                / (abs(f[234].x - f[454].x) + 1e-9))
                         _hw = np.array([val, _wd])
@@ -1390,14 +1627,18 @@ def _mouth_worker():
                         _w = 1.0 / (_dl * _dl + 1e-6)
                         M["vw"] = _sub(_w / _w.sum())
                     if a.view or a.frame_b64 > 0:
-                        # v14 監看：內唇線＋數值（主執行緒 imshow，這裡只畫）
+                        # v14 monitor: the inner lip line plus the numbers. The
+                        # main thread calls imshow; this only draws.
                         h2 = int(frame.shape[0] * 480 / frame.shape[1])
                         fr2 = cv2.resize(frame, (480, h2))
-                        # v29（Harry：「中間牙齒一條線很奇怪，不能十字嗎、
-                        # 不能嘴唇圈嗎」）：畫**整圈嘴唇＋十字**——縱線＝
-                        # 開口高度、橫線＝嘴寬，兩者都是門控真的在用的量
-                        # （v28 起嘟嘴保持看的就是嘴寬）。單畫一條縱線是
-                        # v14 只看開闔時代的遺留。
+                        # v29, after "a single line across the teeth looks odd,
+                        # could it be a cross, or the ring of the lips?": draw
+                        # **the whole lip ring plus a cross**. The vertical line is
+                        # the opening height and the horizontal one the mouth
+                        # width, and the gate really uses both, since from v28 the
+                        # pucker hold reads the width. A single vertical line was a
+                        # leftover from v14, when only opening and closing
+                        # mattered.
                         def _pt(i):
                             return (int(f[i].x * 480), int(f[i].y * h2))
                         col = (0, 255, 0) if M["on"] else (0, 0, 255)
@@ -1406,8 +1647,8 @@ def _mouth_worker():
                                           [np.array([_pt(i) for i in _seg],
                                                     np.int32)],
                                           True, col, 1, cv2.LINE_AA)
-                        cv2.line(fr2, _pt(13), _pt(14), col, 2)    # 開口
-                        cv2.line(fr2, _pt(61), _pt(291), col, 2)   # 嘴寬
+                        cv2.line(fr2, _pt(13), _pt(14), col, 2)    # opening
+                        cv2.line(fr2, _pt(61), _pt(291), col, 2)   # mouth width
                         _wdv = M.get("wd", -1.0)
                         cv2.putText(fr2,
                                     f"FACE {'Y' if M.get('face') else 'N'} "
@@ -1423,24 +1664,29 @@ def _mouth_worker():
                                     (10, 24), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.55, (255, 255, 255), 2)
                         if a.vowels and M.get("vw") is not None:
-                            # v17/v20：在用的層權重即時疊字（母音名＋%）
+                            # v17/v20: overlay the live layer weights, the vowel
+                            # name and a percentage
                             cv2.putText(fr2, " ".join(
                                 f"{nm_}{int(round(w * 100)):02d}"
                                 for nm_, w in zip(_SEL_NAMES, M["vw"])),
                                 (10, 48), cv2.FONT_HERSHEY_SIMPLEX,
                                 0.5, (0, 255, 255), 1)
                         M["frame"] = fr2
-            # review A7：M["ok"] 每圈都要重算（鏡頭一卡不凍死）。
-            # v14.1（Harry 驗收裁決）：臉不在＝他不在＝門**關**——原「臉丟
-            # 3s fail-open」讓空房間被回授/雜音觸發。鏡頭真死（心跳斷）
-            # 另由看門狗裸奔＋警告，兩個情境分開。
+            # Review A7: M["ok"] must be recomputed every pass, so a stalled
+            # camera does not freeze it. v14.1, decided at acceptance: no face
+            # means the singer is not there, so the gate **closes**. The earlier
+            # "fail open after 3 s without a face" let an empty room be triggered
+            # by feedback or noise. A camera that has really died, with the
+            # heartbeat gone, is handled separately by the watchdog, which runs
+            # bare and warns.
             M["ok"] = now - M["last_open"] < 0.8
             if not okf:
                 time.sleep(0.01)
         cap.release()
     except Exception as e:
         M["ok"] = True
-        M["dead"] = str(e)          # 審查★5：原本只印一行就沉默裸奔整場
+        M["dead"] = str(e)          # Review item 5: it used to print one line and
+                                    # then run bare in silence for the whole session
         import traceback
         traceback.print_exc()
         print(f"⚠ [mouth] GATE DEAD ({e}) = running ungated",
@@ -1452,37 +1698,42 @@ if a.mouth and not a.file:
 
 
 class VoicePlay:
-    """一個聲部的取樣播放：目前音、換音 crossfade、起釋音包絡。"""
+    """Sample playback for one part: the current note, the crossfade on a note
+    change, and the attack and release envelopes."""
 
     def __init__(self, nm, atk=None, rel=None, count=True, bank=None):
         self.nm = nm
-        self.count = count               # v38：False＝團員，不進法醫計數
+        self.count = count               # v38: False marks an ensemble member, excluded from the forensic counts
         self.atk = atk if atk is not None else a.attack * self.ATK_MULT.get(nm, 1.0)
         self.rel = rel if rel is not None else a.release
-        self.bank = BANKS[nm] if bank is None else bank   # v38：團員可換歌手
+        self.bank = BANKS[nm] if bank is None else bank   # v38: a member may use another singer
         self.cur = None                  # (midi, buf, pos)
-        self.old = None                  # 換音淡出中的上一個音
+        self.old = None                  # the previous note, fading out through a change
         self.env = 0.0
         self.tgt = 0.0
-        self.gl = 0.0                    # v15 porta：起始半音偏移
-        self.glt = 0                     # 滑音總長（樣本）
-        self.glr = 0                     # 滑音剩餘（樣本）
+        self.gl = 0.0                    # v15 porta: the starting semitone offset
+        self.glt = 0                     # total glide length, in samples
+        self.glr = 0                     # glide remaining, in samples
         self.xfn = int(0.03 * SR)
-        self.xin = 0                     # 換音淡入殘餘（review A2）
-        self.vw = _VW_MID                # v17：上一 hop 的層權重（混層內插用）
+        self.xin = 0                     # fade-in remaining on a note change (review A2)
+        self.vw = _VW_MID                # v17: the previous hop's layer weights, for interpolating the mix
 
     def set_note(self, m):
         if m is None:
             self.tgt = 0.0
             return
         self.tgt = 1.0
-        # review A1：clip 要在比較之前——音域外的目標音否則每 hop 重觸發
-        # 一次（bass >68 曾進 28.6Hz 重啟迴圈＝梳狀嗡鳴，最大爆音源）
+        # Review A1: the clip must come before the comparison, or a target note
+        # outside the range retriggers every hop. Above 68 the bass once entered a
+        # 28.6 Hz restart loop, a comb-like drone and the largest source of
+        # bursts.
         lo_b, hi_b = min(self.bank), max(self.bank)
         if a.fold:
-            # 音域外**折八度**而不是 clip：clip 會把音高類別也改掉（實測
-            # 19-26% 的 pad 音因此變成非和弦音，sop pad 在他唱低音時卡在
-            # F3 不動、tenor 曾 83→68）。折返保留音級，只換八度。
+            # Outside the range, **fold by octaves** rather than clip: clipping
+            # also changes the pitch class, and measured, 19-26% of pad notes
+            # became non-chord tones, the soprano pad stuck on F3 while the singer
+            # was low, and the tenor once went from 83 to 68. Folding keeps the
+            # pitch class and changes only the octave.
             while m < lo_b:
                 m += 12
             while m > hi_b:
@@ -1491,39 +1742,50 @@ class VoicePlay:
         if self.cur is not None and self.cur[0] == m:
             return
         if self.cur is not None:
-            self.old = [self.cur, self.xfn]        # [(midi,buf,pos), 剩餘]
-            self.xin = self.xfn                    # review A2：新音要淡入
+            self.old = [self.cur, self.xfn]        # [(midi, buf, pos), remaining]
+            self.xin = self.xfn                    # review A2: the new note fades in
             self.xlin = False
             if (a.porta > 0 and abs(m - self.cur[0]) <= 2
                     and st.get("porta_ok", True)):
-                # v15：前音停留夠久（≥0.3s）才滑＝表情滑音；快樂句乾淨切
+                # v15: glide only if the previous note was held long enough, 0.3 s
+                # or more, which makes it an expressive glide; a fast phrase cuts
+                # cleanly.
                 self.gl = float(self.cur[0] - m)
                 self.glt = self.glr = max(1, int(a.porta * SR))
-                if self.count:      # v38：只有領唱記數。團員也走這條的話
-                    #   滑音計數會被人數放大（--per-part 4 實測 53→209），
-                    #   而那個數字是滑音觸發率法醫的尺（v26 那條 46.6%→
-                    #   68.9% 就是它量的）＝儀器會被悄悄污染。
-                    st["porta_n"] = st.get("porta_n", 0) + 1   # v25 儀器
-                self.xlin = True   # R4A#12：porta＝同基頻起步＝相干，
-                #   等功率縫會凸（σ2.19dB 實測）→ 線性縫
-        # v17：五層堆成 (5,L)（同 midi 各層 loop 等長＝樣本可對齊；長度
-        # 只依 f0，見 _render_layer）。混層在 render 逐樣本做，這裡不選層
-        # ＝「長音中不換層」的 v16 邊界隨範式一起消失。全聲部跟場（v16.3b
-        # alto-only 隔離是死範式下的實驗，不留）。音域 clip 仍用 self.bank
-        # （層庫同 lo/hi）。
+                if self.count:      # v38: only the lead counts. If members counted
+                    #   too, the glide count would be multiplied by the number of
+                    #   people (measured, --per-part 4 took it from 53 to 209),
+                    #   and that number is the ruler for the glide-rate forensics
+                    #   (the 46.6% to 68.9% of v26 was measured with it), so the
+                    #   instrument would be quietly contaminated.
+                    st["porta_n"] = st.get("porta_n", 0) + 1   # v25 instrument
+                self.xlin = True   # R4A#12: porta starts from the same fundamental,
+                #   so the signals are coherent and an equal-power join bumps
+                #   (measured sigma 2.19 dB); use a linear join instead.
+        # v17: the five layers are stacked as (5, L). At a given midi note every
+        # layer's loop is the same length, so the samples align; the length depends
+        # only on f0, see _render_layer. The mixing happens per sample in render
+        # and no layer is selected here, so v16's boundary of "do not change layer
+        # during a sustained note" disappears along with the paradigm. Every part
+        # follows the field; the alto-only isolation of v16.3b was an experiment
+        # under the dead paradigm and is not kept. Range clipping still uses
+        # self.bank, since the layer banks share lo and hi.
         buf = (np.stack([LBANKS[self.nm][li][m] for li in _LSEL])
                if a.vowels else self.bank[m])
         self.cur = [m, buf, 0.0]
 
-    ATK_MULT = {"bass": 0.6, "alto": 1.0, "sop": 1.6}   # v5 錯落起音：
-    #   三聲部起音時值各異＝進場是「綻開」不是一堵牆（v6② stagger 簡式）
+    ATK_MULT = {"bass": 0.6, "alto": 1.0, "sop": 1.6}   # v5 staggered attack:
+    #   the three parts have different attack times, so the entry unfolds rather
+    #   than arriving as a wall (the simple form of the v6 item 2 stagger)
 
     def render(self, n, rate):
         out = np.zeros(n, dtype="float32")
         if a.vowels:
-            # v17：本 hop 的逐樣本層權重＝上一 hop 權重 → 最新權重線性內插
-            # （殺 30Hz 權重更新的 zipper 階躍）；cur/old 共用同一組＝換音
-            # crossfade 兩端聽到同一張嘴。鏡頭沒給值＝釘 mid 一熱。
+            # v17: this hop's per-sample layer weights interpolate linearly from
+            # the previous hop's weights to the latest, which kills the zipper
+            # stepping of a 30 Hz weight update. cur and old share one set, so both
+            # ends of a note-change crossfade hear the same voice. With no value
+            # from the camera it pins to a one-hot on the middle layer.
             w1 = M.get("vw")
             if w1 is None:
                 w1 = _VW_MID
@@ -1533,12 +1795,16 @@ class VoicePlay:
             g5 = None
         if self.cur is not None and (self.env > 1e-4 or self.tgt > 0):
             if self.glr > 0:
-                # v15 線性定長滑音：porta 秒後**精確抵達**（原指數尾＝
-                # 永遠在路上＝正常唱速全變滑音的主因之一）
-                # v25（審查 S1）：原本整塊套同一個 rate＝**滑音是樓梯不是
-                # 斜坡**——porta 0.08 / hop 0.035 時第一塊 35ms 完全停在
-                # 舊音高，之後三階、每階最大 ~90 cents。改成塊內逐樣本
-                # 內插（_read 接受每樣本 rate 陣列）。
+                # v15 linear glide of fixed length: it **arrives exactly** after
+                # porta seconds. The earlier exponential tail was always still on
+                # its way, which was one of the main reasons normal singing speed
+                # turned into constant portamento.
+                # v25 (review S1): a single rate used to be applied to a whole
+                # block, so **the glide was a staircase rather than a ramp**. With
+                # porta 0.08 and a hop of 0.035, the first 35 ms block stayed
+                # entirely on the old pitch and the remaining three steps were up
+                # to about 90 cents each. It now interpolates per sample within a
+                # block, and _read accepts a per-sample rate array.
                 r0 = self.glr / self.glt
                 r1 = max(0, self.glr - n) / self.glt
                 g = 2 ** (self.gl * np.linspace(r0, r1, n, endpoint=False,
@@ -1548,8 +1814,10 @@ class VoicePlay:
                 g = 1.0
             w = self._read(self.cur, n, rate * g, g5)
             if self.xin > 0:
-                # review A2：互補 crossfade——新音線性淡入、舊音線性淡出，
-                # 換音瞬間總幅 ≈ 常數（原本新音全幅＋舊音全幅起跳＝+6dB 過衝）
+                # Review A2: a complementary crossfade, with the new note fading
+                # in linearly and the old one out, keeps the total amplitude
+                # roughly constant through a change. It used to start with the new
+                # note at full amplitude on top of the old, a +6 dB overshoot.
                 k = min(n, self.xin)
                 w = w.copy()
                 ramp = np.linspace(1 - self.xin / self.xfn,
@@ -1567,11 +1835,11 @@ class VoicePlay:
                                 (self.old[1] - k) / self.xfn,
                                 k).astype("float32")
             fade = framp if getattr(self, "xlin", False) else np.sqrt(framp)
-            out[:k] += w[:k] * fade    # 等功率；porta 相干時線性
+            out[:k] += w[:k] * fade    # equal power, or linear while porta keeps them coherent
             self.old[1] -= k
             if self.old[1] <= 0:
                 self.old = None
-        # 起音/釋音包絡（塊內線性）
+        # attack and release envelopes, linear within a block
         aatk = n / (self.atk * SR)
         arel = n / (self.rel * SR)
         e0 = self.env
@@ -1580,14 +1848,16 @@ class VoicePlay:
         return out * np.linspace(e0, e1, n, dtype="float32")
 
     def _read(self, slot, n, rate, g5=None):
-        """rate 可為純量或**每樣本陣列**（v25 滑音：塊內逐樣本變速）。"""
+        """rate may be a scalar or **a per-sample array** (the v25 glide varies
+        the rate sample by sample within a block)."""
         _m, buf, pos = slot
         L = buf.shape[-1]
         if np.ndim(rate) == 0:
             idx = (pos + np.arange(n, dtype="float64") * rate) % L
             end = pos + n * rate
         else:
-            # 位移＝速率的累積和（idx[0]=pos，之後每樣本各自的 rate）
+            # The displacement is the cumulative sum of the rate: idx[0] is pos,
+            # and each later sample has its own rate.
             c = np.cumsum(rate, dtype="float64")
             idx = (pos + c - rate[0]) % L
             end = pos + c[-1]
@@ -1597,15 +1867,20 @@ class VoicePlay:
         slot[2] = float(end % L)
         if buf.ndim == 1:
             return buf[i0] * (1 - fr) + buf[i1] * fr
-        # v17：五層同相位對齊讀出 (5,n) → 逐樣本權重混合（層等長＝同一個
-        # 游標；同 seed 同 f0 渲＝跨層混音相干性待耳裁）
+        # v17: read the five layers in phase as (5, n) and mix them with
+        # per-sample weights. The layers are the same length so one cursor serves
+        # all of them; they were rendered from the same seed at the same f0, so how
+        # coherent the cross-layer mix sounds is still to be judged by ear.
         y5 = buf[:, i0] * (1 - fr) + buf[:, i1] * fr
         return (y5 * g5.T).sum(axis=0)
 
 
 players = [VoicePlay(nm) for nm, *_x in VOICES]
-# v7 站位（成分四 lite）：快層 bass 中偏左/alto 右/sop 左；墊拉到外圈
-# 站位：依聲部數展開（原本寫死三個）——tenor 插在 bass 右側
+# v7 positions (a light version of component four): in the fast layer the bass
+# sits centre-left, the alto right and the soprano left, with the pad pulled to the
+# outside.
+# Positions expand with the number of parts; they used to be hard-coded for three,
+# and the tenor is inserted to the right of the bass.
 _PANF = {"bass": -0.15, "tenor": 0.15, "alto": 0.35, "sop": -0.35}
 _PANP = {"bass": -0.6, "tenor": 0.3, "alto": 0.6, "sop": 0.15}
 PAN_F = [_PANF[nm] for nm, *_x in VOICES]
@@ -1615,37 +1890,47 @@ PAN_P = [_PANP[nm] for nm, *_x in VOICES]
 def _pan(p_):
     th = (p_ + 1) * np.pi / 4
     return np.float32(np.cos(th)), np.float32(np.sin(th))
-# v6 慢層：同音庫、長起釋音（0.8s 綻開/1.2s 收）＝和弦墊，活得比你的句子久
+# v6 slow layer: the same banks with long attack and release, 0.8 s to open and
+# 1.2 s to close, which makes a chord pad that outlives your phrase.
 _PADATK = {"bass": 0.8, "tenor": 0.85, "alto": 0.9, "sop": 1.0}
 pads = ([VoicePlay(nm, atk=_PADATK[nm], rel=0.9)
          for nm, *_x in VOICES] if a.pad > 0 else [])
-# v3 人味：每聲部兩個不共相位的慢 LFO 疊出 ±human cents 的獨立漂移
+# v3 human quality: two slow LFOs per part, out of phase with each other, sum to
+# an independent drift of plus or minus human cents.
 _rng = np.random.RandomState(20260811)
 HUM = [( _rng.uniform(0.06, 0.16), _rng.uniform(0, 6.28),
          _rng.uniform(0.15, 0.3), _rng.uniform(0, 6.28))
        for _ in range(2 * len(VOICES))]
 VIBPH = [_rng.uniform(0, 6.28) for _ in range(2 * len(VOICES))]
-# v38 每聲部多人（--per-part）。**團員抽籤在 VIBPH 之後**＝上面那些既有
-# 的 HUM/VIBPH 值不會因為開了這個旗標而位移（--per-part 1 要 byte-identical，
-# 而且 4 人版的第一位聽起來要跟 1 人版是同一個人）。
+# v38 several singers per part (--per-part). **The members are drawn after
+# VIBPH**, so the existing HUM and VIBPH values above do not shift because this
+# flag was enabled: --per-part 1 must stay byte-identical, and the first member of
+# a four-person version must sound like the same person as the one-person
+# version.
 PP = int(a.per_part)
-MEMG = np.float32(1.0 / np.sqrt(PP))     # PP=1 → 恰好 1.0＝乘法是 no-op
+MEMG = np.float32(1.0 / np.sqrt(PP))     # at PP=1 this is exactly 1.0, so the multiplication is a no-op
 MEMS = [[] for _ in VOICES]
 if PP > 1:
     _mrng = np.random.RandomState(20260814)
     _real = 0
     for _vi, (_nm, _mdl, _sp, *_x) in enumerate(VOICES):
-        # 團員優先吃**真的別的歌手**（同模型的其他 spk），用完才退回
-        # 「複製領唱＋失諧」。08-14 Harry：「我比較希望是用不同音色」。
-        # v39：名單那欄是 (模型, spk)，所以 key 是三元組
-        # v43 --mem-real 0＝團員一律用領唱音庫的複製（v38 行為），不借
-        # 別顆模型的歌手。Harry 08-16 已耳裁「真人音色與失諧複製分不出來」，
-        # 所以拿掉它在音樂上零損失，但它是 roughness 的來源之一（不同錄音
-        # 的同一個音疊加＝必然有微小音高差）。
-        # v44（08-17 review #6）：**領唱自己的 (模型, spk) 不能借**——v42
-        # tenor 領唱換成 male8 spk7 後，名單上的「別人」跟領唱成了同一人＝
-        # 團員是領唱的逐位元複製（npz 實測 cmp 相同）＋失諧＝剛判死的干涉
-        # 雜音以最壞形式回歸，而開機 banner 還把它報成 DIFFERENT singer。
+        # Members take **a genuinely different singer** first, another spk of the
+        # same model, and fall back to a detuned copy of the lead only once those
+        # run out. From 2026-08-14: "I would rather it used a different timbre."
+        # v39: that column holds (model, spk), so the key is a triple.
+        # v43 --mem-real 0 makes every member a copy of the lead's bank, the v38
+        # behaviour, borrowing nobody from another model. It was judged by ear on
+        # 2026-08-16 that real timbres and detuned copies could not be told apart,
+        # so removing it costs nothing musically, while it is one of the sources of
+        # roughness: laying the same note from different recordings on top of each
+        # other always leaves a slight pitch difference.
+        # v44 (review #6, 2026-08-17): **the lead's own (model, spk) may not be
+        # borrowed**. After v42 moved the tenor lead to male8 spk7, the "other
+        # person" on the list became the same person as the lead, so a member was a
+        # bit-for-bit copy of the lead (compared identical in the npz) plus
+        # detuning, which brought the interference noise just condemned back in its
+        # worst form, while the start-up banner still reported it as a DIFFERENT
+        # singer.
         _avail = ([ms for ms in MEM_SPK.get(_nm, [])
                    if (_nm, *ms) in XBANKS and ms != (_mdl, _sp)]
                   if a.mem_real else [])
@@ -1655,31 +1940,40 @@ if PP > 1:
             if _spk is not None:
                 _real += 1
             MEMS[_vi].append({
-                # 借到別人的音庫＝真的另一個人；借不到就共用 BANKS[nm]
-                # （零重渲）＋靠失諧/錯開假裝。count=False＝不污染法醫計數
+                # A borrowed bank really is another person; without one it shares
+                # BANKS[nm], with no re-rendering, and pretends through detuning
+                # and staggering. count=False keeps it out of the forensic
+                # counts.
                 "p": VoicePlay(_nm, count=False,
                                bank=(XBANKS[(_nm, *_spk)] if _spk is not None
                                      else None)),
                 "spk": _spk,
-                # 靜態失諧：真團團員彼此就是差這麼多（F3）
+                # Static detuning: this is how far apart the members of a real
+                # ensemble are (F3).
                 "det": 2.0 ** (float(_mrng.normal(0.0, a.spread_cents)) / 1200.0),
                 "hum": (_mrng.uniform(0.06, 0.16), _mrng.uniform(0, 6.28),
                         _mrng.uniform(0.15, 0.3), _mrng.uniform(0, 6.28)),
-                # v43 測試（08-16）：`--vib-sync 1` 讓團員與領唱**共用同一個
-                # 顫音相位**。假設：同一個音的 N 個副本各自隨機相位時，瞬時
-                # 頻率彼此錯開，在高諧波上落進 15-300Hz 的差頻區＝心理聲學的
-                # roughness（粗糙感）——那是「聽得到但頻譜找不到」的東西，
-                # 因為它不是新成分、是既有成分的干涉。同相位＝一起上下＝
-                # 沒有相對頻差。⚠ 無論走哪條都先抽掉這個亂數，隨機序列才不會
-                # 位移（否則 det/hum/pan 全跟著變，就不是單一變數）。
+                # v43 test (2026-08-16): `--vib-sync 1` makes the members share
+                # **one vibrato phase** with the lead. The hypothesis: when N
+                # copies of the same note each have a random phase, their
+                # instantaneous frequencies are offset from one another and, on the
+                # high harmonics, fall into the 15-300 Hz difference band, which is
+                # psychoacoustic roughness. That is the thing that is audible but
+                # invisible to a spectrum, because it is not a new component but
+                # interference between existing ones. A shared phase means they
+                # move together and there is no relative frequency difference.
+                # This random number is drawn on both paths regardless, so the
+                # random sequence does not shift; otherwise det, hum and pan would
+                # all move with it and this would not be a single variable.
                 "vib": (lambda _p: VIBPH[_vi] if a.vib_sync else _p)(
                     _mrng.uniform(0, 6.28)),
                 "pan": float(np.clip(
                     PAN_F[_vi] + _mrng.uniform(-a.spread_pan, a.spread_pan),
                     -1.0, 1.0)),
-                # 起音錯開＝延遲線。它同時把同一份 loop 讀在不同相位上，
-                # 這是去相關的主力——只給失諧的話兩個一模一樣的 loop 只會
-                # 產生拍頻，不會產生「兩個人」。
+                # The staggered attack is a delay line. It also reads the same
+                # loop at different phases, which does most of the decorrelation:
+                # with detuning alone, two identical loops only beat against each
+                # other and never become two people.
                 "dly": _dly,
                 "tail": np.zeros(_dly, dtype="float32"),
             })
@@ -1691,7 +1985,8 @@ if PP > 1:
 
 
 def _mdelay(mm, w):
-    """團員的固定延遲線（起音錯開＋loop 相位去相關）。"""
+    """A member's fixed delay line, giving the staggered attack and decorrelating
+    the loop phase."""
     if mm["dly"] == 0:
         return w
     buf = np.concatenate((mm["tail"], w))
@@ -1706,17 +2001,21 @@ if a.wet > 0:
     print(f"[wet] IR {len(RVIR)/SR:.1f}s, send {a.wet}", flush=True)
 dmp = ({"mic": [], "out": [], "mok": [], "f0": [], "face": [], "mon": [],
         "note": [], "vw": [], "val": [], "wd": [], "sp": [], "vn": []}
-       if a.dump else None)     # v14.2：法醫通道全集（臉/嘴/門/偵測/音）
-#                                v17 加 vw＝每 hop 的五層權重（vowels 開才存）
-DMPMAX = max(1, int(a.dump_max_min * 60 / a.hop))   # v44 上限（hop 數）
+       if a.dump else None)     # v14.2: the full set of forensic channels (face, mouth, gate, detection, note)
+#                                v17 adds vw, the five layer weights per hop,
+#                                stored only when vowels is on
+DMPMAX = max(1, int(a.dump_max_min * 60 / a.hop))   # v44 ceiling, in hops
 
 
 def _write_dump():
-    """dump 落檔（live 收場與 --file 共用）。**live 必須在關流之前呼叫**
-    （stream context 內）：CoreAudio FinishStoppingStream 會掛死（playbook），
-    掛死發生在 __exit__——dump 寫在那之後＝shell 的 8s SIGKILL 讓整份錄音
-    陪葬（08-17 review #13；respond2 08-04 同一課，見其 finally 註解）。
-    長度取 mic 快照＝worker 還在 append 也安全（各通道切齊）。"""
+    """Write the dump, shared by the live shutdown and --file. **Live it must be
+    called before the stream is closed**, inside the stream context: CoreAudio's
+    FinishStoppingStream can hang, a known playbook issue, and it hangs inside
+    __exit__, so a dump written after that is lost to the shell's 8 s SIGKILL along
+    with the whole recording (review #13, 2026-08-17; respond2 learned the same
+    lesson on 2026-08-04, see the comment in its finally block).
+    The length is taken from a snapshot of mic, which is safe while the worker is
+    still appending, and all channels are trimmed to match."""
     if dmp is None or not dmp["mic"]:
         return
     k = len(dmp["mic"])
@@ -1727,7 +2026,7 @@ def _write_dump():
              mon=np.array(dmp["mon"][:k]), note=np.array(dmp["note"][:k]),
              val=np.array(dmp["val"][:k]), wd=np.array(dmp["wd"][:k]),
              sp=np.array(dmp["sp"][:k]), vn=np.array(dmp["vn"][:k]),
-             hop=a.hop,              # R5#2：離線法醫流程要能跑
+             hop=a.hop,              # R5#2: the offline forensic workflow has to be runnable
              **({"vw": np.array(dmp["vw"][:k])} if a.vowels else {}))
     print(f"\ndump: {a.dump}_mic/_out.wav + _st.npz", flush=True)
 in_q, out_q = [], []
@@ -1746,7 +2045,8 @@ if a.predict and os.path.exists(a.predict):
 
 
 def lm_top3(iv1, iv2):
-    """最近兩個音程 → 模型 top-3 下一音程（backoff）。"""
+    """The last two intervals to the model's top three next intervals, with
+    backoff."""
     sc = {}
     t = LM["tri"].get((iv1, iv2))
     b = LM["bi"].get(iv2)
@@ -1760,29 +2060,37 @@ def lm_top3(iv1, iv2):
 _tick = [np.zeros(hopN * 2, dtype="float32")]
 
 
-_OLV = [-120.0] * 8          # v33 最近 8 hop 的輸出位準（聲學延遲 ~5 hop）
+_OLV = [-120.0] * 8          # v33: the output level over the last 8 hops; the acoustic delay is
+                             # about 5 hops
 
 
 def process_hop(chunk):
-    """一個 hop 的完整管線（偵測→決策→渲染→濕）→ 輸出樣本。
-    live worker 與 --file 台架共用＝離線驗證的結論對 live 成立。"""
+    """The complete pipeline for one hop, from detection through the decision and
+    the render to the wet layer, producing output samples.
+    Shared by the live worker and the --file bench, so conclusions verified offline
+    hold live."""
     _tick[0] = np.concatenate([_tick[0][hopN:], chunk])
     f0 = f0_autocorr(_tick[0][-hopN * 2:])
-    f0_raw = f0                          # R4A#2：法醫記門控**前**的偵測
+    f0_raw = f0                          # R4A#2: the forensics record the detection **before** the gate
     _lvl = 20 * np.log10(float(np.sqrt((chunk ** 2).mean())) + 1e-12)
     if f0 > 0 and _lvl < a.min_level:
-        f0 = 0.0                         # v33 絕對音量門：房間噪音不算唱
+        f0 = 0.0                         # v33 absolute level gate: room noise does not count as singing
     if f0 > 0 and a.bleed < 0:
-        # v33 漏音門：天使 ~164ms 前的輸出 + 耦合 = 此刻麥克風裡的天使量
+        # v33 bleed gate: the parts' output about 164 ms ago plus the coupling is
+        # how much of them is in the microphone now.
         if _lvl < _OLV[-5] + a.bleed + a.bleed_margin:
             f0 = 0.0
     mok = M["ok"]
     if a.mic_gate:
-        # v43 麥克風門：權威從鏡頭改到 mic（08-18）。地板取「最近 8 hop
-        # 輸出的**最大**電平」而非 v33 漏音門的單點 _OLV[-5]——F26 量到
-        # 回授峰在 +279ms ≈ 8 hop（hop 35ms），單點賭延遲估計，窗最大值
-        # 只多擋不漏擋。開/關都用 hop 計數不用牆鐘＝ --file 台架跑多快
-        # 結論都成立（本檔開頭的「離線驗證對 live 成立」承諾靠這個）。
+        # v43 microphone gate: authority moves from the camera to the microphone
+        # (2026-08-18). The floor is **the maximum** output level over the last 8
+        # hops, rather than the single point _OLV[-5] of the v33 bleed gate: F26
+        # measured the feedback peak at +279 ms, about 8 hops at 35 ms each, and a
+        # single point gambles on the delay estimate while the window maximum only
+        # ever blocks more, never less. Opening and closing both count hops rather
+        # than wall-clock time, so the --file bench reaches the same conclusions
+        # however fast it runs; the promise at the top of this file that offline
+        # verification holds live rests on that.
         _fl = a.mic_open
         if a.bleed < 0:
             _fl = max(_fl, max(_OLV) + a.bleed + a.bleed_margin)
@@ -1798,12 +2106,15 @@ def process_hop(chunk):
             print(f"[gate] mic {'open' if mok else 'close'}"
                   f"  lvl {_lvl:.1f}  floor {_fl:.1f}", flush=True)
     elif a.mouth and not a.file:
-        # R3#2 看門狗：鏡頭 worker 心跳斷（cap.read 阻塞/開機中/掛掉）
-        # ＝fail-open＝裸奔有聲，不是無聲（原病：開場 2-5s 全啞、鏡頭
-        # 卡死全場啞）
-        # 審查：`M.get("hb", 0.0)` 讓**開場必定判定鏡頭死**＝門控裸奔
-        # 3-6 秒（鏡頭挑選 + mediapipe 初始化期間），演出上台前的空檔會唱。
-        # 改成「從未有過心跳＝還沒準備好＝關門」，有過才進看門狗邏輯。
+        # R3#2 watchdog: if the camera worker's heartbeat stops, because cap.read
+        # is blocking, it is still starting, or it has died, fail open and run bare
+        # with sound rather than silence. The original illness was 2-5 s of silence
+        # at the start and total silence for a session if the camera stalled.
+        # Review: `M.get("hb", 0.0)` made **the start always look like a dead
+        # camera**, so the gate ran bare for 3-6 seconds, during camera selection
+        # and mediapipe initialisation, and it would sing in the gap before going
+        # on stage. It now treats "no heartbeat ever" as "not ready yet, keep the
+        # gate closed", and only enters the watchdog logic once one has arrived.
         if "hb" not in M:
             mok = False
             if not st.get("bootwarn"):
@@ -1812,43 +2123,59 @@ def process_hop(chunk):
                       flush=True)
             alive = True
         else:
-            alive = time.time() - M["hb"] < 0.85   # R5#1：貼齊嘴部
-        #   寬限 0.8s＝看門狗與門控間的無聲縫隙縮到 ~50ms
+            alive = time.time() - M["hb"] < 0.85   # R5#1: aligned with the mouth
+        #   grace period of 0.8 s, which narrows the silent gap between the
+        #   watchdog and the gate to about 50 ms
         if "hb" in M and not alive:
             mok = True
             if a.vowels:
-                # 審查 A3：鏡頭死＝嘴形資料過期，母音場回 mid（render 的
-                # 逐 hop 內插會平滑滑過去），不凍在最後一張嘴
+                # Review A3: a dead camera means the mouth data is stale, so the
+                # vowel field returns to the middle layer, which the per-hop
+                # interpolation in render slides to smoothly, rather than freezing
+                # on the last mouth shape.
                 M["vw"] = _VW_MID
             if not st.get("camwarn"):
                 st["camwarn"] = True
-                # 08-17 review #12：這條路原本靜默裸奔——只印一行小字、不設
-                # M["dead"]＝狀態列不掛 ⚠GATE DEAD、shell 大警告條抓不到，
-                # 而 USB 鏡頭 stall 是**最可能**的鏡頭故障。與 crash 路徑
-                # （_mouth_worker 的 except）同格式＝同一種可見性。
+                # Review #12, 2026-08-17: this path used to run bare in silence,
+                # printing one small line without setting M["dead"], so the status
+                # bar never showed GATE DEAD and the shell's large warning bar
+                # could not catch it, while a stalled USB camera is **the most
+                # likely** camera failure. It now uses the same format as the crash
+                # path, the except in _mouth_worker, so both are equally visible.
                 M["dead"] = "camera heartbeat lost"
                 print("⚠ [mouth] GATE DEAD (camera heartbeat lost) = running "
                       "ungated (feedback guard off)", flush=True)
         elif st.get("camwarn"):
             st["camwarn"] = False
             if M.get("dead") == "camera heartbeat lost":
-                del M["dead"]                # 心跳回來＝解除（crash 路不解除）
+                del M["dead"]                # the heartbeat is back, so it clears;
+                                             # the crash path does not clear
             print("[mouth] camera back = gate online again", flush=True)
-    M["eff"] = mok                       # R4A#2：生效門值（狀態列/view）
+    M["eff"] = mok                       # R4A#2: the gate value in force, for the
+                                         # status bar and the view
     if a.vowels and _VF_W is not None:
-        _ABUF[0] = np.concatenate([_ABUF[0], chunk])[-_FN:]   # 每 hop 續接
+        _ABUF[0] = np.concatenate([_ABUF[0], chunk])[-_FN:]   # appended every hop
     if not mok:
-        # review A4/A6：v9「新音高放行」判死——bass unison（他自己的音）
-        # 與 pad 和弦音（他最常唱的三/五度）都會被判「不 novel」＝反而製造
-        # 0.5s 週期頓挫與「反應時間看撞不撞和弦」的不一致。回到 v2 語意：
-        # 嘴閉＝一律不算你；「時好時壞」改從鏡頭端修（更快輪詢/閾值/凍結修復）
+        # Reviews A4 and A6 condemned v9's "admit a new pitch": a bass unison,
+        # which is the singer's own note, and a pad chord tone, the thirds and
+        # fifths they sing most often, were both judged not novel, which instead
+        # produced a stumble every 0.5 s and made the reaction time depend on
+        # whether a chord happened to be in the way. It returns to the v2 meaning:
+        # a closed mouth never counts as you, and the intermittency is fixed at the
+        # camera end instead, through faster polling, thresholds and the freeze
+        # fix.
         f0 = 0.0
     if a.vowels and _VF_W is not None:
-        # v19 融合場：嘴形（鏡頭 EMA）＋當下 MFCC → 機率＝混層權重。
-        # **位置很重要**：在門控之後——嘴閉時 f0 已歸零＝不更新，不然
-        # 天使回授會自己去改母音（v16.2 的死因，這次從結構上擋掉）。
-        # 不唱時權重停在最後一個母音（比追垃圾好），render 逐 hop 內插
-        # 負責平滑；鏡頭斷（camwarn）時同樣不更新＝看門狗設的 mid 站得住。
+        # v19 fused field: the mouth shape, from the camera EMA, plus the current
+        # MFCC give probabilities that serve as the layer-mixing weights.
+        # **Where this sits matters**: after the gate. With the mouth closed, f0 is
+        # already zero and nothing updates, or bleed from the parts would change
+        # the vowel by itself, which is what killed v16.2; this time it is blocked
+        # structurally.
+        # While not singing, the weights stay on the last vowel, which is better
+        # than chasing rubbish, and the per-hop interpolation in render smooths it.
+        # With the camera gone (camwarn) it likewise does not update, so the middle
+        # layer set by the watchdog holds.
         if f0 > 0 and M.get("rv") is not None and not st.get("camwarn"):
             _P = np.abs(np.fft.rfft(_ABUF[0] * _FWIN)) ** 2
             _c = _FDCT @ np.log(_P @ _FFB.T + 1e-10)
@@ -1857,74 +2184,107 @@ def process_hop(chunk):
             _e = np.exp(_l - _l.max())
             _vw = _sub(_e / _e.sum())
             if a.vw_tau > 0 and M.get("vw") is not None:
-                # v20：權重本身再平滑（--vw-tau）＝音色飄的直接旋鈕
+                # v20: smooth the weights themselves (--vw-tau), which is the
+                # direct control for a wandering timbre
                 _k = 1.0 - float(np.exp(-a.hop / a.vw_tau))
                 _vw = (M["vw"] + _k * (_vw - M["vw"])).astype("float32")
             M["vw"] = _vw
     if f0 > 0:
         mf = 69 + 12 * np.log2(f0 / 440.0)
         m = int(round(mf))
-        # v26：v24 的「音高遲滯死區」**整套移除**——三份 fresh 審查各自
-        # 判死：①生效機制是意外的（夾住的幀被下游合理性門丟掉＝候選票
-        # 不清，事後可湊票跳到半秒前擦過的音）②hys>0.5 時逃逸條件與合理
-        # 性門不相交＝**回不去剛離開的音（永久卡）**，實測 5s 不動
-        # ③hys 0.55 靜默漏音（每趟漏 3 音）④把換音推到 0.3s 後＝滑音觸發
-        # 率 46.6%→68.9%（貼「有 autotune 就是不行」那條線）。
-        # 取而代之：①下方 need/搶拍的 young 條件（剛換過去的音要更多票）
-        # ②本區的 clamp——死區**做對的版本**：夾住的幀明講「他還在原來
-        # 那個音」（走下面 m == st["note"] 那條＝清候選票），不是靠合理性
-        # 門把幀丟掉；且死區上限鎖 0.5 半音 ⇒ 逃逸門檻 ≤1.0＝鄰音中心，
-        # 永遠可達＝**卡音與靜默漏音在結構上不可能**（S2/S3 根治）。
-        # 年輕音加票擋得住顫音級的快抖，但他的來回每邊停 200-400ms＝
-        # 持續證據，票數擋不住，需要這條音高記憶。
+        # v26 removed v24's pitch hysteresis dead zone **entirely**. Three fresh
+        # reviews each condemned it: (1) the mechanism that made it work was
+        # accidental, since clamped frames were dropped by the plausibility gate
+        # downstream, so the candidate votes were never cleared and votes could
+        # later accumulate onto a note grazed half a second earlier; (2) above
+        # hys 0.5 the escape condition and the plausibility gate no longer
+        # intersect, so **the note just left becomes unreachable and it sticks for
+        # good**, measured at 5 s without moving; (3) at hys 0.55 it silently
+        # dropped notes, three per pass; (4) it pushed note changes past 0.3 s and
+        # took the glide trigger rate from 46.6% to 68.9%, which runs straight into
+        # "anything auto-tuned is simply out".
+        # In its place: (1) the young condition on need and the pre-empt below,
+        # requiring more votes for a note just changed to; and (2) the clamp in
+        # this section, which is **the dead zone done correctly**: a clamped frame
+        # says outright that they are still on the original note, taking the
+        # m == st["note"] branch below and clearing the candidate votes, rather
+        # than relying on the plausibility gate to discard the frame. The dead zone
+        # is also capped at 0.5 semitones, so the escape threshold is at most 1.0,
+        # the centre of the neighbouring note, which is always reachable and makes
+        # **sticking and silent dropping structurally impossible** (the cure for S2
+        # and S3).
+        # Extra votes on a young note stop chatter at the rate of vibrato, but
+        # their back-and-forth holds 200-400 ms on each side, which is sustained
+        # evidence that votes cannot stop, so this pitch memory is needed.
         clamp = (a.deadzone > 0 and st["note"] is not None
                  and m != st["note"]
                  and abs(mf - st["note"]) < 0.5 + a.deadzone)
         if clamp:
             m = st["note"]
-        # v11 已知音符拒斥＝只管「真停頓後的進場」。v10 版（隨時擋 >6
-        # 半音外的在播音）被 08-12 dump 法醫定罪：他跳五度/八度進場貼到
-        # 還在響的 pad/快層音＝被吃掉，pad 響多久斷多久（2.45s 中斷實錄
-        # ＝pad 壽命 2.4s 分毫不差）。跳進是音樂不是回授——拒斥收縮到
-        # 回授捕獲唯一的真實場景：他停 ≥0.5s、嘴還在寬限內開著、天使殘
-        # 響仍在，此時貼著任何在播音的偵測一律存疑（不分遠近）。
-        # ⚠ 本區塊**不是死碼**：上面算的 mf/m 是下游狀態機的輸入，只有
-        # 拒斥邏輯被移除（R3）。照註解刪整塊＝NameError。
-        # R3 判決：已知音符拒斥層**整層移除**——實測複音回授被自相關鎖到
-        # 「和弦共同週期」幽靈音（例：在播 48/64/67 → 偵測 38.5），離任何
-        # 在播音都 >0.4 半音＝這層在真實編制下命中率 ≈ 0（假保護），唯一
-        # 非冗餘窗只有嘴閉後 0.35-0.8s 的 0.45 秒，卻帶著 fail-open 抽吸
-        # 迴歸（R3#1）。真防線＝嘴部門控；鏡頭死＝誠實裸奔（下方看門狗）。
+        # v11 rejection of notes already sounding applies only to **entering after
+        # a real pause**. The v10 version, which blocked anything more than 6
+        # semitones outside a sounding note at any time, was convicted by dump
+        # forensics on 2026-08-12: entering on a leap of a fifth or an octave onto
+        # a pad or fast-layer note still ringing meant being swallowed, and the
+        # break lasted exactly as long as the pad (a measured 2.45 s break against a
+        # pad lifetime of 2.4 s).
+        # A leap is music, not feedback, so the rejection narrows to the only real
+        # scenario in which feedback is captured: they have stopped for 0.5 s or
+        # more, the mouth is still open inside the grace period, and the parts'
+        # reverb is still sounding. In that state any detection sitting on a
+        # sounding note is treated as suspect, near or far.
+        # This block is **not dead code**: the mf and m computed above are inputs
+        # to the state machine downstream, and only the rejection logic was removed
+        # (R3). Deleting the whole block on the strength of the comment gives a
+        # NameError.
+        # The R3 judgement: the layer that rejected notes already sounding was
+        # **removed entirely**. Measured, polyphonic feedback makes the
+        # autocorrelation lock onto a phantom note at the chord's common period,
+        # for example 38.5 detected while 48, 64 and 67 are sounding, which is more
+        # than 0.4 semitones from any of them. So with a real arrangement this
+        # layer almost never fires, making it false protection, and its only
+        # non-redundant window is the 0.45 s between 0.35 and 0.8 s after the mouth
+        # closes, while it brought a fail-open pumping regression with it (R3#1).
+        # The real defence is the mouth gate, and a dead camera runs bare honestly,
+        # through the watchdog below.
         pass
     if f0 > 0:
         st["quiet"] = 0
-        # R4B 合理性門：離半音格 >0.35 的偵測＝換音過渡的滑行幀，不算票
-        # ——假鄰音（全音換音 4/6 出現 70-100ms 假中繼音）與假八度 commit
-        # 的根治；kt/cents 不吃過渡污染、顫音 ±60c 峰不再擦邊
+        # R4B plausibility gate: a detection more than 0.35 from the semitone grid
+        # is a gliding frame in a note transition and does not vote. This cures
+        # false neighbouring notes, where 4 of 6 whole-tone changes produced a
+        # 70-100 ms false intermediate note, and false octave commits. kt and cents
+        # are not contaminated by transitions, and vibrato peaks of plus or minus
+        # 60 cents no longer graze the edge.
         plaus = abs(mf - m) <= 0.35 or clamp
         if plaus and not clamp:
-            # clamp 幀＝他的音在兩格之間，cents/調性不吃這種污染（審查 B1
-            # 記過「死區凍結 cents」——這裡是刻意的：過渡幀本來就不投票）
+            # A clamped frame means their pitch is between two grid points, and
+            # neither cents nor the key takes that contamination. Review B1 noted
+            # "the dead zone freezes cents"; here it is deliberate, since a
+            # transition frame never votes anyway.
             kt.push(mf)
-            # 和弦鎖定：他對量化音的 cents 偏移 → EMA → 播放速率
+            # Chord lock: their cents deviation from the quantised note, through
+            # an EMA, drives the playback rate.
             st["cents"] += 0.25 * ((mf - m) * 100 - st["cents"])
             st["lastm"] = m
         if not plaus:
-            pass                         # 過渡幀：不投票、不清票
+            pass                         # a transition frame: it neither votes nor clears votes
         elif m == st["note"]:
             st["cand"], st["cc"] = None, 0
         elif m == st["cand"]:
             st["cc"] += 1
             tno = st.get("t", 0.0)
-            # R2A#6：不應期涵蓋兩票路徑；顫音對偶（A↔B 來回）要 4 票
+            # R2A#6: the refractory period covers the two-vote path as well, and a
+            # vibrato pair, going back and forth between A and B, needs 4 votes.
             need = 2
             if m == st.get("pn") and tno - st["tsw"] < a.rebound:
-                need = 4                 # v15：只有超快回跳才算顫音抖動
+                need = 4                 # v15: only a very fast back-jump counts as vibrato chatter
             elif st["note"] is not None and abs(m - st["note"]) > 7:
-                need = 3                 # R5#3：大跳多一票＝假八度瞬態
-                #   （R4B 實測 105ms 假 52）死、真八度只慢 ~35ms
+                need = 3                 # R5#3: a leap needs one more vote, which kills the false-octave
+                #   transient (R4B measured a false 52 lasting 105 ms) while a real
+                #   octave is only about 35 ms slower
             if a.young > 0 and tno - st["tsw"] < a.young:
-                need = max(need, 2 + a.young_need)   # v26 年輕音加阻力
+                need = max(need, 2 + a.young_need)   # v26: extra resistance on a young note
             if st["cc"] >= need and tno - st["tsw"] > 0.10:
                 if st["note"] is not None:
                     st["hist"] = (st["hist"] + [m - st["note"]])[-4:]
@@ -1943,26 +2303,31 @@ def process_hop(chunk):
                 hab = (m - st["note"]) in lm_top3(st["hist"][-2],
                                                   st["hist"][-1])
             cool = st.get("t", 0.0) - st["tsw"] > 0.10
-            # review B4：級進本身就是強證據，不再綁調內（KeyTracker 冷啟動
-            # 前 root=0＝非 C 調的歌全被誤擋）；調內判斷只留給呼吸進場，
-            # 且 key 未定時放行
+            # Review B4: a step is strong evidence in itself and is no longer tied
+            # to being in key. Before KeyTracker warms up, root is 0, so every song
+            # not in C was wrongly blocked. The in-key test is kept only for
+            # entering on a breath, and it passes while the key is undecided.
             keyok = (kt.h.sum() < kt.MIN
                      or (m - kt.root()) % 12 in MAJ)
             rebound = (m == st.get("pn")
                        and st.get("t", 0.0) - st["tsw"] < a.rebound)
             young = (a.young > 0 and st["note"] is not None
                      and st.get("t", 0.0) - st["tsw"] < a.young)
-            if (a.fast and cool and not rebound   # v15：只擋超快回跳
-                    and not young                 # v26：年輕音不給一票通道
+            if (a.fast and cool and not rebound   # v15: block only a very fast back-jump
+                    and not young                 # v26: a young note does not get the one-vote channel
                     and ((st["note"] is not None
                           and abs(m - st["note"]) <= 2)
-                         # 審查 A3：hab 原本**繞過假八度防護**——melody_lm
-                         # 的 293 個情境有 50% top-3 含 >7 半音，一幀 105ms
-                         # 的假八度撞上習慣模型就 35ms commit。搶拍只給
-                         # 五度內的跳，大跳一律回慢路徑吃 R5#3 的三票。
+                         # Review A3: hab used to **bypass the false-octave
+                         # protection**. In 293 of melody_lm's contexts, 50% of the
+                         # top three contain a leap over 7 semitones, so a
+                         # single-frame false octave of 105 ms that met the habit
+                         # model committed in 35 ms. The pre-empt is now limited to
+                         # leaps within a fifth, and anything larger returns to the
+                         # slow path and pays R5#3's three votes.
                          or (hab and abs(m - st["note"]) <= 7)
                          or (breath and st["note"] is None and keyok))):
-                # v6 搶拍：一票 commit（~35ms）；150ms 不應期防顫音風暴
+                # v6 pre-empt: commit on one vote, about 35 ms, with a 150 ms
+                # refractory period against a vibrato storm.
                 if st["note"] is not None:
                     st["hist"] = (st["hist"] + [m - st["note"]])[-4:]
                 st["porta_ok"] = (st.get("t", 0.0) - st["tsw"]) >= 0.3  # v15
@@ -1972,11 +2337,12 @@ def process_hop(chunk):
                 st["cand"], st["cc"] = None, 0
     else:
         st["quiet"] += 1
-        st["cents"] *= 0.9               # review A13：無聲時音準偏移歸零，
-        #                                  不讓上一個音的 cents 掛在墊上
+        st["cents"] *= 0.9               # Review A13: the tuning deviation decays
+        #                                  to zero in silence, so the previous
+        #                                  note's cents do not hang on the pad
         if st["quiet"] >= max(1, int(0.25 / a.hop)):
-            st["note"] = None            # 停 ~0.25s＝放
-            st["cand"], st["cc"] = None, 0   # review B7：殘留候選一併清
+            st["note"] = None            # about 0.25 s of silence releases it
+            st["cand"], st["cc"] = None, 0   # review B7: clear any leftover candidate too
     root = kt.root()
     n = st["note"]
     for vi, (p, (_nm, _md, _sp, _g, _rng, sh, th)) in enumerate(
@@ -1984,12 +2350,18 @@ def process_hop(chunk):
         if n is None:
             p.set_note(None)
         elif a.vl >= 2 and vi > 0:
-            # v36 合唱配置（--vl 2）：舊版三個上聲部**共用同一組候選、又都
-            # 用「離自己上一個音最近」**＝一起單向棘輪爬到最高候選後鎖死，
-            # 實測上三聲部 95% 唱同一顆音（+19 半音），四聲部等於三份齊唱。
-            # 新版每個聲部各自：①候選＝和弦音在**自己音域內**的所有八度
-            # ②評分＝聲部進行(|Δ|) ＋ 音域向心力 ＋ 同音懲罰 ＋ 交叉懲罰
-            # ③由低到高依序指派（下面已定的音當作不可交叉的地板）。
+            # v36 choral arrangement (--vl 2): the older version gave the three
+            # upper parts **one shared candidate set and had each take the nearest
+            # note to its own previous one**, so they ratcheted upwards together
+            # and locked onto the highest candidate. Measured, the upper three sang
+            # the same note 95% of the time, at +19 semitones, so four parts were
+            # three in unison.
+            # In the new version each part works separately: (1) the candidates are
+            # every octave of a chord tone **within its own range**; (2) the score
+            # is voice motion (|delta|) plus a pull towards the centre of the range
+            # plus a unison penalty plus a crossing penalty; (3) they are assigned
+            # from low to high, with the notes already settled acting as a floor
+            # that must not be crossed.
             lo_, hi_ = _rng
             ctr = (lo_ + hi_) / 2.0
             offs = (0, dia_step(n, root, 2), dia_step(n, root, 4))
@@ -2004,17 +2376,18 @@ def process_hop(chunk):
                 v = abs(c - prev) + 0.6 * abs(c - ctr)
                 if floor_ is not None:
                     if c == floor_:
-                        v += 8.0          # 同音（齊唱）＝要有代價
+                        v += 8.0          # a unison must cost something
                     elif c < floor_:
-                        v += 14.0         # 聲部交叉
+                        v += 14.0         # voice crossing
                 return v
             pick = min(cands, key=_score)
             st["vlfloor"] = pick
             p.set_note(pick)
         elif a.vl and vi > 0:
-            # v4 voice-leading：bass 恆根音；上聲部從三/五/八度系
-            # 候選中選離自己上一個音最近的＝小步進行（撞同音＝double，
-            # 合唱團本來就有）
+            # v4 voice leading: the bass always takes the root, and an upper part
+            # takes whichever candidate a third, a fifth or an octave away is
+            # nearest its own previous note, which gives small steps. Landing on a
+            # unison doubles the note, which choirs do anyway.
             third = dia_step(n, root, 2)
             fifth = dia_step(n, root, 4)
             cands = [n + third, n + fifth, n + 12,
@@ -2026,33 +2399,44 @@ def process_hop(chunk):
             t = n + sh + (dia_third(n + sh, root) if th else 0)
             p.set_note(t)
         if vi == 0:
-            # 08-17 review #5：vlfloor 記 bass **實際發聲**的音（set_note 之後
-            # 的 p.cur），不是折疊前的 n+sh——set_note 會把低於音庫下限的目標
-            # 上折八度（bass -8 之後 n≤43 就會折），記折疊前的值＝地板低報
-            # 12 半音＝tenor 的同音(+8)/交叉(+14)懲罰對最低那些音整段失效、
-            # tenor 可能被配到 bass 實際音高之下（sh=0 時代不可能發生的迴歸）。
+            # Review #5, 2026-08-17: the floor records the note the bass
+            # **actually sounds**, that is, p.cur after set_note, and not the
+            # pre-fold n+sh. set_note folds any target below the bank's lower limit
+            # up by an octave, which happens for n <= 43 once the bass is at -8.
+            # Recording the pre-fold value under-reports the floor by 12 semitones,
+            # so the tenor's unison (+8) and crossing (+14) penalties stop working
+            # entirely for the lowest notes and the tenor can be assigned below the
+            # bass's real pitch, a regression that was impossible while the shift
+            # was 0.
             st["vlfloor"] = (p.cur[0]
                              if (n is not None and p.cur is not None) else None)
     if PP > 1:
-        # 團員**跟著自己聲部的領唱**，不自己決定音。voice-leading 用 p.cur
-        # 當「上一個音」評分（同音罰 8／交叉罰 14），四個團員各自跑一次
-        # 會各自棘輪到不同的音＝一個聲部散成四聲部。真合唱團的分部也是
-        # 一條線多個人唱，不是每個人自己挑。
-        # 用 p.tgt 判有沒有音：p.cur 在放掉之後仍留著上一個音。
+        # Members **follow the lead of their own part** and never choose a note
+        # themselves. Voice leading scores against p.cur as the previous note, with
+        # a unison penalty of 8 and a crossing penalty of 14, so running it once
+        # per member would let four members ratchet onto four different notes and
+        # one part would scatter into four. In a real choir a division is also one
+        # line sung by several people, not each person choosing.
+        # Use p.tgt to test whether a note is present: p.cur still holds the
+        # previous note after a release.
         for vi, p in enumerate(players):
             m_ = p.cur[0] if (p.cur is not None and p.tgt > 0) else None
             for mm in MEMS[vi]:
-                mm["p"].set_note(m_)      # 同音＝set_note 直接 return，不重觸發
+                mm["p"].set_note(m_)      # the same note makes set_note return at once, without retriggering
     if pads:
         tmono = st.get("t", 0.0)
         if n is not None and st["pada"] != n and \
                 tmono - st["padt"] >= a.pad:
-            # v6 慢層：錨音換和弦（駐留限制＝和聲節奏）；三度/五度看調
+            # v6 slow layer: the anchor note changes the chord, with the dwell
+            # limit acting as the harmonic rhythm; the third and fifth follow the
+            # key.
             st["pada"], st["padt"] = n, tmono
             r_ = kt.root()
-            # 審查：pads 依聲部數建（v31 起可能 4 個）但和弦只有 3 音，
-            # zip 會**靜默截斷**＝最後一個聲部的墊從頭到尾是啞的。和弦
-            # 依 pads 數展開（第 4 音補高八度根音）。
+            # Review: the pads are built from the number of parts, which may be 4
+            # from v31, while a chord has only 3 notes, so zip **truncates
+            # silently** and the last part's pad is mute throughout. The chord is
+            # expanded to the number of pads, with the fourth note taking the root
+            # an octave up.
             chord = [n - 12, n + dia_step(n, r_, 2), n + dia_step(n, r_, 4),
                      n][:len(pads)]
             for pp, cnote in zip(pads, chord):
@@ -2062,11 +2446,12 @@ def process_hop(chunk):
             for pp in pads:
                 pp.set_note(None)
     rate = 2 ** (a.lock * st["cents"] / 1200.0)
-    # 審查 B：法醫權重在 render **前**取樣＝記到的就是本 hop 用的場
+    # Review B: the forensic weights are sampled **before** the render, so what is
+    # recorded is the field this hop actually used.
     vw_h = (np.asarray(M.get("vw", _VW_MID)).copy()
             if a.vowels and dmp is not None else None)
-    y = np.zeros((hopN, NCH), dtype="float32")    # NCH=2（無 --out-map）＝舊形狀
-    tnow = st["t"] = st.get("t", 0.0) + a.hop     # 檔案模式也要走假時鐘
+    y = np.zeros((hopN, NCH), dtype="float32")    # NCH=2 without --out-map, which is the old shape
+    tnow = st["t"] = st.get("t", 0.0) + a.hop     # file mode also runs on the fake clock
     for vi, p in enumerate(players):
         if a.human > 0:
             f1, p1, f2, p2 = HUM[vi]
@@ -2076,11 +2461,14 @@ def process_hop(chunk):
         else:
             r = rate
         if a.vib > 0:
-            # v37 顫音（審查：他的 3-8Hz 音高能量天使只還原 2.2%＝**天使
-            # 完全沒有顫音**，這是「修過音」最強的單一指紋，勝過換音瞬間）。
-            # 音齡 >--vib-delay 才漸入＝換音當下乾淨、長音才活過來（真唱者
-            # 也是這樣）。逐樣本（借 v25 的 rate 陣列）＝5.5Hz 不會被 35ms
-            # 的 hop 切成階梯。
+            # v37 vibrato. The review measured that the parts reproduce only 2.2%
+            # of the singer's pitch energy in the 3-8 Hz band, that is, **they have
+            # no vibrato at all**, which is the single strongest fingerprint of a
+            # corrected sound, stronger than the moment of a note change.
+            # It fades in only once the note is older than --vib-delay, so a note
+            # change itself is clean and only a sustained note comes alive, which
+            # is what a real singer does. It runs per sample, borrowing v25's rate
+            # array, so 5.5 Hz is not cut into steps by a 35 ms hop.
             age = tnow - st["tsw"]
             if age > a.vib_delay:
                 dep = a.vib * min(1.0, (age - a.vib_delay) / 0.3)
@@ -2090,16 +2478,18 @@ def process_hop(chunk):
                               / 1200.0)
         w = p.render(hopN, r) * MIXG[VOICES[vi][0]] * MEMG
         if OMAP is not None:
-            y[:, OMAP[vi]] += w              # 路由：整聲部進自己那道（不 pan）
+            y[:, OMAP[vi]] += w              # routing: a whole part goes to its own channel, unpanned
         else:
             gl, gr = _pan(PAN_F[vi])
             y[:, 0] += w * gl
             y[:, 1] += w * gr
         for mm in MEMS[vi]:
-            # 團員：跟領唱同一個音、同一份音庫，但每個人有自己的失諧／
-            # 微漂／顫音相位／站位／起音延遲。刻意重寫一次而不是把領唱那
-            # 段抽成函式——抽出來就動到了已認證的路徑，PP=1 的 byte-identical
-            # 保證會變成「要重新證明」。
+            # Members take the same note and the same bank as the lead, but each
+            # has its own detuning, drift, vibrato phase, position and attack delay.
+            # This is deliberately written out again rather than factoring the
+            # lead's section into a function: factoring it would touch the certified
+            # path, and the byte-identical guarantee at PP=1 would have to be
+            # proved again.
             rm = rate * mm["det"]
             if a.human > 0:
                 f1, p1, f2, p2 = mm["hum"]
@@ -2116,7 +2506,7 @@ def process_hop(chunk):
             wm = _mdelay(mm, mm["p"].render(hopN, rm)
                          * MIXG[VOICES[vi][0]] * MEMG)
             if OMAP is not None:
-                y[:, OMAP[vi]] += wm         # 團員跟領唱同一道
+                y[:, OMAP[vi]] += wm         # members share the lead's channel
             else:
                 glm, grm = _pan(mm["pan"])
                 y[:, 0] += wm * glm
@@ -2128,15 +2518,17 @@ def process_hop(chunk):
         w = (pp.render(hopN, rate * 2 ** (c / 1200.0)) * a.pad_gain
              * MIXG[VOICES[vi][0]])
         if OMAP is not None:
-            y[:, OMAP[vi]] += w              # pad 也跟該聲部同一道
+            y[:, OMAP[vi]] += w              # the pad shares its part's channel too
         else:
             gl, gr = _pan(PAN_P[vi])
             y[:, 0] += w * gl
             y[:, 1] += w * gr
     if RVIR is not None:
-        # 殘響走 mono 匯流排（擴散場）、回灌全部聲道＝空間包住站位。
-        # OMAP 下用 sum（每個樣本只在一道＝sum 才是完整混音）；舊路徑
-        # mean 不動（byte-identical）。
+        # The reverb runs on a mono bus, as a diffuse field, and is fed back into
+        # every channel, so the space wraps around the positions.
+        # Under OMAP it uses sum, since each sample sits on one channel only and
+        # sum is the complete mix; the old path keeps mean and stays
+        # byte-identical.
         _bus = y.sum(axis=1) if OMAP is not None else y.mean(axis=1)
         wf = _fftc(_bus.astype(float), RVIR)
         wet_ = wf[:hopN]
@@ -2149,10 +2541,14 @@ def process_hop(chunk):
         y = (y + a.wet * wet_[:, None]).astype("float32")
     y = np.clip(y * a.gain, -1, 1).astype("float32")
     if OMAP is not None:
-        # 08-18 live 實測（回授漲到斷電）抓到的路由回歸：array-rms 會隨聲道
-        # 數稀釋（4ch 比立體聲低 3dB）＝回授地板讀低、mic 門更容易被回授
-        # 撐開。換算回「立體聲等效」尺度（總能量 ÷ 2 道）＝-13.5 的 bleed
-        # 校準口徑不變。⚠ 校準本身是舊喇叭擺位量的，4 喇叭散開後 k 要重掃。
+        # A routing regression found live on 2026-08-18, when feedback rose until
+        # the power had to be cut: the rms over the array is diluted by the number
+        # of channels, reading 3 dB lower on four channels than in stereo, so the
+        # feedback floor reads low and the microphone gate is more easily forced
+        # open by feedback. Converting back to a stereo-equivalent scale, the total
+        # energy divided by two channels, keeps the -13.5 bleed calibration in the
+        # same terms. The calibration itself was measured with the old speaker
+        # placement, so k must be swept again now the four speakers are spread out.
         _OLV.append(20 * np.log10(
             float(np.sqrt((y ** 2).sum() / (y.shape[0] * 2))) + 1e-12))
     else:
@@ -2161,19 +2557,19 @@ def process_hop(chunk):
     if dmp is not None and len(dmp["mic"]) < DMPMAX:
         dmp["mic"].append(chunk.copy())
         dmp["out"].append(y.copy())
-        dmp["mok"].append(1.0 if mok else 0.0)   # R4A#2：生效門值
+        dmp["mok"].append(1.0 if mok else 0.0)   # R4A#2: the gate value in force
         dmp["face"].append(1.0 if M.get("face") else 0.0)
         dmp["mon"].append(1.0 if M["on"] else 0.0)
-        dmp["val"].append(float(M.get("val", -1.0)))  # v27 開口值
-        dmp["wd"].append(float(M.get("wd", -1.0)))    # v28 嘴寬
-        dmp["sp"].append(float(M.get("sp", -1.0)))    # v34 在唱機率
-        dmp["f0"].append(f0_raw)                 # R4A#2：門控前偵測
+        dmp["val"].append(float(M.get("val", -1.0)))  # v27 opening value
+        dmp["wd"].append(float(M.get("wd", -1.0)))    # v28 mouth width
+        dmp["sp"].append(float(M.get("sp", -1.0)))    # v34 probability of singing
+        dmp["f0"].append(f0_raw)                 # R4A#2: the detection before the gate
         dmp["note"].append(-1 if st["note"] is None else st["note"])
         dmp["vn"].append([p.cur[0] if p.cur else -1 for p in players])
         if a.vowels:
             dmp["vw"].append(vw_h)
     elif dmp is not None and not st.get("dumpfull"):
-        st["dumpfull"] = True                    # v44：滿了停錄、明講一次
+        st["dumpfull"] = True                    # v44: full, so recording stops and says so once
         print(f"⚠ dump buffer full (--dump-max-min {a.dump_max_min:g}) = "
               f"later audio not recorded (performance unaffected)", flush=True)
     return y
@@ -2194,10 +2590,14 @@ def worker():
             try:
                 y = process_hop(chunk)
             except Exception as e:
-                # 08-17 review #11：原本裸奔——process_hop 一個例外就殺掉唯一
-                # 產音的執行緒，callback 照跑＝整場靜音、xrun 凍結、儀表全綠
-                # ＝live 樂器最糟的死法。錯一個 hop 補一塊靜音照常前進；
-                # ⚠ 行進大警告條（shell warn pattern 認 ⚠ 開頭）。
+                # Review #11, 2026-08-17: this used to be unguarded, so one
+                # exception in process_hop killed the only thread producing sound
+                # while the callback carried on. The result was silence for the
+                # whole session with the xrun count frozen and every indicator
+                # green, which is the worst way a live instrument can die. Now a
+                # failed hop inserts a block of silence and carries on, and the line
+                # raises the large warning bar; the shell's warn pattern matches the
+                # leading marker.
                 st["hopfail"] = st.get("hopfail", 0) + 1
                 if st["hopfail"] <= 3 or st["hopfail"] % 200 == 0:
                     import traceback
@@ -2209,14 +2609,18 @@ def worker():
             with qlock:
                 out_q.append(y)
                 while sum(len(q) for q in out_q) > a.maxlag * hopN:
-                    out_q.pop(0)                 # 積壓上限＝--maxlag 塊；
-                    #   review A10 誠實註：丟最舊＝持續音挖掉一塊（會有 35ms
-                    #   跳格），是「延遲不沉澱」的代價，靠 A9 的淡出遮爆音
-                    # v25（審查 S2）：延遲棘輪——worker 一次卡頓造成的積壓
-                    #   **永遠不會被追回**（cb 每次只取剛好填滿的量），最壞
-                    #   常駐 +105ms 而 xrun 完全照不到（callback 都填滿了）。
-                    #   上限改旗標（預設仍 3＝舊行為），並在丟塊時記一筆＋
-                    #   讓下一塊淡入（原本硬接）。
+                    out_q.pop(0)                 # the backlog ceiling is --maxlag blocks;
+                    #   Honest note (review A10): dropping the oldest punches a
+                    #   hole in a sustained note, a 35 ms jump, which is the price
+                    #   of not letting latency settle; A9's fade covers the click.
+                    # v25 (review S2), the latency ratchet: a backlog caused by one
+                    #   stall in the worker is **never caught up**, because the
+                    #   callback only ever takes exactly what it needs to fill, so
+                    #   in the worst case +105 ms becomes permanent while the xrun
+                    #   count sees nothing at all, since every callback was filled.
+                    #   The ceiling is now a flag, defaulting to 3, the old
+                    #   behaviour, a dropped block is recorded, and the next block
+                    #   fades in; it used to be a hard join.
                     st["drop"] = st.get("drop", 0) + 1
                     UF[0] = True
 
@@ -2229,15 +2633,15 @@ if a.file:
             for i in range(0, len(x) - hopN + 1, hopN)]
     yy = np.concatenate(outs)
     sf.write(a.file[1], yy, SR)
-    _write_dump()                                    # review A15：別默丟 dump
+    _write_dump()                                    # review A15: never lose the dump silently
     print(f"{len(x)/SR:.1f}s -> {a.file[1]}  rms "
           f"{float(np.sqrt((yy**2).mean())):.4f}  "
           f"glide {st.get('porta_n', 0)}", flush=True)
     raise SystemExit
 
 OB = [np.zeros((0, NCH), dtype="float32")]
-UF = [False]                              # 上一個 callback underrun 過
-LB = [np.zeros(NCH, dtype="float32")]     # 最後輸出樣本（underrun 淡出用）
+UF = [False]                              # the previous callback underran
+LB = [np.zeros(NCH, dtype="float32")]     # the last output sample, for the underrun fade-out
 
 
 def cb(indata, outdata, frames, tinfo, status):
@@ -2251,7 +2655,8 @@ def cb(indata, outdata, frames, tinfo, status):
             b = out_q.pop(0)
             grabbed.append(b)
             need -= len(b)
-    # review A8：concatenate 移出鎖外（RT 執行緒持鎖配置記憶體＝優先權反轉）
+    # Review A8: the concatenate moves outside the lock. Allocating memory while a
+    # real-time thread holds a lock inverts priorities.
     if grabbed:
         OB[0] = np.concatenate([OB[0]] + grabbed) if len(OB[0]) else (
             grabbed[0] if len(grabbed) == 1 else np.concatenate(grabbed))
@@ -2259,7 +2664,8 @@ def cb(indata, outdata, frames, tinfo, status):
     if len(buf) >= frames:
         o = buf[:frames]
         if UF[0]:
-            # review A9：underrun 復原第一塊淡入（不然又是一個階躍）
+            # Review A9: fade in the first block after recovering from an underrun,
+            # or it is another step discontinuity.
             o = o.copy()
             k = min(96, frames)
             o[:k] *= np.linspace(0, 1, k, dtype="float32")[:, None]
@@ -2268,7 +2674,8 @@ def cb(indata, outdata, frames, tinfo, status):
         LB[0] = np.asarray(o[-1]).copy()
         OB[0] = buf[frames:]
     else:
-        # review A9：underrun 不再硬切零——從最後樣本短淡出
+        # Review A9: an underrun no longer cuts hard to zero; it fades out briefly
+        # from the last sample.
         outdata.fill(0)
         nb_ = len(buf)
         if nb_:
@@ -2282,8 +2689,8 @@ def cb(indata, outdata, frames, tinfo, status):
                                           * np.linspace(1, 0, k,
                                                         dtype="float32")[:, None])
         UF[0] = True
-        LB[0] = np.zeros(NCH, dtype="float32")   # R2A#5：連續 underrun＝靜音，
-        OB[0] = np.zeros((0, NCH), dtype="float32")   # 不是 86Hz 脈衝串
+        LB[0] = np.zeros(NCH, dtype="float32")   # R2A#5: a continuous underrun means silence,
+        OB[0] = np.zeros((0, NCH), dtype="float32")   # not an 86 Hz pulse train
 
 
 import sounddevice as sd  # noqa: E402
@@ -2294,15 +2701,17 @@ try:
     VIEW = a.view and a.mouth and not a.file
     FB64 = a.frame_b64 > 0 and a.mouth and not a.file
     if VIEW or FB64:
-        import cv2 as _cv                 # imshow 必須在主執行緒（macOS）
+        import cv2 as _cv                 # imshow has to run on the main thread on macOS
     if FB64:
         import base64 as _b64
     with sd.Stream(samplerate=SR, blocksize=a.sblock, channels=(1, NCH),
                    device=(a.in_name, a.out_name), dtype="float32",
                    latency="low", callback=cb):
-        # ready 在**開流之後**才印（08-17 review）：它是 respond_shell 切換
-        # 退場舊引擎、UI 顯示 SING 的依據——原本在開流前印，音訊裝置還沒到
-        # 手 UI 就說「合唱團跟著你」，切換也會提早殺掉舊引擎。
+        # ready is printed **after** the stream opens (review, 2026-08-17): it is
+        # what respond_shell uses to retire the old engine on a switch and to show
+        # SING in the UI. It used to be printed before the stream opened, so the UI
+        # said the choir was following before the audio device was even in hand, and
+        # a switch killed the old engine too early.
         print(f"ready (sample bank: detection window {a.hop*1000:.0f}ms x2, "
               f"note change fast ~{a.hop*1000:.0f}ms / slow ~{a.hop*2000:.0f}ms, "
               f"lock {a.lock}; Ctrl-C to stop)", flush=True)
@@ -2310,15 +2719,19 @@ try:
         _tf = 0.0
         try:
             while True:
-                time.sleep(0.1 if (VIEW or FB64) else 2)   # R5：view 30Hz 實測
-                #   +12 xrun/分鐘（imshow 吃 RT）；10fps 監看夠用、xrun 回本底
+                time.sleep(0.1 if (VIEW or FB64) else 2)   # R5: a 30 Hz view measured
+                #   +12 xruns per minute, since imshow competes with the real-time
+                #   thread; 10 fps is enough to monitor and the xrun count returns
+                #   to baseline
                 if VIEW and M.get("frame") is not None:
                     _cv.imshow("mouth gate", M["frame"])
                     _cv.waitKey(1)
                 if (FB64 and M.get("frame") is not None
                         and time.time() - _tf >= 1.0 / a.frame_b64):
-                    # 給 respond_shell 的影像通道：單行 FRAME <b64>，shell 特判
-                    # 不進 log。q60/480 寬 ≈ 20KB/幀，5fps ≈ 100KB/s＝pipe 無感。
+                    # The image channel to respond_shell: one line, FRAME <b64>,
+                    # which the shell special-cases and keeps out of the log. At
+                    # quality 60 and 480 wide that is about 20 KB per frame, so
+                    # 5 fps is about 100 KB/s and the pipe does not notice.
                     _tf = time.time()
                     okj, _jb = _cv.imencode(".jpg", M["frame"],
                                             [int(_cv.IMWRITE_JPEG_QUALITY), 60])
@@ -2327,8 +2740,10 @@ try:
                 if time.time() - _ts < 2:
                     continue
                 _ts = time.time()
-                # 08-17 review #11：worker 活性偵測——它是唯一產音的執行緒，
-                # 死了 callback 照樣填 underrun 淡出＝無聲但儀表全綠。
+                # Review #11, 2026-08-17: liveness detection for the worker. It is
+                # the only thread producing sound, and if it dies the callback goes
+                # on filling underrun fade-outs, giving silence with every indicator
+                # green.
                 if not _WT.is_alive() and not st.get("wdead"):
                     st["wdead"] = True
                     print("⚠ [engine] audio worker thread died — OUTPUT IS "
@@ -2338,34 +2753,45 @@ try:
                       f"cents {st['cents']:+5.1f}  "
                       f"mouth {'open' if M.get('eff', M['ok']) else 'closed'}  "
                       + f"xrun {st['xrun']}"
-                      # v25：積壓（塊）與丟塊數＝延遲棘輪的儀器（原本全盲）
+                      # v25: the backlog in blocks and the number of dropped blocks
+                      # are the instrument for the latency ratchet, which used to be
+                      # invisible
                       + f"  backlog {sum(len(q) for q in out_q) // hopN}"
                       + (f"/dropped {st['drop']}" if st.get("drop") else "")
-                      # v40：門為什麼開？sp＝模型機率、mo＝下巴運動量（否決票）。
-                      # 沒有這兩個數字，誤觸只能用猜的（08-15 繞了一整天）
+                      # v40: why is the gate open? sp is the model probability and
+                      # mo the jaw movement, which casts the veto.
+                      # Without those two numbers, a false trigger can only be
+                      # guessed at, which cost a whole day on 2026-08-15.
                       + (f"  sp {M.get('sp', 0.0):.2f} mo {M.get('mo', 0.0):.4f}"
                          if a.sing_gate and M.get("sp") is not None else "")
-                      # v16/v17：附加欄接在**行尾**——既有欄位格式一字不動
-                      # （respond_shell 的 regex 靠它）。場＝五層權重百分比
+                      # v16/v17: extra fields are appended **at the end of the
+                      # line**, so the existing field format is unchanged to the
+                      # character, which respond_shell's regex depends on. The field
+                      # is the five layer weights as percentages.
                       + (("  field " + "/".join(
                           f"{nm_}{int(round(w * 100))}"
                           for nm_, w in zip(_SEL_NAMES, M.get("vw", _VW_MID))))
                          if a.vowels else "")
-                      # 審查：警告要接**行尾**——原本插在中間會撞壞 shell 的
-                      # bank_st 正則＝門控一死，警告與唯一的即時讀數同時消失
+                      # Review: warnings are appended **at the end of the line**.
+                      # Inserted in the middle they broke the shell's bank_st regex,
+                      # so when the gate died the warning and the only live readout
+                      # disappeared together.
                       + ("  ⚠GATE DEAD" if M.get("dead") else "")
                       + ("  ⚠WORKER DEAD" if st.get("wdead") else ""),
                       flush=True)
         except KeyboardInterrupt:
             pass
         finally:
-            # 08-17 review #13：dump 在**關流之前**落檔（stream context 內）。
-            # 舊碼把它放在 with 的 __exit__ 之後＝CoreAudio 關流掛死（playbook
-            # 已知）時 shell 的 8s SIGKILL 讓整份錄音陪葬——而「耳朵是唯一的
-            # 儀器、事後讀 dump」整套方法論都掛在這份檔案上。
+            # Review #13, 2026-08-17: the dump is written **before the stream is
+            # closed**, inside the stream context. The old code placed it after the
+            # with block's __exit__, so when closing the CoreAudio stream hung, a
+            # known playbook issue, the shell's 8 s SIGKILL took the whole recording
+            # with it — and the entire method of "the ear is the only instrument,
+            # read the dump afterwards" hangs on that file.
             st["die"] = True
-            time.sleep(0.2)              # 讓 worker 吐完手上的 hop
+            time.sleep(0.2)              # let the worker finish the hop in hand
             _write_dump()
 except KeyboardInterrupt:
-    pass                                 # 關流期間再按 Ctrl-C：dump 已寫完
+    pass                                 # Ctrl-C again while closing: the dump is
+                                         # already written
 print("bye")

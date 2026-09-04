@@ -1,20 +1,26 @@
-"""render_v3.py — 三聲部 render 推論器（brain v3 spec 開工順序 #3 的前半）
+"""render_v3.py — the three-part render inference runner (the first half of item
+#3 in the brain v3 spec)
 
-同一個 take、同一個直驅嘴，三個 cell 只換腦：
-  v1     brain_v2 獨立跑兩次（trio v1 配方，互不聞）
-  joint  v3_joint 單模型逐 tick 生 (upper, lower)，lower 看得到同 tick 的 upper
-  serial brain_v2 出 upper → v3_serial 以 (lead, upper) 為條件生 lower
+The same take and the same direct-drive voice, with only the model changed
+across three cells:
+  v1      brain_v2 run twice independently, the trio v1 recipe, deaf to each other
+  joint   v3_joint, a single model producing (upper, lower) per tick, where lower
+          can see the upper of the same tick
+  serial  brain_v2 produces upper, then v3_serial produces lower conditioned on
+          (lead, upper)
 
-輸出（out/）：{tag}_upper_notes.json / {tag}_lower_notes.json（direct_mouth 格式）
-＋ {tag}_stats.json（互撞/黏線統計，歸因用不判生死）。--run 再代跑直驅嘴×2
-（upper→combsub-girl、lower→combsub-harry）並落 {tag}_stem.wav（雙天使）與
-{tag}_trio.wav（take 0.5＋天使各 0.6）。
+Output, in out/: {tag}_upper_notes.json and {tag}_lower_notes.json in
+direct_mouth format, plus {tag}_stats.json (clash and line-sticking statistics,
+used for attribution and never to decide pass or fail). With --run it also drives
+the voices twice, upper through combsub-girl and lower through combsub-harry, and
+writes {tag}_stem.wav (the two parts) and {tag}_trio.wav (the take at 0.5 with
+each part at 0.6).
 
-盲聽包最後用 blind_pack.py 餵三個 stem（同配方混音＋隨機化）。
+The blind listening pack is finally built by blind_pack.py from the three stems,
+mixed by the same recipe and randomised.
 
-Run (brain venv):
-  .../260722_harmony_brain/venv/bin/python render_v3.py --mode joint --run
-  --baseline 印 CPDL/chorale 語料真實分佈的同組統計（spec 終點2 的基準）。
+  --baseline prints the same statistics over the real distribution of the CPDL
+  and chorale corpus, which is the reference for end point 2 of the spec.
 """
 import argparse, json, subprocess, sys, wave
 from pathlib import Path
@@ -33,22 +39,27 @@ import sys as _sys, pathlib as _pl  # noqa: E402
 _sys.path.insert(0, str(_pl.Path(__file__).resolve().parent.parent))
 from config import DDSP as _DDSP  # noqa: E402
 DDSP = str(_DDSP)
-TEMPERATURE, TOP_K = 0.9, 8          # 同 brain_v2，A/B 只換腦不換取樣配方
-BPM = 80.0                            # v2/v3 共用 tick（16 分音符 @80 = 187.5ms）
-GIRL_RANGE = (52, 79)                 # E3–G5，girl 單元庫實測音域（07-26）
-HARRY_RANGE = (43, 70)                # harry 單元庫實測音域
-DISSONANT = {1, 2, 6, 10, 11}         # 互撞判定的音程類（07-26 D3 同口徑）
-STICKY_RUN = 4                        # 黏線＝同音連走 ≥4 tick（0.75s）
+TEMPERATURE, TOP_K = 0.9, 8          # as brain_v2: the A/B changes the model only, not the sampling recipe
+BPM = 80.0                            # tick shared by v2 and v3 (a sixteenth at 80 BPM = 187.5 ms)
+GIRL_RANGE = (52, 79)                 # E3-G5, the measured range of the girl unit bank (2026-07-26)
+HARRY_RANGE = (43, 70)                # the measured range of the harry unit bank
+DISSONANT = {1, 2, 6, 10, 11}         # interval classes counted as a clash, on the same terms as D3 (2026-07-26)
+STICKY_RUN = 4                        # sticking = the same note for 4 ticks or more (0.75 s)
 
 
 class BrainV3:
-    """v3 checkpoint 的逐 tick 取樣器。joint: step(lead)->(upper,lower)；
-    serial: step_serial(lead, upper)->lower。context 全長餵（take << CTX）。
+    """A per-tick sampler over a v3 checkpoint. joint: step(lead) -> (upper,
+    lower); serial: step_serial(lead, upper) -> lower. The whole context is fed,
+    since a take is much shorter than CTX.
 
-    indep＝獨立度旋鈕（推論期個性層，2026-07-28 Harry「同行太多、想要微微
-    分開」回饋）：他換音的瞬間以機率 indep 掛留（boost HOLD，晚一兩拍才
-    解決）；他唱長音時以機率 indep 走經過音（壓 HOLD）。兩天使各自擲骰，
-    音高選擇仍是模型的——只偏節奏行為，不越權寫和聲。"""
+    indep is the independence control, a personality layer at inference time,
+    from the feedback of 2026-07-28: "they move together too much, I want them
+    slightly apart". At the moment the singer changes note, the part suspends
+    with probability indep, boosting HOLD so it resolves a beat or two later;
+    while the singer holds a note, it takes a passing note with probability
+    indep, suppressing HOLD. Each part rolls its own dice, and the choice of
+    pitch is still the model's: this biases rhythmic behaviour only and never
+    writes the harmony."""
 
     INDEP_BIAS = 3.0
 
@@ -61,22 +72,23 @@ class BrainV3:
         self.src = torch.tensor([SRC[accent]], device=self.device)
         self.ctx, self.phases, self.tick = [], [], 0
         self.indep = indep
-        self.stab = stab                 # 最短音長（tick）：onset 後強制 HOLD
-        self.window = window             # live 滑動窗（tokens）；None=全 context
-        self.last = {0: REST, 1: REST}   # 每聲部上一 tick 的 token
-        self.age = {0: 999, 1: 999}      # 每聲部現任音符已唱的 tick 數
+        self.stab = stab                 # shortest note in ticks: HOLD is forced after an onset
+        self.window = window             # live sliding window in tokens; None uses the whole context
+        self.last = {0: REST, 1: REST}   # each part's token from the previous tick
+        self.age = {0: 999, 1: 999}      # ticks the current note of each part has lasted
 
     @torch.no_grad()
     def _sample(self, mask_rest, hold_bias=0.0):
         start = 0
         if self.window and len(self.ctx) > self.window:
-            # 切點必須是 3 的倍數：voice embedding 用 idx%3，切歪＝聲部相位全錯
+            # The cut must be a multiple of 3: the voice embedding uses idx % 3,
+            # so an off-by-one cut puts every part out of phase.
             start = (len(self.ctx) - self.window + 2) // 3 * 3
         x = torch.tensor([self.ctx[start:]], device=self.device)
         p = torch.tensor([self.phases[start:]], device=self.device)
         logits = self.model(x, p, self.src)[0, -1] / TEMPERATURE
         if mask_rest:
-            logits[REST] = float("-inf")  # 他唱的時候天使唱（同 v2 規則）
+            logits[REST] = float("-inf")  # the parts sound while the singer sounds, as in the v2 rule
         if hold_bias:
             logits[HOLD] = logits[HOLD] + hold_bias
         k = torch.topk(logits, TOP_K)
@@ -87,20 +99,24 @@ class BrainV3:
         self.phases.append(phase)
 
     def _indep_bias(self, lead_tok, voice):
-        """掛留/經過音的擲骰；天使自己在 REST 時不介入（HOLD 續 REST＝閉嘴）。"""
+        """The dice for a suspension or a passing note. It does not intervene
+        while the part itself is at REST, where HOLD continues the rest and stays
+        silent."""
         if not self.indep or self.last[voice] == REST:
             return 0.0
         if lead_tok >= PITCH_OFFSET and float(torch.rand(1)) < self.indep:
-            return +self.INDEP_BIAS      # 他換音，我先不動（掛留）
+            return +self.INDEP_BIAS      # the singer changes note and this part stays put: a suspension
         if lead_tok == HOLD and float(torch.rand(1)) < self.indep:
-            return -self.INDEP_BIAS      # 他長音，我動（經過音）
+            return -self.INDEP_BIAS      # the singer holds and this part moves: a passing note
         return 0.0
 
     def _voices_for(self, lead_tok, phase):
         out = []
         for voice in (0, 1):
-            # 穩定旋鈕（2026-07-28「音符太短」回饋）：onset 後 stab tick 內
-            # 強制 HOLD 續唱，模型只在承諾期滿後才重新決定。他停唱時不強制。
+            # The stability control, from the "notes are too short" feedback of
+            # 2026-07-28: HOLD is forced for stab ticks after an onset, and the
+            # model only decides again once that commitment has run out. It is
+            # not forced while the singer has stopped.
             if (self.stab > 1 and self.age[voice] < self.stab
                     and lead_tok != REST and self.last[voice] != REST):
                 tok = HOLD
@@ -126,11 +142,16 @@ class BrainV3:
 
     @torch.no_grad()
     def step_anticipate(self, voiced_hint=True, conf=0.0):
-        """預感步（brain_v2 配方的 v3 版，2026-07-28 live「拉住歌者」回饋後
-        重啟——每音滑音的病根已被按需滑音修掉，預測錯改為瞬跳修正）：
-        不等下一 tick 的 lead，先 argmax 預測他的音（voiced_hint＝只預測
-        音高不預測發聲，REST/HOLD 遮掉），據以取樣兩天使＝與他同時落地。
-        隨後真實 token 到手時呼叫 commit_lead() 寫回（天使的選擇保留）。"""
+        """The anticipation step, the v3 form of the brain_v2 recipe. Restarted
+        after the live feedback of 2026-07-28 that the parts "pull on the
+        singer": the root cause, a glide on every note, was fixed by gliding only
+        on demand, and a wrong prediction is now corrected by an instant jump.
+        Rather than waiting for the next tick's lead, the singer's note is
+        predicted by argmax (voiced_hint means pitch only, never whether they are
+        sounding, with REST and HOLD masked), and both parts are sampled from
+        that, so they land together with the singer.
+        When the real token arrives, commit_lead() writes it back, keeping the
+        parts' own choices."""
         if not self.ctx:
             return None
         phase = self.tick % 16
@@ -145,15 +166,18 @@ class BrainV3:
             lg[REST] = float("-inf")
             lg[HOLD] = float("-inf")
         fore = int(torch.argmax(lg))
-        # 低信心不提前（修法候選①）：沒把握就假設他續唱（HOLD），天使延續
-        # 現在的音——初次聽的旋律命中率只有 ~10-16%（G29 基線），亂猜傷和聲
+        # Do not anticipate at low confidence: when unsure, assume the singer
+        # holds, so the parts continue their current note. On a melody heard for
+        # the first time the hit rate is only about 10-16% (the G29 baseline),
+        # and guessing damages the harmony.
         if conf and float(torch.softmax(lg, -1)[fore]) < conf:
             fore = HOLD
         self._push(fore, phase)
         return fore, self._voices_for(fore, phase)
 
     def commit_lead(self, lead_tok):
-        """把上一個預感 tick 的預測 lead 換成真實 token（context 誠實化）。"""
+        """Replace the predicted lead of the previous anticipation tick with the
+        real token, keeping the context honest."""
         self.ctx[-3] = lead_tok
 
     def step_serial(self, lead_tok, upper_tok):
@@ -179,16 +203,19 @@ def fold(notes, lo, hi):
 
 
 def line_stats(a, b):
-    """兩條 sounding MIDI 線的互撞/黏線統計（None＝無聲）。
-    全部以音程類（mod 12）計——八度疊唱聽感上仍是黏同一條線（v1 的
-    girl 嘴 +12 之後 same-note 永遠測不到，改口徑才跨 cell 可比）。"""
+    """Clash and line-sticking statistics over two sounding MIDI lines, with
+    None for silence.
+    Everything is counted in interval classes, mod 12, because doubling at the
+    octave is still heard as sticking to one line. After the v1 girl voice was
+    shifted +12, same-note could never be detected, so the terms had to change
+    for the cells to be comparable."""
     both = [(x, y) for x, y in zip(a, b) if x is not None and y is not None]
     if not both:
         return {"ticks_both": 0}
     unison = [(x - y) % 12 == 0 for x, y in both]
     diss = [abs(x - y) % 12 in DISSONANT for x, y in both]
     runs, r = [], 0
-    for u in unison + [False]:          # 尾端 flush
+    for u in unison + [False]:          # flush at the end
         if u:
             r += 1
         elif r:
@@ -203,7 +230,8 @@ def line_stats(a, b):
 
 
 def corpus_baseline():
-    """CPDL＋chorale 真實 upper/lower 分佈（spec 終點2：先學真實分佈的基準）。"""
+    """The real upper and lower distribution of the CPDL and chorale corpus:
+    end point 2 of the spec, the reference for learning the real distribution."""
     split = json.loads((CORPUS / "corpus_split_v3.json").read_text())
     blocks = {"chorale": np.load(CORPUS / "chorale_v3.npz"),
               "cpdl": np.load(CORPUS / "cpdl_v3.npz")}
@@ -237,15 +265,15 @@ def main():
     ap.add_argument("--tag", default=None)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--indep", type=float, default=0.0,
-                    help="獨立度：掛留/經過音的每次機率（joint 專用）")
+                    help="independence: the per-event probability of a suspension or passing note (joint only)")
     ap.add_argument("--stab", type=int, default=1,
-                    help="穩定度：最短音長 tick 數（1=現行；joint 專用）")
+                    help="stability: the shortest note in ticks (1 is the current behaviour; joint only)")
     ap.add_argument("--f0-mode", choices=["target", "shift", "texture"], default="target",
-                    help="嘴的 f0 來源：target＝合成目標線；shift＝他的真 f0 移調；"
-                         "texture＝target 骨架＋真 f0 微紋理蓋印")
+                    help="f0 source for the voice: target is the synthesised target line, shift transposes the singer's real f0, "
+                         "texture is the target skeleton with the real f0 micro-texture printed over it")
     ap.add_argument("--legato-gap", type=int, default=1)
-    ap.add_argument("--run", action="store_true", help="代跑直驅嘴×2＋trio 混音")
-    ap.add_argument("--baseline", action="store_true", help="只印語料真實分佈統計")
+    ap.add_argument("--run", action="store_true", help="also drive both voices and mix the trio")
+    ap.add_argument("--baseline", action="store_true", help="print only the corpus distribution statistics")
     a = ap.parse_args()
     if a.baseline:
         print(json.dumps(corpus_baseline(), indent=1))
@@ -260,7 +288,8 @@ def main():
         raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16) / 32768.0
     mic = (raw.reshape(-1, nch)[:, 0] if nch > 1 else raw).astype(np.float64)
 
-    # key 歸一化（同 world_mouth "auto"）：腦只懂 C 框架，take 實測 A 大調
+    # Key normalisation, as in world_mouth "auto": the model understands only a
+    # C framework, and the take measures as A major.
     kd = KeyDetector()
     for ts in range(0, len(mic) - 2048, 1024):
         f = yin_f0(mic[ts:ts + 2048].astype(np.float32), SR)
@@ -272,7 +301,8 @@ def main():
         k_shift -= 12
     print(f"key detect: root {k['name'] if k else '?'} -> normalize {k_shift:+d} st")
 
-    # 腦 pass：與 live 相同的 tick 迴圈；lead token 流一份餵所有腦
+    # Model pass: the same tick loop as live, with one lead token stream feeding
+    # every model.
     if a.mode == "v1":
         brains = [BrainV2(accent="cpdl"), BrainV2(accent="cpdl")]
     elif a.mode == "joint":
@@ -284,7 +314,7 @@ def main():
     lines = {"upper": [], "lower": []}
     prev = {"upper": None, "lower": None}
     legato = {v: {"gap": 0, "note": None} for v in lines}
-    lead = []                            # 他的 sounding 線，供 lead-vs-angel 統計
+    lead = []                            # the singer's sounding line, for the lead-against-parts statistics
     for tick_start in range(0, len(mic) - 1024, step_samps):
         tracker.push(mic[tick_start: tick_start + step_samps])
         f_in = tracker.latest
@@ -312,8 +342,10 @@ def main():
                 lg["note"] = m
             lines[v].append(None if m is None else m - (v2t.shift or 0) - k_shift)
 
-    # 音域處理（spec 終點4：八度摺疊，接受摺疊瞬間包夾對調）
-    # v1 cell 忠於 trio v1 配方：兩線摺到他的聲區、girl 嘴 -k 12 升八度
+    # Range handling (end point 4 of the spec: fold by octaves, accepting that
+    # the enclosure can invert at the moment of a fold).
+    # The v1 cell is faithful to the trio v1 recipe: both lines fold into the
+    # singer's register, and the girl voice is raised an octave by -k 12.
     ref = float(np.median(tracker.register)) if tracker.register else 55.0
     if a.mode == "v1":
         girl_key = 12
@@ -339,9 +371,11 @@ def main():
     print(json.dumps(stats, indent=1))
 
     if a.run:
-        # vibrato 去同步：兩天使不同速率/相位＋起振延遲（機械齊振＝autotune 感來源之一）
+        # Vibrato desynchronisation: different rates and phases for the two
+        # parts, plus a delayed onset. Mechanically synchronised vibrato is one
+        # of the sources of a corrected sound.
         vib = {"upper": ("5.3", "0.0"), "lower": ("4.6", "0.5")}
-        fmin = {"upper": "140", "lower": "80"}   # shift 模式曲線層摺疊地板
+        fmin = {"upper": "140", "lower": "80"}   # shift mode: floor of the curve-layer fold
         for v, model, key in [("upper", "combsub-girl/model_30000.pt", girl_key),
                               ("lower", "combsub-harry/model_30000.pt", 0)]:
             r = subprocess.run([sys.executable, str(HERE / "direct_mouth.py"),
@@ -369,7 +403,9 @@ def main():
 
 
 def _motion(lead, line):
-    """獨立度歸因：他換音時天使不動（掛留）率、他長音時天使動（經過音）率。"""
+    """Attribution for independence: how often the parts stay put when the
+    singer changes note (a suspension), and how often they move while the singer
+    holds (a passing note)."""
     sus = mov = lead_chg = lead_hold = 0
     for t in range(1, len(lead)):
         if None in (lead[t], lead[t - 1], line[t], line[t - 1]):
@@ -385,7 +421,8 @@ def _motion(lead, line):
 
 
 def _inversion(lead, sound):
-    """包夾結構破壞率：upper 低於 lead / lower 高於 lead 的 tick 比例。"""
+    """How often the enclosure breaks: the share of ticks where upper falls
+    below the lead or lower rises above it."""
     pairs_u = [(l, x) for l, x in zip(lead, sound["upper"]) if l is not None and x is not None]
     pairs_l = [(l, x) for l, x in zip(lead, sound["lower"]) if l is not None and x is not None]
     return {"upper_below_lead": sum(x < l for l, x in pairs_u) / max(1, len(pairs_u)),

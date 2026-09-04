@@ -86,7 +86,9 @@ def _bp_melody(melody_wav):
         out.append([s, e, p])
     # despike ONLY (no merge!): a brief ≤2-semitone blip between two EQUAL pitches is vibrato, not a
     # syllable → snap its pitch to the neighbours but KEEP its onset. Repeated same-pitch syllables
-    # ("一二三" on one note = 3 notes) are preserved — each onset stays its own note.
+    # (the syllables yi-er-san sung on one note = 3 notes) are preserved: each
+    # onset stays its own note. Chinese characters below name the actual sung
+    # takes these numbers were measured on, and are kept as identifiers.
     for i in range(1, len(out) - 1):
         if (out[i][1] - out[i][0]) < 0.11 and out[i-1][2] == out[i+1][2] and abs(out[i][2] - out[i-1][2]) <= 2:
             out[i][2] = out[i-1][2]
@@ -99,10 +101,11 @@ _SF0_HOP = 512
 _SF0_DIP_KEEP = 0.85           # a same-pitch boundary is a real re-articulation (split kept) when the
                               # energy dips below this fraction of the surrounding level; otherwise the
                               # energy is continuous = one held note → merge. Lower = split less.
-                              # 0.85 measured 2026-07-06 on 啦啦啦 takes: real re-attacks (/l/) dip to
-                              # 0.60-0.81, mid-vowel wobble onsets stay >=0.92 — 0.55 merged every 啦.
-_SF0_SPEC_SPLIT = 45.0         # 2nd channel for VOWEL-boundary re-attacks (一→二: no consonant, energy
-                              # never dips): MFCC distance across the boundary. Measured 一二三四五六七八:
+                              # 0.85 measured 2026-07-06 on the "la-la-la" takes: real re-attacks (/l/) dip to
+                              # 0.60-0.81, mid-vowel wobble onsets stay >=0.92; 0.55 merged every "la".
+_SF0_SPEC_SPLIT = 45.0         # 2nd channel for VOWEL-boundary re-attacks (yi -> er: no consonant, energy
+                              # never dips): MFCC distance across the boundary. Measured on the counting take
+                              # yi-er-san-si-wu-liu-qi-ba:
                               # real syllable changes 49-159, held-vowel wobble onsets 21-29.
 
 
@@ -149,7 +152,7 @@ def _swiftf0_melody(melody_wav):
     """FAITHFUL monophonic melody via SwiftF0 (ONNX f0, accurate low male register, no octave jumps)
     + onset splitting. Runs in-process (no TF env). A note is split at a pitch change, or at a same-
     pitch boundary only when the ENERGY DIPS (a real re-articulation — new syllable/breath); a held
-    note with continuous energy stays one note (no vibrato/wobble over-split). So '一二三' on one pitch
+    note with continuous energy stays one note (no vibrato/wobble over-split). So yi-er-san on one pitch
     splits (each syllable dips) but a sustained vowel doesn't. Returns [(start,end,midi)…]; [] on any
     failure so the caller falls back to Basic Pitch."""
     import numpy as _np, librosa, swift_f0
@@ -205,7 +208,7 @@ def _swiftf0_melody(melody_wav):
         if nm is None or not (_SF0_RANGE[0] <= nm <= _SF0_RANGE[1]):
             continue
         # trim the note to its VOICED extent: bounds are onset-to-onset, so a short sung syllable
-        # followed by a rest was drawn as long as the whole gap (a 0.1s 一 became a 0.53s note and
+        # followed by a rest was drawn as long as the whole gap (a 0.1 s "yi" became a 0.53 s note and
         # skewed the visual rhythm, 2026-07-06). Interior unvoiced flickers are untouched.
         sel = (t >= a) & (t < b)
         vt = t[sel][~_np.isnan(midi[sel])]
@@ -228,9 +231,9 @@ def _swiftf0_melody(melody_wav):
             out[i][2] = out[i-1][2]
     # absorb leap transits (right-to-left): a <0.15s DIFFERENT-pitch fragment within 3 st of a longer
     # note it runs straight into is the singer's undershoot/correction landing on a leap (measured on
-    # 九: 51 → dive 44.4 → settle 45.8 became 3 phantom notes), not notes → merge forward KEEPING the
+    # on "jiu": 51 -> dive 44.4 -> settle 45.8 became 3 phantom notes), not notes -> merge forward KEEPING the
     # landing pitch (a median over the transit would drag the note flat). Same-pitch shorts are NOT
-    # touched here — those are real fast syllables (啦快 has true 0.13s 啦s).
+    # touched here: those are real fast syllables (the fast "la" take has genuine 0.13 s syllables).
     changed = True
     while changed:                                     # to convergence: an unabsorbed fragment can mask
         changed = False                                # the leap that the settling test looks back for
@@ -239,7 +242,7 @@ def _swiftf0_melody(melody_wav):
             cur, nxt = out[i], out[i + 1]
             transit = ((cur[1] - cur[0]) < 0.15 and abs(cur[2] - nxt[2]) <= 3
                        and (nxt[1] - nxt[0]) > (cur[1] - cur[0]))
-            # post-leap settling can take ~0.3s (21:14 九: 0.28s of correction before landing) — absorb
+            # post-leap settling can take ~0.3 s (21:14 on "jiu": 0.28 s of correction before landing): absorb
             # a longer near-landing fragment ONLY when the preceding note confirms a big leap is in
             # progress (no "landing must be longer" here: it can rival the landing's length)
             settling = (i > 0 and abs(out[i - 1][2] - nxt[2]) >= 3
@@ -259,7 +262,7 @@ def _swiftf0_melody(melody_wav):
         out[1] = [out[0][0], out[1][1], out[1][2]]
         out.pop(0)
     # trailing release crack: a final <0.2s fragment jumping >=2 st straight off a >=2x longer note is
-    # the voice cracking on the release (measured 九 tail: 0.16s at +3.6 st), not a sung note → drop it
+    # the voice cracking on the release (measured on the "jiu" tail: 0.16 s at +3.6 st), not a sung note -> drop it
     if (len(out) >= 2 and (out[-1][1] - out[-1][0]) < 0.2
             and abs(out[-1][2] - out[-2][2]) >= 2
             and (out[-2][1] - out[-2][0]) >= 2 * (out[-1][1] - out[-1][0])
@@ -399,7 +402,7 @@ def _hmm_melody(melody_wav):
 
         notes = []
         for (a, b, m) in runs:
-            # end margin 0.02 not 0.05: a last syllable right before the run boundary (八 at 2.66 with
+            # end margin 0.02 not 0.05: a last syllable right before the run boundary ("ba" at 2.66 with
             # the run ending 2.71) must still get its cut
             cuts = [a] + [o for o in on if a + 0.03 < o < b - 0.02 and _reart(o, a, b)] + [b]
             for s0, s1 in zip(cuts[:-1], cuts[1:]):

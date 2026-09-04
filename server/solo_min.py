@@ -64,7 +64,7 @@ def configure_voice(conv, harm, cfg, steps=None, interval=None):
         harm.interval_steps = int(st)
         harm.auto_chord = bool(cfg.free)           # Free = chord-aware sub-variant
         harm.voice_lead = bool(getattr(cfg, "voice_lead", False))   # Free sub-variant: independent lines
-        harm.note_hysteresis = float(cfg.hysteresis)     # bigger → less snap-jitter ("偏移"), slower note changes
+        harm.note_hysteresis = float(cfg.hysteresis)     # bigger -> less snap jitter, slower note changes
         harm.note_smooth_frames = int(cfg.smooth)        # bigger → steadier pitch, more lag on genuine changes
         conv.pitch_glide_step = float(cfg.glide) if cfg.glide > 0.0 else 0.0
         conv.pitch_hold_frames = 8
@@ -75,7 +75,7 @@ def _voice_specs(args):
     passthrough, not in this list). Voice N reads steps/steps2/steps3…, interval/interval2/…, etc.
     A voice is included when its steps attr exists. Each voice = +1 inference pass.
     NO cache-thrash when voices share ONE model and differ only by target_speaker (self-trained satb2:
-    speaker 0 = female, 1 = male) — the crackle-free way to mix timbres. DIFFERENT models = 滋滋波波."""
+    speaker 0 = female, 1 = male) — the crackle-free way to mix timbres. DIFFERENT models crackle."""
     specs = []
     for suf in ("", "2", "3", "4"):   # add more suffixes here to grow the choir
         st = getattr(args, "steps" + suf, None)
@@ -109,7 +109,7 @@ def build_voices(args):
 def build_argparser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="paraphernalia dir (voice 1)")
-    ap.add_argument("--model2", default=None, help="voice-2 model (default = same as --model). Two different models may cache-thrash → 滋滋波波")
+    ap.add_argument("--model2", default=None, help="voice-2 model (default = same as --model). Two different models may cache-thrash and crackle")
     ap.add_argument("--engine", default=None)
     ap.add_argument("--speaker", type=int, default=0, help="voice-1 target speaker (satb2: 0=female, 1=male)")
     ap.add_argument("--speaker2", type=int, default=None, help="voice-2 target speaker (default = --speaker). Same model + different speaker = no cache-thrash way to mix timbres")
@@ -138,7 +138,7 @@ def build_argparser():
     ap.add_argument("--model4", default=None, help="voice-4 model (default = --model)")
     ap.add_argument("--speaker4", type=int, default=None, help="voice-4 target speaker (default = --speaker; satb2: 0=female top)")
     ap.add_argument("--glide", type=float, default=0.04, help="diatonic mode: pitch glide semitones/hop (0 = jump)")
-    ap.add_argument("--hysteresis", type=float, default=1.0, help="diatonic: snap hysteresis (bigger = less '偏移' jitter, slower changes)")
+    ap.add_argument("--hysteresis", type=float, default=1.0, help="diatonic: snap hysteresis (bigger = less jitter, slower changes)")
     ap.add_argument("--smooth", type=int, default=30, help="diatonic: pitch median-smoothing frames (bigger = steadier)")
     ap.add_argument("--formant", type=float, default=0.0)
     # --- mouth gate (2026-08-14) — see server/mouth_gate.py for why this exists ---
@@ -159,10 +159,12 @@ def build_argparser():
     ap.add_argument("--gate-grace", type=float, default=0.8, help="gate: keep open this long after the mouth closes (consonants, breaths)")
     ap.add_argument("--gate-ramp", type=float, default=0.12, help="gate: open/close ramp in seconds (0 would click)")
     ap.add_argument("--cam", type=int, default=-1, help="gate: camera index (-1 = auto-pick the brightest)")
-    # --- mic gate (2026-08-18, Harry:「neural 也改成不用鏡頭觸發」跟進 bank) ---
-    # harmony/bank_live.py v43 --mic-gate 的雙胞胎：門的權威改成 mic 電平，
-    # 鏡頭完全不開（cv2/mediapipe 都不 import）。⚠ 任一邊改 mic 門邏輯，
-    # 另一邊要跟著看——與 mouth_gate.py 同一條紀律。開著時 --mouth-gate 讓位。
+    # --- mic gate (2026-08-18: neural triggers without the camera, following bank) ---
+    # The twin of --mic-gate in harmony/bank_live.py v43: gate authority is the
+    # microphone level and the camera is never opened, with neither cv2 nor
+    # mediapipe imported. A change to the mic gate logic on either side has to
+    # be read against the other, the same discipline as mouth_gate.py. While
+    # this is on, --mouth-gate gives way.
     ap.add_argument("--mic-gate", type=int, default=0,
                     help="mic-level gate on the CONVERTED voices (0 = off). Camera-free twin of "
                          "bank_live v43: opens when the input hop RMS beats max(--mic-open, recent "
@@ -186,26 +188,30 @@ def build_argparser():
                          "in the mic doesn't count as singing. This rig measured median -13.4 (08-18)")
     ap.add_argument("--bleed-margin", type=float, default=6.0,
                     help="mic gate: dB above the bleed estimate that counts as real singing")
-    # --- quantized angel（2026-08-18 和諧度工程；預設全關＝原路徑逐位元不變）---
+    # --- quantised parts (2026-08-18 tuning work; all off by default, so the
+    #     original path is bit-identical) ---
     ap.add_argument("--voices", type=int, default=4,
-                    help="只建前 N 個聲部（4=原行為）。1-2 聲部時推論成本跟著降")
+                    help="build only the first N parts (4 = the original behaviour); with 1-2 parts the inference cost falls with it")
     ap.add_argument("--quantize", type=int, default=0,
-                    help="量化天使：聲部唱『他所站音符』的調內絕對目標（站穩 30ms"
-                         " 才提交音符＝路過音進不來），他的音準起伏逐幀抵消；含純律"
-                         "偏移＋共享調音中心（τ≈2.5s 貼他的音準中心，voice1 當 "
-                         "leader）。0=關＝聲部跟隨他的連續音高（舊行為）")
+                    help="quantised parts: each part sings the absolute in-key target of the note the singer stands on "
+                         "(a note is committed only after holding for 30 ms, so passing notes cannot enter), and the "
+                         "singer's intonation movement is cancelled frame by frame. Includes just-intonation offsets and "
+                         "a shared tuning centre (time constant about 2.5 s tracking the singer, with voice 1 as leader). "
+                         "0 = off, the parts follow the singer's continuous pitch, which is the old behaviour")
     ap.add_argument("--q-glide", type=float, default=0.4,
-                    help="quantize 換音爬坡（st/hop）；>--q-snap 的目標跳動直接落點")
+                    help="quantize note-change ramp in semitones per hop; a target jump larger than --q-snap lands directly")
     ap.add_argument("--q-snap", type=float, default=3.5,
-                    help="quantize 目標跳動超過此半音數＝直接落點不滑（08-18"
-                         "「轉音糊」：調小＝換音更利落、代價是大跳可能有階感）")
+                    help="a quantize target jump larger than this many semitones lands directly instead of gliding "
+                         "(from the smeared note changes of 2026-08-18: smaller is crisper, at the cost of a possible "
+                         "stepped quality on large leaps)")
     ap.add_argument("--vib", default="",
-                    help="quantize 各聲部自有顫音 'cents@Hz,…'（如 '14@5.2,12@4.6'；"
-                         "不足的聲部循環取用；空=無顫音）。起音 300ms 漸開＋深度呼吸")
+                    help="per-part vibrato for quantize, 'cents@Hz,...' such as '14@5.2,12@4.6'; parts beyond the list "
+                         "reuse it cyclically, and empty means no vibrato. Opens over 300 ms at the attack and breathes in depth")
     ap.add_argument("--wet-send", type=float, default=0.0,
-                    help="合唱濕層 send（0=關）。harmony/reverb.py 合成 IR＋ConvLive"
-                         "分割卷積，只濕轉換聲部、dry You 不進殘響（bank [wet] 同語意）")
-    ap.add_argument("--wet-t60", type=float, default=1.2, help="濕層 T60 秒")
+                    help="choir reverb send (0 = off). A synthesised IR from harmony/reverb.py through ConvLive "
+                         "partitioned convolution, wetting the converted parts only; the dry voice stays out of the "
+                         "reverb, the same meaning as [wet] in bank")
+    ap.add_argument("--wet-t60", type=float, default=1.2, help="reverb T60 in seconds")
     ap.add_argument("--no-dry", action="store_true", help="drop the dry You passthrough (harmony voice only)")
     ap.add_argument("--dry-delay-ms", type=float, default=40.0,
                     help="delay the dry You to align with the converted voice's algorithmic latency (tune by ear)")
@@ -228,7 +234,7 @@ def build_argparser():
     ap.add_argument("--voice-delay", default=None,
                     help="per-voice output delay in SECONDS, comma-separated, one entry per voice "
                          "(e.g. '0,0.6,1.2,1.8' = voice 1 live, voices 2-4 enter staggered). Tier-1 "
-                         "canon/round (聲部分離路線圖): each delayed voice is 'you N seconds ago', "
+                         "canon/round (the part-separation roadmap): each delayed voice is 'you N seconds ago', "
                          "harmonized as of then. FIFO on the converted output only — the dry You stays "
                          "live and leads; inference cost unchanged. Static per launch. Composes with "
                          "the mono and --out-map paths (delay applied before routing).")
@@ -294,7 +300,8 @@ class MicGate:
     no threads) — _cb feeds it the input hop + the output block, ramp() is the
     same hook MouthGate exposes. main() polls .on/.lvl/.fl on its own clock to
     print transitions (printing inside the callback is a drop inducer, 08-05
-    playbook). ⚠ bank_live 改 mic 門邏輯時這裡要跟著看（同 mouth_gate 紀律）。"""
+    playbook). A change to the mic gate logic in bank_live has to be read against
+    this, the same discipline as mouth_gate."""
 
     def __init__(self, open_db, frames, hold_s, bleed, margin,
                  ramp_s, sr, hop_s, out_win):
@@ -302,14 +309,14 @@ class MicGate:
         self.bleed, self.margin = float(bleed), float(margin)
         self.hold_hops = max(1, int(round(float(hold_s) / hop_s)))
         self._step = 1.0 / max(1e-6, float(ramp_s)) / sr   # per-sample gain step
-        self._g = 0.0                        # 開場＝關（他還沒唱）
+        self._g = 0.0                        # closed at the start; the singer has not begun
         self._arm = 0                        # consecutive hops above the floor
         self._run = 10 ** 6                  # hops since last above the floor
         # F26: the feedback peak sits ~280 ms behind the output — keep a window
         # of recent output levels and take the MAX (a single point would gamble
         # on the latency estimate; the window only over-blocks, never under).
         self._olv = [-120.0] * max(1, int(out_win))
-        self.on, self.lvl, self.fl = False, -120.0, self.open_db   # main() 讀的快照
+        self.on, self.lvl, self.fl = False, -120.0, self.open_db   # snapshot read by main()
         self.n_hops = self.n_open = 0        # cumulative open fraction (tuning aid)
 
     def note_output(self, y):
@@ -431,14 +438,16 @@ class SoloEngine:
         # Mouth gate (08-14). Imported ONLY when asked: cv2/mediapipe live in the
         # 6x venv, and vcclient-dev must keep working with the flag absent.
         if int(getattr(args, "quantize", 0)):
-            # 量化天使接線（08-18）：全是 converter 屬性，逐聲部設定
+            # Wiring the quantised parts (2026-08-18): these are all converter
+            # attributes, set per part.
             vibs = []
             for tok in str(getattr(args, "vib", "") or "").split(","):
                 tok = tok.strip()
                 if tok:
                     c_, h_ = tok.split("@")
                     vibs.append((float(c_), float(h_)))
-            tune = {"off": 0.0}               # 共享＝和弦內部鎖死、整體貼他
+            tune = {"off": 0.0}               # shared, so the chord locks internally while the
+                                              # whole tracks the singer
             for vi, (conv, _h) in enumerate(self.voices):
                 conv.quantize = True
                 conv.q_glide = float(args.q_glide)
@@ -449,9 +458,11 @@ class SoloEngine:
                 if vibs:
                     vc, vh = vibs[vi % len(vibs)]
                     conv.vib_cents, conv.vib_hz = vc, vh
-        # Optional shared-room wet on the CONVERTED mix (08-18 和諧度工程)：
-        # callable(block48)->block48，None＝原路徑逐位元不變。掛在 dry 相加
-        # 之前＝乾聲（他本人）不進殘響，跟 bank 的 [wet] 同語意。
+        # Optional shared-room wet on the CONVERTED mix (2026-08-18 tuning
+        # work): callable(block48) -> block48, with None leaving the original
+        # path bit-identical. It sits before the dry sum, so the dry voice, the
+        # singer themselves, stays out of the reverb, the same meaning as [wet]
+        # in bank.
         self.wet_fn = None
         if float(getattr(args, "wet_send", 0.0) or 0.0) > 0.0:
             sys.path.insert(0, os.path.join(
@@ -462,7 +473,8 @@ class SoloEngine:
             _rv = reverb.ConvLive(_ir, block=int(args.blocksize))
             _send = float(args.wet_send)
             self.wet_fn = (lambda y: (y + _send * _rv(y)).astype(np.float32))
-            # out-map 路徑要自己算 wet（mono 匯流排回灌各聲道），存零件備用
+            # the out-map path computes its own wet, feeding a mono bus back
+            # into each channel; the parts are kept here for that
             self._wet_rv, self._wet_send = _rv, _send
         self.gate = None
         self.gate_mic = None
@@ -657,9 +669,12 @@ class SoloEngine:
                 t = min(n, len(self.out48_ch[c])); y[:t] = self.out48_ch[c][:t]; self.out48_ch[c] = self.out48_ch[c][t:]
                 chans.append(y)
             if getattr(self, "_wet_rv", None) is not None:
-                # 08-18 稽核修：out-map 路徑原本整段跳過合唱濕層＝一開分聲道
-                # 認證的殘響就靜默消失。濕層走 mono 匯流排（全部轉換聲部加總）
-                # 回灌每一道（同 bank [wet] 的擴散場語意）；乾聲照舊不進殘響。
+                # Audit fix, 2026-08-18: the out-map path used to skip the
+                # choir reverb entirely, so turning on channel routing silently
+                # removed the certified reverb. The wet layer now runs through a
+                # mono bus, the sum of all converted parts, fed back into every
+                # channel, which is the diffuse-field meaning of [wet] in bank.
+                # The dry voice still stays out of the reverb.
                 wet = (self._wet_send
                        * self._wet_rv(np.sum(chans, axis=0))).astype(np.float32)
                 chans = [y + wet for y in chans]
@@ -674,7 +689,7 @@ class SoloEngine:
             return
         y = np.zeros(n, dtype=np.float32)
         take = min(n, len(self.out48)); y[:take] = self.out48[:take]; self.out48 = self.out48[take:]
-        if self.wet_fn is not None:          # 08-18：合唱濕層（僅轉換聲部）
+        if self.wet_fn is not None:          # 2026-08-18: choir reverb, converted parts only
             y = self.wet_fn(y)
         if self.dry_on and len(self.dry_hist) >= n:
             d = self.dry_hist[:n]; self.dry_hist = self.dry_hist[n:]   # oldest n = delayed You

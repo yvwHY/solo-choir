@@ -1,69 +1,84 @@
-# pico_button — 應答式「換你」實體鍵
+# pico_button — the physical "your turn" button for the answering mode
 
-身上一顆按鈕 → UDP → Mac。控制平面，不碰音訊。
+One button on the body, over UDP, to the Mac. Control plane; it never touches
+audio.
 
-## 為什麼要它（2026-08-01 實測）
+## Why it exists (measured 2026-08-01)
 
-應答式 v2 的句尾偵測是純能量判斷，兩個弱點都不是調參能解的：
+Phrase-end detection in the answering mode v2 is energy-only, and neither
+weakness can be tuned away:
 
-| 弱點 | 數字 |
+| Weakness | Number |
 |---|---|
-| 偵測本身要等滿靜默才成立 | 0.35s（延遲下限） |
-| 天使聲回到麥克風＝像他還在唱 | 實測 p90 **0.016** vs gate 0.02＝**只剩 2 dB 餘裕** |
+| Detection needs a full silence before it holds | 0.35 s, which is a floor on the latency |
+| The choir returning to the microphone reads as still singing | measured p90 **0.016** against a gate of 0.02, that is **about 2 dB of margin** |
 
-第二條在展場調大音量就會越線 → 回應永遠不觸發。實體鍵對兩者免疫，延遲 ~6ms。
+The second crosses the line as soon as the room gets louder, and the response
+then never triggers. A physical button is immune to both, at about 6 ms.
 
-**分工**：按鈕負責「結束」（有歧義的那一半），開始仍由能量偵測（他一開口
-0.05 以上，從沒錯過）。按鈕沒按到 → 能量偵測照常斷句，系統不會卡死。
+**Division of labour**: the button ends the phrase, which is the ambiguous half.
+The start is still energy detection, which has never missed, since the singer
+opens above 0.05. If the button is not pressed, energy detection ends the phrase
+as before, so the system cannot lock up.
 
-## 接線
+## Wiring
 
-| Pico W | 接到 |
+| Pico W | To |
 |---|---|
-| **GP15** | 按鈕一腳 |
-| **GND** | 按鈕另一腳 |
+| **GP15** | one leg of the button |
+| **GND** | the other leg |
 
-內部上拉，按下＝接地＝0。**不需要電阻或其他零件。** 板載 LED＝狀態燈
-（連上恆亮、按下瞬間熄一下＝視覺回饋）。
+Internal pull-up, so pressed is grounded and reads 0. **No resistor or other
+part is needed.** The on-board LED is the status light: steady on when
+connected, out for a moment on a press as visual feedback.
 
-哪顆 Pico：**OLED 那顆**（07-23 決定「OLED 臉線收掉不做」後就空著），別用
-wire-light 兩顆——它們在跑 60fps WS2812，時序敏感，加 WiFi 中斷有掉幀風險。
+Which Pico: the one from the OLED line, free since the OLED face line was
+dropped on 2026-07-23. Do not use either wire-light Pico; they run WS2812 at
+60 fps, are timing-sensitive, and adding WiFi interrupts risks dropped frames.
 
-## 燒錄
-
-```
-# main.py 複製到 Pico（MicroPython v1.28，同 OLED 那顆的環境）
-# 開機自動執行；序列埠會印 STA/AP 模式與 IP
-```
-
-## 網路（雙模開機＝STATE 掛著的待辦一併實作）
-
-1. `STA_SSID` 有填 → 先試連該路由器（等 6s）
-2. 連不上或沒填 → 自建 AP **`SoloChoir`**（192.168.4.1），Mac 加入這個網路
-
-兩種模式都走 **UDP 廣播 :8766** → Mac 端不必知道對方 IP、換場地免改設定。
-
-開發期建議填 STA（Mac 保有網路）；展演走 AP 最單純（不依賴場地網路）。
-
-## Mac 端
+## Flashing
 
 ```
-python harmony/tap_listen.py --selftest   # 不需硬體，驗收發＋去重（已 PASS）
-python harmony/tap_listen.py --monitor    # 接上 Pico 後看 TAP 與連線狀態
+# Copy main.py to the Pico (MicroPython v1.28, the same environment as the OLED one)
+# It runs on boot; the serial port prints the STA or AP mode and the IP
 ```
 
-程式內用 `TapListener().take()`（消費一次按鍵）與 `.alive`（heartbeat 在不在
-＝上台前確認連線）。
+## Network (dual-mode boot, which also closes the item left open in STATE)
 
-## 可靠度
+1. If `STA_SSID` is filled in, try that router first, waiting 6 s.
+2. If that fails, or it is empty, raise an access point **`SoloChoir`**
+   (192.168.4.1) and join it from the Mac.
 
-- 每按一次冗餘送 **3 封**（間隔 10ms）帶遞增序號 → Mac 端以序號去重，容忍掉包
-- 每 2s 一次 heartbeat → `.alive` 可當舞台連線指示
-- 韌體 debounce 200ms
-- Mac 端埠被佔用 → 退化成「沒有這顆鍵」，不擋路
+Both modes use **UDP broadcast on port 8766**, so the Mac never needs the other
+side's IP and a change of venue needs no reconfiguration.
 
-## 待驗（需要硬體在手）
+Filling in STA is easier during development, since the Mac keeps its network;
+AP is simplest for a performance, since it does not depend on the venue.
 
-- [ ] 按鈕實體接上 GP15/GND、燒錄、`--monitor` 看見 TAP
-- [ ] 真實 WiFi 延遲（OLED 線量過 ping 6ms／60s 零丟包，本鍵未獨立量）
-- [ ] 按鈕實體位置（建議胸前門柱區，拇指自然可及；不建議腳踏——移動＋觀眾）
+## On the Mac
+
+```
+python harmony/tap_listen.py --selftest   # no hardware needed: send, receive and de-duplication (passing)
+python harmony/tap_listen.py --monitor    # with the Pico attached, watch TAP and the connection state
+```
+
+In code, `TapListener().take()` consumes one press and `.alive` reports whether
+the heartbeat is present, which is what is checked before going on stage.
+
+## Reliability
+
+- Every press sends **three** redundant datagrams 10 ms apart with a rising
+  sequence number, which the Mac de-duplicates, so packet loss is tolerated
+- A heartbeat every 2 s, so `.alive` can drive a stage connection indicator
+- 200 ms debounce in the firmware
+- If the port on the Mac is taken, it degrades to "there is no button" and
+  blocks nothing
+
+## Still to verify (needs the hardware in hand)
+
+- [ ] Button physically on GP15/GND, flashed, TAP visible under `--monitor`
+- [ ] Real WiFi latency (the OLED line measured a 6 ms ping with no loss over
+      60 s; this button has not been measured on its own)
+- [ ] Physical placement of the button (suggested on the chest post, within
+      natural reach of the thumb; a foot switch is not advised, given movement
+      and the audience)

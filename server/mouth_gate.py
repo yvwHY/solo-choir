@@ -1,26 +1,38 @@
-"""mouth_gate — 鏡頭嘴部門控（solo_min 用；08-14 Harry 裁「喇叭出聲、會講話」）。
+"""mouth_gate — the camera mouth gate used by solo_min. Added 2026-08-14, after
+"the speakers are sounding and I will also be talking".
 
-⚠ 這是 `harmony/bank_live.py::_mouth_worker` 的**雙胞胎**，不是共用模組。
-為什麼複製而不抽共用：bank_live 是已認證的排練/演出引擎，viva 前 12 天為了
-消除重複去動它，風險大於收益。**任一邊改門控邏輯，另一邊要跟著看**——
-兩邊都標了這段話。共用重構等 viva 之後。
+This is a **twin** of `harmony/bank_live.py::_mouth_worker`, not a shared module.
+Why it was copied rather than factored out: bank_live is the certified rehearsal
+and performance engine, and touching it twelve days before the viva to remove a
+duplication risks more than it gains. **A change to the gate logic on either
+side has to be read against the other**; both carry this note. The shared
+refactor waits until after the viva.
 
-兩邊的門控在做不同的事，別把它們的語意混起來：
-  bank_live 是**取樣器**，偵測他的音高去觸發音庫 → 門控回答「這個 f0
-    算不算他的」（喇叭裡的天使是完美週期訊號，偵測器會當成他）。
-  solo_min 是**轉換器**，把聽到的直接變成聲音 → 門控回答「輸出要不要
-    出聲」。他閉嘴＝天使閉嘴＝沒有東西繞回麥克風被再轉換一次，回授
-    迴圈斷在這裡。
+The two gates do different things, and their meanings should not be mixed:
+  bank_live is a **sampler**. It detects the singer's pitch to trigger the
+    sample bank, so its gate answers "does this f0 belong to the singer?" The
+    parts coming from the speakers are perfectly periodic, and the detector
+    would take them for the singer.
+  solo_min is a **converter**. It turns what it hears straight into sound, so
+    its gate answers "should the output sound at all?" A closed mouth means
+    silent parts, which means nothing returns to the microphone to be converted
+    again, and the feedback loop is broken here.
 
-為什麼音量門（solo_min 的 `--gate-floor`）救不了回授：它看的是**輸入
-音量**，而回授正在發生的時候麥克風正大聲聽著喇叭 ⇒ 音量門判定「他在
-唱」把門開著。結構上救不了。鏡頭可以，因為**回授騙不了嘴唇**（08-12）。
+Why a level gate (solo_min's `--gate-floor`) cannot save this: it looks at the
+**input level**, and while feedback is happening the microphone is loudly
+hearing the speakers, so the level gate decides the singer is singing and holds
+the gate open. It cannot help, structurally. A camera can, because **feedback
+cannot fool the lips** (2026-08-12).
 
-模型＝`harmony/scratchpad/sing_gate_model.npz`（bank_live v34.1 訓的那顆，
-27 維、只吃嘴/下巴 blendshape、跨場次 acc 0.934、閉嘴與微張誤觸 0.0%）。
-它純粹吃鏡頭、與發聲引擎無關，所以可以原樣借用。
-**誠實邊界：講話誤觸 11%**——純畫面分不出唱與講（嘴都是開的）。要壓到 0
-得加音訊側特徵（唱＝音高踩住平台、講＝一直漂且每段短），那是另一個工程。
+The model is `harmony/scratchpad/sing_gate_model.npz`, the one trained for
+bank_live v34.1: 27 dimensions, mouth and jaw blendshapes only, 0.934 accuracy
+across sessions, and 0.0% false triggers with the mouth closed or slightly open.
+It uses the camera alone and has nothing to do with the sounding engine, so it
+can be borrowed unchanged.
+**Honest boundary: speech triggers it 11% of the time.** Picture alone cannot
+separate singing from speech, since the mouth is open either way. Pushing that
+to zero needs audio-side features (singing holds a pitch plateau, speech drifts
+continuously in short runs), which is another piece of engineering.
 """
 from __future__ import annotations
 import os
@@ -36,7 +48,8 @@ DEF_TASK = os.path.join(_HARMONY, "scratchpad", "face_landmarker.task")
 
 
 class MouthGate:
-    """鏡頭執行緒＋逐樣本斜坡。audio thread 只呼叫 ramp()（純算術）。"""
+    """A camera thread plus a per-sample ramp. The audio thread calls only
+    ramp(), which is arithmetic alone."""
 
     def __init__(self, model=DEF_MODEL, task=DEF_TASK, cam=-1,
                  sing_open=0.7, sing_hold=0.3, frames=2, grace=0.8,
@@ -45,16 +58,17 @@ class MouthGate:
         self.sing_open, self.sing_hold, self.frames = sing_open, sing_hold, frames
         self.grace, self.fail_open, self.sr = grace, fail_open, sr
         self.log = log
-        self._step = 1.0 / max(1e-6, ramp_s) / sr    # 每樣本的增益變化量
-        self._g = 0.0                                # 目前增益（開場＝關）
+        self._step = 1.0 / max(1e-6, ramp_s) / sr    # gain change per sample
+        self._g = 0.0                                # current gain; closed at the start
         self.M = {"on": False, "arm": 0, "last_open": 0.0, "ok": False,
                   "sp": -1.0, "hb": None, "dead": None}
         self._die = False
         self._W = None
 
-    # ---------- 音訊執行緒：只有這個會被 callback 呼叫 ----------
+    # ---------- audio thread: this is the only method the callback uses -----
     def ramp(self, n):
-        """回傳長度 n 的增益斜坡並前進狀態。斜坡＝不硬切（硬切會喀）。"""
+        """Return a gain ramp of length n and advance the state. A ramp rather
+        than a hard cut, which would click."""
         tgt = 1.0 if self._target_open() else 0.0
         g0 = self._g
         if g0 == tgt:
@@ -67,14 +81,15 @@ class MouthGate:
         return out
 
     def _target_open(self):
-        if self.M["dead"] is not None:          # 執行緒炸了
+        if self.M["dead"] is not None:          # the thread has died
             return self.fail_open
         hb = self.M["hb"]
         if hb is None:
-            # 開場鏡頭還沒吐第一幀：**關著**。fail-open 會讓開場那幾秒
-            # 直接進回授（bank_live 審查 R5#1 的同一顆地雷）。
+            # Before the camera has produced its first frame the gate stays
+            # closed. Failing open would send the opening seconds straight into
+            # feedback, the same mine as bank_live review R5#1.
             return False
-        if time.time() - hb > 0.85:             # 看門狗：read() 停了＝鏡頭死
+        if time.time() - hb > 0.85:             # watchdog: read() has stopped, so the camera is dead
             if not self.M.get("_warned"):
                 self.M["_warned"] = True
                 self.log("⚠ [mouth] camera dead — gate %s"
@@ -85,7 +100,7 @@ class MouthGate:
             self.log("[gate] camera back")
         return self.M["ok"]
 
-    # ---------- 鏡頭執行緒 ----------
+    # ---------- camera thread ----------
     def start(self):
         threading.Thread(target=self._worker, daemon=True).start()
         return self
@@ -98,14 +113,16 @@ class MouthGate:
         W, b = z["W"], float(z["b"])
         mean, scale, idx = z["mean"], z["scale"], z["idx"]
         names = [str(x) for x in z["names"]]
-        # bank_live 同款合格檢查：不合格＝停用模型而不是猜（審查 S1/A5）
-        # ⚠ idx 要跟 W **比 shape 不是比 size**——寫成 `idx.shape != W.size`
-        # 是 tuple 比 int＝恆真＝模型每次都被判不合格（08-14 實案，靠
-        # GATE DEAD 那行才看見）。
+        # The same validity check as bank_live: an invalid model is disabled
+        # rather than guessed at (review S1/A5).
+        # idx must be compared with W by **shape, not size**. Writing
+        # `idx.shape != W.size` compares a tuple with an int, which is always
+        # true, so the model was rejected every time. That happened on
+        # 2026-08-14 and was only visible through the GATE DEAD line.
         if (W.shape != mean.shape or scale.shape != mean.shape
                 or len(names) != W.size or idx.shape != W.shape
                 or not np.isfinite(W).all() or (scale <= 0).any()):
-            raise ValueError("sing_gate_model.npz 不合格")
+            raise ValueError("sing_gate_model.npz failed validation")
         self._W, self._B, self._M_, self._S, self._I = W, b, mean, scale, idx
         self._CHK = names
         self.log(f"[gate] sing model loaded ({W.size + 1} params, "
@@ -131,8 +148,10 @@ class MouthGate:
                 okf, frame = cap.read()
                 now = time.time()
                 if okf:
-                    # 心跳＝真的讀到 frame。read() 失敗（鏡頭被搶/掉線）
-                    # ＝心跳停＝看門狗開火，而不是無聲地永遠關門。
+                    # The heartbeat means a frame was really read. If read()
+                    # fails, because the camera was taken or dropped, the
+                    # heartbeat stops and the watchdog fires, rather than the
+                    # gate closing silently for good.
                     self.M["hb"] = now
                 if okf and now - last_det >= 0.033:            # ~30Hz
                     last_det = now
@@ -140,13 +159,16 @@ class MouthGate:
                                    data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     res = lmk.detect_for_video(img, int((now - t0) * 1000))
                     if not res.face_landmarks or not res.face_blendshapes:
-                        # 臉丟＝重新來過（不是維持舊值）。bank_live 審查：
-                        # 停在舊值會讓「轉頭再回正、閉著嘴」也開門。
+                        # A lost face starts again rather than holding the old
+                        # value. From the bank_live review: holding it would let
+                        # turning away and back with the mouth closed open the
+                        # gate.
                         self.M["on"], self.M["arm"] = False, 0
                     else:
                         self._score(res.face_blendshapes[0], now)
-                # 臉不在＝他不在＝門關（v14.1 Harry 裁決）。鏡頭真死是另一
-                # 個情境，由上面的看門狗處理。
+                # No face means the singer is not there, so the gate closes
+                # (decided at v14.1). A camera that has really died is a
+                # different case, handled by the watchdog above.
                 self.M["ok"] = now - self.M["last_open"] < self.grace
                 if not okf:
                     time.sleep(0.01)
@@ -180,8 +202,10 @@ class MouthGate:
 
     def _score(self, bs, now):
         if self._CHK is not None:
-            # mediapipe 換版就會靜默錯位＝模型讀到別的維度。首幀真的對一次，
-            # 不符就停用（bank_live 同款；那邊的註解一度宣稱驗過但沒驗）。
+            # A change of mediapipe version silently shifts the layout and the
+            # model reads different dimensions. Check once, for real, on the
+            # first frame, and disable on a mismatch. Same as bank_live, whose
+            # comment once claimed this was verified when it was not.
             live = [bs[i].category_name for i in self._I]
             if live != self._CHK:
                 self.log("⚠ [gate] blendshape order != model — gate disabled")
@@ -194,11 +218,12 @@ class MouthGate:
                                   + self._B)))
         self.M["sp"] = float(p)
         if self.M["on"]:
-            nv = p > self.sing_hold           # 遲滯：唱著的時候門檻低
+            nv = p > self.sing_hold           # hysteresis: the threshold is lower while singing
             if not nv:
                 self.M["arm"] = 0
         else:
-            # 開門要連續 N 幀＝防單幀雜訊把門推開
+            # Opening needs N consecutive frames, so a single noisy frame
+            # cannot push the gate open.
             self.M["arm"] = self.M["arm"] + 1 if p > self.sing_open else 0
             nv = self.M["arm"] >= self.frames
         if nv != self.M["on"]:

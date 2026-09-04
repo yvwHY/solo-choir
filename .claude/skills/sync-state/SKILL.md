@@ -1,9 +1,13 @@
 ---
 name: sync-state
-description: This skill should be used after every commit checkpoint in this repo, at the end of any working session, and whenever the user says "同步狀態", "更新現況", "sync state", or "收工". Keeps docs/STATE.md (the single source of truth for project state) from rotting — CLAUDE.md deliberately carries no state.
+description: This skill should be used after every commit checkpoint in this repo, at the end of any working session, and whenever the user asks to sync the state or to wrap up. Keeps the state file (the single source of truth for project state) from rotting - CLAUDE.md deliberately carries no state.
 ---
 
 # Sync-state — state lives in STATE.md, and only there
+
+> `docs/STATE.md` and `docs/worklogs/` are working notes and stayed in the
+> development repository; this submission repository condenses them into
+> `docs/PROCESS.md`. The skill is kept because it is part of the working method.
 
 `docs/STATE.md` is the single source of truth for "where the project is". It rots unless maintained; a stale state file actively misleads every future session (this happened: CLAUDE.md claimed "2 voices, plan not executed" while the repo had a 5-part live choir).
 

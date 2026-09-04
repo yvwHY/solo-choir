@@ -1,18 +1,20 @@
-"""live_v3.py — v3 雙天使 live host（spec 開工順序 #4 的第一塊）
+"""live_v3.py — the v3 two-part live host (the first piece of item #4 in the spec)
 
-mic → EarV3（YIN tracker ＋ v3_joint 腦，每 tick 取樣 upper+lower）
-    → 兩張直驅 DDSP 嘴（upper→combsub-girl、lower→combsub-harry，
-      各自 out ring；world_live 的 bounded 窗＋SOLA＋splice 機械全繼承）
-    → 喇叭（LAG 落後人聲；兩天使 0.6/0.6 混音）
+mic -> EarV3 (a YIN tracker plus the v3_joint model, sampling upper and lower
+       every tick)
+    -> two direct-drive DDSP voices (upper through combsub-girl, lower through
+       combsub-harry, each with its own output ring; the bounded window, SOLA and
+       splice machinery of world_live is inherited whole)
+    -> speakers (LAG behind the voice; the two parts mixed at 0.6 each)
 
-與離線 render_v3 同一顆腦類（BrainV3，含 indep/stab 旋鈕），live 加滑動窗
-（預設 768 tokens＝48s 記憶，實測每 tick 兩 forward 38ms；1536→81ms 也在
-187.5ms 預算內）。key 假設同 world_live：C 大調（keydet 第一句鎖定屬後續，
-「天使＝調性錨」07-27 裁決的 live 版）。
+The same model class as the offline render_v3 (BrainV3, with the indep and stab
+controls), with a sliding window added for live use: 768 tokens by default, which
+is 48 s of memory, measured at 38 ms for two forward passes per tick; 1536 gives
+81 ms, still inside the 187.5 ms budget. The key assumption is that of
+world_live, C major. Locking on the first phrase with keydet came later; it is
+the live form of the decision of 2026-07-27 that the parts are the tonal anchor.
 
-Run live（DDSP venv）:
-  260724_ddsp_svc/venv/bin/python live_v3.py [--in-name X] [--lag 0.6]
-File check（無音訊裝置，端到端驗證）:
+File check (no audio device; end-to-end verification):
   .../python live_v3.py --file take.wav out/live_v3_check.wav
 """
 import argparse
@@ -40,13 +42,17 @@ sys.path.insert(0, str(_pl.Path(__file__).resolve().parent.parent))
 from config import DDSP as _DDSP  # noqa: E402
 DDSP = str(_DDSP)
 
-KNEE_RMS = 0.019   # 軟發聲退化膝點（worklog 07-30：失真 14.3dB@rms .0195 → 18.3dB@.0055）
+KNEE_RMS = 0.019   # the knee where soft singing degrades (worklog 2026-07-30:
+                   # distortion 14.3 dB at rms .0195, 18.3 dB at .0055)
 
 
 def mic_level_stats(x):
-    """否證命題一的儀器（worklog 07-30 §E）：輸入 voiced rms 分布 vs 膝點。
-    voiced 判定同 live 前端（yin_f0；rms<0.005 視為無聲不計，故 0.005–0.019
-    的危險帶不會被儀器自己吃掉）。只印數字，裁決留給人。"""
+    """The instrument for falsifying proposition one (worklog 2026-07-30 section
+    E): the distribution of voiced input rms against the knee.
+    Voicing is decided as in the live front end, by yin_f0, with rms below 0.005
+    counted as silence, so the dangerous band from 0.005 to 0.019 is not eaten by
+    the instrument itself. It prints numbers only; the judgement is left to a
+    person."""
     v = []
     for s in range(0, len(x) - 2048, 1024):
         seg = x[s:s + 2048]
@@ -63,21 +69,26 @@ def mic_level_stats(x):
 
 
 class EarV3:
-    """tick audio in → (upper, lower) mic-space 絕對音（或 None）。
-    world_live.Ear 的 v3 版：一份 lead token 流、兩聲部輸出、
-    各自 legato 補洞、八度摺疊進各自嘴的實測音域。
+    """One tick of audio in, an (upper, lower) pair of absolute notes in
+    microphone space out, or None.
+    The v3 form of world_live.Ear: one lead token stream, two part outputs, each
+    filling its own legato gaps and folded by octave into the measured range of
+    its voice.
 
-    key="auto"＝第一句鎖定（07-27「天使＝調性錨」的 live 版）：開口的頭
-    幾秒 keydet 聽出大調音階、鎖死 k_shift，之後不跟飄；鎖定前天使安靜
-    （＝demo 弧線的獨唱開場）。key=<int>＝固定移調（0＝舊 C 大調行為）。"""
+    key="auto" locks on the first phrase, the live form of the decision of
+    2026-07-27 that the parts are the tonal anchor: over the first few seconds of
+    singing, keydet hears the major scale and locks k_shift, which then does not
+    follow any drift. Before the lock the parts are silent, which is the solo
+    opening of the demo arc. key=<int> is a fixed transposition, with 0 the old
+    C major behaviour."""
 
-    LOCK_MIN, LOCK_CONF, LOCK_MAX = 130, 0.03, 300  # 有聲窗數（~3s / ~7s 上限）
+    LOCK_MIN, LOCK_CONF, LOCK_MAX = 130, 0.03, 300  # voiced windows: about 3 s, with a ceiling of about 7 s
 
     def __init__(self, indep=0.0, stab=1, window=768, legato_gap=1, key="auto",
                  anticipate=False, ant_conf=0.25, rehearse=None, reh_rate=1.0):
         self.brain = BrainV3("joint", indep=indep, stab=stab, window=window)
-        self.lead_hist = []          # 每 tick 的 lead sounding pitch（排練檔錄製用）
-        self.reh = None              # 排練模式（緊檔 v1）：腦旁路、天使唱排練的線
+        self.lead_hist = []          # the lead sounding pitch per tick, recorded for a rehearsal file
+        self.reh = None              # rehearsal mode (the tight version v1): the model is bypassed and the parts sing the rehearsed line
         if rehearse:
             self.reh = json.load(open(rehearse))
             self.reh_tracker = ScoreTracker(self.reh["lead"], "v3", rate0=reh_rate)
@@ -91,9 +102,9 @@ class EarV3:
         self.rng = {"upper": GIRL_RANGE, "lower": HARRY_RANGE}
         self.ant = anticipate
         self.ant_conf = ant_conf
-        self.pending = None          # 預感：上一 tick 已定好的 (lead預測,)
+        self.pending = None          # anticipation: the (predicted lead,) already settled on the previous tick
         self.n_ant = self.n_agree = 0
-        self.lead_prev = None        # 他的 sounding pitch（命中率統計用）
+        self.lead_prev = None        # the singer's sounding pitch, for the hit-rate statistics
         if key == "auto":
             self.k_shift, self.kd = None, KeyDetector()
         else:
@@ -112,9 +123,12 @@ class EarV3:
             print(f"[keydet] locked {k['name']} -> shift {self.k_shift:+d} st "
                   f"(conf {k['conf']:.2f})", flush=True)
         elif n >= self.LOCK_MAX:
-            # 超時且信心不足＝histogram 是平的（真歌 keydet 不可靠，07-30 死案；
-            # 07-31 Harry 場上 conf 0.01 被硬鎖 +4 st＝整場和聲錯調）——拒鎖
-            # 垃圾，回退 shift 0 並大聲警告。正解仍是手動填整數 key。
+            # Timed out with too little confidence means a flat histogram, that
+            # is, keydet is unreliable on real songs (the dead case of
+            # 2026-07-30; on 2026-07-31 a live confidence of 0.01 was hard-locked
+            # at +4 semitones and the harmony was in the wrong key all evening).
+            # Refuse to lock on rubbish: fall back to shift 0 and warn loudly.
+            # The real answer is still to enter an integer key by hand.
             self.k_shift = 0
             print(f"[keydet] ⚠ conf {k['conf']:.2f} < {self.LOCK_CONF} → refusing to "
                   f"lock {k['name']}, falling back to shift 0 (= treat as C "
@@ -122,7 +136,8 @@ class EarV3:
                   f"(07-30 rule)", flush=True)
 
     def _to_notes(self, toks):
-        """(upper_tok, lower_tok) → mic-space 絕對音對（legato 補洞＋摺疊）。"""
+        """(upper_tok, lower_tok) to a pair of absolute notes in microphone
+        space, filling legato gaps and folding by octave."""
         out = {}
         for v, tok in zip(("upper", "lower"), toks):
             m = token_to_midi(tok, self.prev[v])
@@ -142,25 +157,33 @@ class EarV3:
         return out["upper"], out["lower"]
 
     def tail_tick(self):
-        """他唱完之後，讓天使自己再走一格（08-04）。
+        """Let the parts take one more step of their own after the singer has
+        finished (2026-08-04).
 
-        Harry 08-03 實戴觀察：「只有在長音才會顯得自主」——`indep` 的兩個觸發
-        點（他長音／他換音）都掛在**他的**音符事件上，所以應答式的短樂句裡這
-        個旋鈕大半時間沒有觸發機會。回應的尾巴是繞開這個限制的地方：那段時間
-        他本來就在硬靜音裡不出聲，天使可以自己走。
+        Observed while wearing the instrument on 2026-08-03: "they only seem
+        independent on a sustained note". Both triggers of `indep`, the singer
+        holding and the singer changing note, hang off **the singer's** note
+        events, so in the short phrases of the answering mode the control has no
+        chance to fire most of the time. The tail of a response is where that
+        limit can be sidestepped: during it the singer is already hard-muted and
+        silent, so the parts can move on their own.
 
-        lead 餵 HOLD＝當作他把最後那個音延長著，腦於是在同一個和聲上繼續移動
-        （而不是重新開一句）。不碰 tracker、不碰 v2t——他的音符線與八度鎖定
-        完全不受影響。"""
+        Feeding HOLD as the lead treats the singer as sustaining their last note,
+        so the model continues to move over the same harmony rather than opening
+        a new phrase. It touches neither the tracker nor v2t, so the singer's note
+        line and octave lock are entirely unaffected."""
         self.lead_hist.append(self.lead_prev)
         return self._to_notes(self.brain.step(HOLD))
 
     def tick(self, chunk):
-        """處理一個完成的 tick，回傳要 append 進 notes 的新音對列表。
-        反應式＝[本 tick]；預感式＝[（首次含本 tick）, 下一 tick 的預定音]
-        ——下一 tick 的音在音訊到來前就已存在＝天使與他同時落地。"""
+        """Handle one completed tick and return the new note pairs to append to
+        notes.
+        Reactive returns [this tick]; anticipatory returns [this tick, the first
+        time, then the note already settled for the next tick], so the next
+        tick's note exists before its audio arrives and the parts land together
+        with the singer."""
         self.tracker.push(chunk)
-        if self.k_shift is None:            # 第一句：只聽調，天使還不進場
+        if self.k_shift is None:            # the first phrase: listen for the key only; the parts stay out
             self._keylock(chunk)
             if self.k_shift is None:
                 self.lead_hist.append(None)
@@ -169,20 +192,22 @@ class EarV3:
         if f_in is not None and self.k_shift:
             f_in = int(f_in) + self.k_shift
         s = self.v2t.token(f_in)
-        if self.reh is not None:            # 排練模式：對位取代腦
+        if self.reh is not None:            # rehearsal mode: alignment replaces the model
             self.lead_prev = token_to_midi(s, self.lead_prev)
             self.lead_hist.append(self.lead_prev)
             self.reh_tracker.observe(self.lead_prev)
             j = int(round(self.reh_tracker.p + self.reh_tracker.rate))
             if 0 <= j < len(self.reh["lead"]):
                 return [(self.reh["upper"][j], self.reh["lower"][j])]
-            return [(None, None)]           # 譜走完＝天使收
+            return [(None, None)]           # the score has run out, so the parts stop
         new = []
         if self.ant and self.pending is not None:
-            fore = self.pending[0]          # 本 tick 的音上一 tick 已定，只對答案
+            fore = self.pending[0]          # this tick's note was settled last tick; only check the answer
             self.brain.commit_lead(s)
-            # 命中＝音高層一致（他 HOLD 時真 token 是 HOLD、預測被迫出音高
-            # token，字面比對必不中——比「sounding pitch」才誠實）
+            # A hit means agreement at the pitch layer. While the singer holds,
+            # the real token is HOLD and the prediction is forced to emit a pitch
+            # token, so a literal comparison could never match; comparing sounding
+            # pitch is the honest test.
             if s != REST:
                 self.n_ant += 1
                 self.n_agree += int(token_to_midi(fore, self.lead_prev)
@@ -205,7 +230,8 @@ class EarV3:
 
 
 def _warmup_pair(fn, label):
-    """跑 fn() 兩遍，量首次（付 MPS kernel 編譯成本）與熱身後耗時。"""
+    """Run fn() twice and time the first call, which pays for MPS kernel
+    compilation, and the warmed call."""
     t0 = time.perf_counter(); fn(); cold = time.perf_counter() - t0
     t0 = time.perf_counter(); fn(); warm = time.perf_counter() - t0
     print(f"[warmup] {label} first hop {cold * 1000:.0f}ms -> "
@@ -213,8 +239,10 @@ def _warmup_pair(fn, label):
 
 
 def warmup(ear, mouths):
-    """啟動階段、音訊流開始前空跑腦一次＋兩嘴各一 hop（07-29 worklog G「MPS
-    冷啟 239ms」）：把首次 forward 的 kernel 編譯成本移出真實首個 hop。"""
+    """During start-up, before the audio stream opens, run the model once and one
+    hop of each voice (worklog 2026-07-29 section G, "MPS cold start 239 ms"), to
+    move the kernel compilation cost of the first forward pass out of the first
+    real hop."""
     import torch
     brain = ear.brain
     window = brain.window or 768
@@ -236,13 +264,13 @@ def run(a):
     if a.out_map:
         out_map = [int(t) for t in str(a.out_map).split(",")]
         if len(out_map) != 2 or min(out_map) < 0:
-            raise SystemExit("--out-map 需要兩個非負整數（upper,lower），如 '0,1'")
+            raise SystemExit("--out-map needs two non-negative integers, upper and lower, such as '0,1'")
     if a.dry_ch is not None and out_map is None:
-        raise SystemExit("--dry-ch 需要配 --out-map")
+        raise SystemExit("--dry-ch requires --out-map")
     pre = None
     if a.pre_stems:
         if not a.rehearse:
-            raise SystemExit("--pre-stems 需配 --rehearse")
+            raise SystemExit("--pre-stems requires --rehearse")
         import soundfile as _sf
         pre = {}
         for v, p in zip(("upper", "lower"), a.pre_stems.split(",")):
@@ -255,7 +283,8 @@ def run(a):
     mic_ring = np.zeros(cap, dtype=np.float64)
     rings = {"upper": np.zeros(cap, dtype=np.float64),
              "lower": np.zeros(cap, dtype=np.float64)}
-    # 表現層（07-31 F21）：per-voice seed 不同＝兩天使去同步；--expr-gain 0＝關
+    # The expression layer (F21, 2026-07-31): a different seed per voice
+    # desynchronises the parts; --expr-gain 0 turns it off.
     ex = (lambda seed: ExpressiveF0(seed, a.expr_gain)) if a.expr_gain > 0 \
         else (lambda seed: None)
     bf = int(round(a.bound_ms / 5.0)) if a.bound_ms else None
@@ -288,20 +317,25 @@ def run(a):
     lock = threading.Lock()
     t_tick = []
 
-    # pre-stems 對位播放狀態：單一 stem 讀點（兩聲部同時間軸）＋ resync 計數
+    # Aligned playback state for pre-stems: one read position into the stem,
+    # since both parts share a time base, plus a resync counter.
     ps = {"cur": None, "jumps": 0, "quiet": 0}
     XF = int(0.010 * SR)
 
     def do_pre(k):
-        """tick k 收完（mic 前緣 (k+1)·TICK）：把追蹤器譜位的 stem 寫進 live
-        第 k+ahead 格＝音訊先於拍點就位。連續譜位＝續讀無縫；偏差>門檻才
-        跳針重對（10ms xfade）；他靜默 ≥2 tick → 寫零＝天使跟著收。"""
+        """Tick k has been captured, with the microphone front at (k+1) * TICK.
+        Write the stem at the tracker's score position into live slot k+ahead, so
+        the audio is in place ahead of the beat. A continuous score position reads
+        on seamlessly; only a deviation over the threshold re-locates, with a
+        10 ms crossfade. Two or more ticks of silence write zeros, so the parts
+        stop with the singer."""
         tr = ear.reh_tracker
         b0 = (k + a.pre_ahead) * TICK_SAMPS
         if b0 < 0 or b0 + TICK_SAMPS > cap:
             return
         ps["quiet"] = ps["quiet"] + 1 if ear.lead_prev is None else 0
-        # live 第 k+ahead 格起點的預測譜位（float tick）→ stem 樣本讀點
+        # the predicted score position at the start of live slot k+ahead, as a
+        # float tick, converted to a sample position in the stem
         tgt = (tr.p + (a.pre_ahead - 1) * tr.rate) * TICK_SAMPS
         n_stem = min(len(pre["upper"]), len(pre["lower"]))
         if ps["quiet"] >= 2 or not (0 <= tgt < n_stem - TICK_SAMPS):
@@ -309,10 +343,14 @@ def run(a):
                 rings[v][b0:b0 + TICK_SAMPS] = 0.0
             ps["cur"] = None
             return
-        # 跳針時點的音樂性（v2）：漂移超標後不立刻跳，等目標譜位落在換音處
-        # （lead 換音＝take 裡歌手重新起音＝剪接點天然隱形）才跳；漂移積到
-        # 4× 門檻＝硬上限，換音等不到也跳（速度失配材料如 pair06 ratio 1.21
-        # 的 1:1 續讀漂移是結構性的，60ms 軟門檻單獨用＝每兩 tick 跳一次針）
+        # Musical placement of the re-locate (v2): once the drift exceeds the
+        # threshold it does not jump immediately but waits until the target score
+        # position falls on a note change, since a lead note change is the singer
+        # re-attacking in the take and hides the edit. A drift of 4 times the
+        # threshold is a hard ceiling and jumps even without a note change,
+        # because with tempo-mismatched material, such as pair06 at a ratio of
+        # 1.21, the drift of reading 1:1 is structural, and the 60 ms soft
+        # threshold alone would re-locate every two ticks.
         thr = a.pre_resync_ms * SR / 1000.0
         drift = None if ps["cur"] is None else abs(ps["cur"] - tgt)
         lead = ear.reh["lead"]
@@ -320,7 +358,7 @@ def run(a):
         onset = 0 < jt < len(lead) and lead[jt] != lead[jt - 1]
         jump = ps["cur"] is None or (drift > thr and (onset or drift > 4 * thr))
         c0 = int(round(tgt if jump else ps["cur"]))
-        if c0 + TICK_SAMPS > n_stem:   # 續讀游標越過 stem 尾（延後跳針的漂移）
+        if c0 + TICK_SAMPS > n_stem:   # the read cursor has run past the end of the stem, from a deferred re-locate
             jump, c0 = True, int(round(tgt))
         ramp = np.linspace(0.0, 1.0, XF)
         for v in ("upper", "lower"):
@@ -330,7 +368,7 @@ def run(a):
                     tail = pre[v][int(round(ps["cur"])):int(round(ps["cur"])) + XF]
                     seg[:XF] = seg[:XF] * ramp + tail * (1.0 - ramp)
                 else:
-                    seg[:XF] *= ramp          # 靜默後進場＝淡入
+                    seg[:XF] *= ramp          # entering after silence: fade in
             rings[v][b0:b0 + TICK_SAMPS] = seg
         if jump and ps["cur"] is not None:
             ps["jumps"] += 1
@@ -350,21 +388,27 @@ def run(a):
             st["ticks"] += 1
 
     def do_hops(t_end, closing=False):
-        if pre is not None:      # stems 模式：嘴不在，音訊由 do_pre 直寫 ring
+        if pre is not None:      # stems mode: no voices; do_pre writes the audio into the ring directly
             return
-        shared = {}          # 本輪 units 快取（兩張嘴同 content，見 DDSPMouth.hop）
+        shared = {}          # the units cache for this round; both voices share the content, see DDSPMouth.hop
         for v in ("upper", "lower"):
             mouths[v].hop(mic_ring, t_end, notes[v] if notes[v] else [None],
                           len(notes[v]), closing=closing, shared=shared)
 
-    # ticks 與 hops 各自一條線（2026-07-31 §G 斷供案，Regime B）：原本同一條
-    # worker 依序跑「全部待辦 tick → 一個 hop」，腦 tick p95 在桌面負載下會飆
-    # 242–351ms（>187.5 預算；anticipate 兩次 forward 再翻倍）——嘴明明 25ms
-    # 就能出一 hop，卻排在腦後面餓死（實測 starved 21.9s/44s、margin -16s）。
-    # 拆線後嘴不再等腦。安全性：notes 只增不減（tick 線 append、hop 線快照
-    # len 後索引，GIL 下安全）；mouth 的 lim 本來就以 n_ticks 上限自我節制，
-    # 腦落後時嘴只是少建一點、下一 hop 補上（與 file 模式語意一致）；
-    # st["hop_next"] 只有 hop 線碰。MPS 兩線併發由 command queue 序列化。
+    # Ticks and hops run on separate threads (the starvation case of 2026-07-31
+    # section G, regime B). A single worker used to run all pending ticks and then
+    # one hop in order, and the model tick p95 rose to 242-351 ms under desktop
+    # load, over the 187.5 ms budget, doubling again with two forward passes for
+    # anticipation. The voice could produce a hop in 25 ms but was queued behind
+    # the model and starved: measured, 21.9 s starved out of 44, with a margin of
+    # -16 s. Split apart, the voice no longer waits for the model.
+    # Safety: notes only grows, appended on the tick thread and indexed on the hop
+    # thread after snapshotting its length, which is safe under the GIL. The
+    # voice's lim already limits itself to n_ticks, so when the model falls behind
+    # the voice simply builds a little less and catches up on the next hop, which
+    # matches the file-mode semantics. st["hop_next"] is touched only by the hop
+    # thread. Concurrent MPS use on the two threads is serialised by the command
+    # queue.
     def tick_worker():
         while not st["done"]:
             with lock:
@@ -408,12 +452,12 @@ def run(a):
                   flush=True)
 
     if a.file:
-        import soundfile as _sf                  # stdlib wave 不吃 float wav（pairs 是 float32）
+        import soundfile as _sf                  # the stdlib wave module cannot read float wav; the pairs are float32
         raw, in_sr = _sf.read(a.file[0], dtype="float64", always_2d=True)
         assert in_sr == SR, (a.file[0], in_sr)
         mic = np.ascontiguousarray(raw[:, 0])
         mic_ring[: len(mic)] = mic
-        if a.notes_json:      # 重放既有音符線＝跳過腦（單一變因 A/B 用）
+        if a.notes_json:      # replay an existing note line, skipping the model, for a single-variable A/B
             d = json.load(open(a.notes_json))
             notes["upper"], notes["lower"] = d["upper"], d["lower"]
             print(f"notes replay: {a.notes_json} (brain off, harmony composition locked)")
@@ -430,11 +474,12 @@ def run(a):
                 w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
                 w.writeframes((sig / peak * 0.9 * 32767).astype(np.int16).tobytes())
             print("wrote", name)
-        if not a.notes_json:      # 音符線落檔＝下次可 --notes-json 原樣重放
+        if not a.notes_json:      # write the note line out, so it can be replayed unchanged with --notes-json
             nj = a.file[1].replace(".wav", "_notes.json")
             d = dict(notes)
             if not a.anticipate and a.rehearse is None:
-                # 反應式＝notes 與 lead 逐 tick 對齊 → 可當排練檔（--rehearse）
+                # reactive means notes and lead align tick by tick, so this can
+                # serve as a rehearsal file for --rehearse
                 d["lead"], d["k_shift"] = ear.lead_hist, ear.k_shift
             json.dump(d, open(nj, "w"))
             print("wrote", nj + (" (includes the lead line = usable as a rehearsal file)"
@@ -448,7 +493,7 @@ def run(a):
         return
 
     def cb(indata, outdata, frames, t, status):
-        if status:                 # PortAudio 旗標＝輸入鏈波波的直接證據
+        if status:                 # a PortAudio flag is direct evidence of pulsing in the input chain
             if status.input_overflow:
                 st["cb_iov"] = st.get("cb_iov", 0) + 1
             if status.output_underflow:
@@ -459,13 +504,13 @@ def run(a):
         outdata[:] = 0
         if pos > 0:
             lo = max(0, pos - frames)
-            if out_map is None:                      # 舊路徑：兩天使混合、雙聲道同內容
+            if out_map is None:                      # the old path: the two parts mixed, the same content on both channels
                 seg = (0.6 * rings["upper"][lo:pos]
                        + 0.6 * rings["lower"][lo:pos]) * a.gain
                 outdata[:, 0] = np.pad(seg, (frames - len(seg), 0))
                 if outdata.shape[1] > 1:
                     outdata[:, 1] = outdata[:, 0]
-            else:                                    # per-voice 路由（F11 物理源分離）
+            else:                                    # per-voice routing (F11, physical source separation)
                 for v, c in zip(("upper", "lower"), out_map):
                     seg = rings[v][lo:pos] * (0.6 * a.gain)
                     outdata[:, c] += np.pad(seg, (frames - len(seg), 0))
@@ -479,7 +524,7 @@ def run(a):
             if any(pos > m.frontier and tk < len(notes[v])
                    and notes[v][tk] is not None for v, m in mouths.items()):
                 st["under"] += frames
-        if a.dry_ch is not None:                     # 乾聲直通（live，不延遲）
+        if a.dry_ch is not None:                     # dry pass-through, live and undelayed
             if a.dry_ch < 0:
                 outdata += indata[:, :1]
             else:
@@ -494,7 +539,7 @@ def run(a):
         out_map + ([a.dry_ch] if a.dry_ch is not None and a.dry_ch >= 0 else []))
     with sd.Stream(samplerate=SR, blocksize=1024, channels=(1, n_out),
                    device=dev, callback=cb, latency=a.io_latency):
-        key_txt = "key auto-lock（第一句聽調，天使隨後進場）" if a.key == "auto" \
+        key_txt = "key auto-lock (listen for the key on the first phrase; the parts enter after)" if a.key == "auto" \
             else f"key shift {a.key} st"
         print(f"live v3. lag {a.lag * 1000:.0f} ms, {key_txt}, "
               f"indep {a.indep} stab {a.stab} -- Ctrl-C stops.", flush=True)
@@ -508,7 +553,7 @@ def run(a):
                               - (st["in"] - lag)) / SR
                     mtxt = f"{margin * 1000:+5.0f} ms"
                 else:
-                    mtxt = "  rest"      # frontier 合法凍結，margin 無意義
+                    mtxt = "  rest"      # the frontier is legitimately frozen, so the margin is meaningless
                 bt = np.array(t_tick[-32:]) * 1000 if t_tick else np.zeros(1)
                 hp = max(((np.percentile(np.array(m.t_hop[-32:]) * 1000, 95)
                            if m.t_hop else 0.0) for m in mouths.values()),
@@ -525,7 +570,7 @@ def run(a):
     st["done"] = True
     report()
     n = st["in"]
-    if n > SR:                    # 實戴 session 收官：mic 落檔＋命題一數字
+    if n > SR:                    # end of a worn session: write the microphone out and the proposition-one numbers
         stamp = time.strftime("%y%m%d_%H%M%S")
         path = HERE / "out" / f"live_mic_{stamp}.wav"
         path.parent.mkdir(exist_ok=True)
@@ -534,7 +579,7 @@ def run(a):
             w.writeframes((np.clip(mic_ring[:n], -1, 1)
                            * 32767).astype(np.int16).tobytes())
         print(f"mic dump: {path}", flush=True)
-        if a.dump_out:            # 輸出 ring 落檔＝波波聲/接縫診斷素材
+        if a.dump_out:            # write the output ring out, as material for diagnosing pulsing and joins
             sig = 0.6 * rings["upper"][:n] + 0.6 * rings["lower"][:n]
             op = HERE / "out" / f"live_out_{stamp}.wav"
             with wave.open(str(op), "wb") as w:
@@ -547,92 +592,92 @@ def run(a):
 
 if __name__ == "__main__":
     import signal as _sig
-    # 背景 shell 起的父行程（如 nohup 的 lab server）SIGINT 是 SIG_IGN 且會
-    # 遺傳——Stop 按了全空包（07-31 Harry 回報；§H 血訓變體）。強制還原。
+    # A parent process launched from a background shell, such as a lab server
+    # under nohup, has SIGINT set to SIG_IGN, and that is inherited, so pressing
+    # Stop did nothing at all (reported 2026-07-31; a variant of the lesson in
+    # section H). Restore it explicitly.
     _sig.signal(_sig.SIGINT, _sig.default_int_handler)
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", nargs=2, metavar=("IN", "OUT"))
     ap.add_argument("--notes-json", default=None,
-                    help="file mode 重放既有音符線（前次 file 跑完自動落的 "
-                         "*_notes.json）＝腦不跑、和音組成鎖定，單一變因 A/B 用")
+                    help="file mode: replay an existing note line, the *_notes.json written automatically by a previous file run. "
+                         "The model does not run and the chord content is locked, for a single-variable A/B")
     ap.add_argument("--rehearse", default=None,
-                    help="排練模式（緊檔 v1，spec 2026-07-29）：載入排練檔"
-                         "（反應式 file 跑完落的含 lead 的 *_notes.json），"
-                         "ScoreTracker v3 對位你的 lead、天使唱排練好的線，"
-                         "腦旁路；脫稿時天使＝排練錨。key 必須與排練檔一致")
+                    help="rehearsal mode (the tight version v1, spec of 2026-07-29): load a rehearsal file, the *_notes.json with a lead "
+                         "written by a reactive file run. ScoreTracker v3 aligns to your lead, the parts sing the rehearsed line and the "
+                         "model is bypassed; off the script, the parts are the rehearsal anchor. The key must match the rehearsal file")
     ap.add_argument("--reh-rate", type=float, default=1.0,
-                    help="排練對位的速度先驗 r̂（譜tick/實tick；live 無外部速度"
-                         "估計器前的固定值，07-30 消融：固定優於線上自估）")
+                    help="the speed prior r-hat for rehearsal alignment, in score ticks per real tick. A fixed value until live has an external tempo "
+                         "estimator; the ablation of 2026-07-30 found fixed better than estimating online")
     ap.add_argument("--pre-stems", default=None,
-                    help="排練預渲染 stems 'upper.wav,lower.wav'（prerender_stems"
-                         ".py 產物，時間軸＝排練 take）：天使改為對位播放離線 "
-                         "express 品質音訊、嘴不載＝離線天花板上 live（08-01 "
-                         "Harry「優化天使不是優化 live_v3」）。需配 --rehearse")
+                    help="pre-rendered rehearsal stems 'upper.wav,lower.wav', produced by prerender_stems.py on the rehearsal take's time base. "
+                         "The parts become aligned playback of offline express-quality audio and no voice is loaded, which puts the offline "
+                         "ceiling on stage (2026-08-01: the work is optimising the parts, not live_v3). Requires --rehearse")
     ap.add_argument("--pre-ahead", type=int, default=1,
-                    help="預寫提前量（tick）：tick k 收完把譜位 p̂ 的 stem 寫進 "
-                         "live 第 k+N 格＝音訊先於拍點就位；1＝下一格，lag 只需"
-                         "蓋 tick 對齊抖動（~0.05s 可用）")
+                    help="how far ahead to pre-write, in ticks: once tick k is captured, the stem at score position p-hat is written into live slot k+N, "
+                         "so the audio is in place ahead of the beat. 1 is the next slot, and the lag then only has to cover tick alignment jitter, "
+                         "about 0.05 s")
     ap.add_argument("--pre-resync-ms", type=float, default=60.0,
-                    help="stem 讀點與追蹤器譜位偏差超過此值才跳針重對（10ms "
-                         "xfade）；以下＝連續續讀（無縫）")
+                    help="re-locate only when the stem read position deviates from the tracker's score position by more than this, with a 10 ms crossfade; "
+                         "below it, reading continues seamlessly")
     ap.add_argument("--indep", type=float, default=0.15)
     ap.add_argument("--stab", type=int, default=2)
     ap.add_argument("--window", type=int, default=768,
-                    help="腦滑動窗 tokens（768=48s/38ms，1536=96s/81ms）")
+                    help="the model sliding window in tokens (768 = 48 s at 38 ms, 1536 = 96 s at 81 ms)")
     ap.add_argument("--key", default="auto",
-                    help="auto＝第一句 keydet 鎖定；整數＝固定移調（0=C 大調舊行為）")
+                    help="auto locks with keydet on the first phrase; an integer is a fixed transposition, with 0 the old C major behaviour")
     ap.add_argument("--anticipate", action="store_true",
-                    help="預感模式：預測他下一顆音、天使與他同時落地（配 --lag 0.45）")
+                    help="anticipation mode: predict the singer's next note so the parts land together with them (use with --lag 0.45)")
     ap.add_argument("--ant-conf", type=float, default=0.25,
-                    help="預感信心門檻：低於此機率不搶拍、假設續唱（0=關）")
+                    help="anticipation confidence threshold: below this probability, do not move early and assume the singer holds (0 = off)")
     ap.add_argument("--in-name", default=None)
     ap.add_argument("--out-name", default=None)
     ap.add_argument("--lag", type=float, default=0.6,
-                    help="播放落後人聲秒數；要蓋 tick 187.5+hop 150+腦38-81+嘴2×25ms")
+                    help="seconds the playback lags the voice; it must cover tick 187.5 + hop 150 + model 38-81 + two voices at 25 ms")
     ap.add_argument("--gain", type=float, default=1.5)
     ap.add_argument("--mouth", choices=["stream", "splice"], default="stream",
-                    help="stream＝真串流（相位續接、每樣本合成一次、零接縫；"
-                         "07-31 深夜）；splice＝舊 bounded 重渲染＋SOLA 貼尾")
+                    help="stream is genuine streaming, with the phase carried across, one synthesis per sample and no joins (late on 2026-07-31); "
+                         "splice is the old bounded re-render with a SOLA tail")
     ap.add_argument("--bound-ms", type=float, default=None,
-                    help="嘴重渲染窗（ms，預設 700）。hop 成本 ∝ 窗長；縮窗＝"
-                         "省算力但分歧回捲最深只能修到窗內（決策延遲 ~200-400ms"
-                         "，低於 400 開始有修不到的風險）")
+                    help="the voice re-render window in ms, 700 by default. The hop cost is proportional to the window length, so a shorter window saves "
+                         "computation but a rewind on divergence can only reach inside the window. The decision lag is about 200-400 ms, and below "
+                         "400 there is a risk of not reaching far enough")
     ap.add_argument("--hop-ms", type=float, default=150.0,
-                    help="嘴渲染節奏（ms）。lag 地板≈guard 50＋本值＋渲染時間；"
-                         "75＝衝 lag 0.3–0.35（MPS 佔用翻倍，starved 遙測驗證）")
+                    help="the voice render period in ms. The lag floor is about the 50 ms guard plus this plus the render time; 75 aims at a lag of "
+                         "0.3-0.35, which doubles MPS occupancy, as the starvation telemetry showed")
     ap.add_argument("--free-run", type=int, default=1,
-                    help="嘴腦解耦（07-31）：嘴不等 tick 決定、臨時維持現音、"
-                         "腦的決定到了回捲彎入＝lag 可壓向 0.35–0.45；"
-                         "0＝舊行為（渲染前緣被音符決定硬鎖）")
+                    help="decouple the voice from the model (2026-07-31): the voice does not wait for the tick decision but holds its current note, and when "
+                         "the model's decision arrives it rewinds and bends in, which lets the lag fall to 0.35-0.45. 0 is the old behaviour, where "
+                         "the render front is hard-locked by the note decision")
     ap.add_argument("--io-latency", choices=["high", "low"], default="high",
-                    help="sd.Stream latency：high＝驅動大緩衝（抗 GIL/負載尖峰的"
-                         "輸入丟失＝波波嫌疑），low＝舊行為")
+                    help="sd.Stream latency: high gives the driver a large buffer, resisting the input loss under GIL and load spikes that is suspected of "
+                         "causing the pulsing; low is the old behaviour")
     ap.add_argument("--dump-out", action="store_true",
-                    help="live 收官時把天使輸出 ring 落檔（波波聲/接縫診斷）")
+                    help="write the parts' output ring out at the end of a live run, for diagnosing pulsing and joins")
     ap.add_argument("--uv-gate", type=int, default=0,
-                    help="呼吸/子音段天使壓低（v2c 防抖版）。預設 0＝關——"
-                         "07-31 深夜 Harry A/B：遮罩抖動＝波波聲主兇，關閉後乾淨"
-                         "且無呼吸投訴（表現層/串流嘴已改善其前提）；實戴場若"
-                         "呼吸被唱回歸再開 1")
+                    help="pull the parts down over breaths and consonants (the v2c anti-chatter version). 0 by default, that is, off: the A/B late on "
+                         "2026-07-31 found the mask chattering to be the main cause of the pulsing, and with it off the sound was clean with no "
+                         "complaint about breaths, since the expression layer and the streaming voice had improved its premise. Set it to 1 again if "
+                         "sung breaths return when the instrument is worn")
     ap.add_argument("--expr-gain", type=float, default=1.0,
-                    help="表現層倍率（07-31 F21 規則版：偏置/漂移/不規則顫音/"
-                         "進音彎，兩天使異 seed 去同步）；0＝退回固定顫音舊行為")
+                    help="expression-layer multiplier (F21, the rule-based version of 2026-07-31: bias, drift, irregular vibrato and a scoop, with a different "
+                         "seed per part to desynchronise them); 0 returns to the old fixed-vibrato behaviour")
     ap.add_argument("--out-map", default=None,
-                    help="per-voice 出力通道 'upper,lower'（如 '0,1'＝upper→ch0、"
-                         "lower→ch1，rig 的 unit 分開收＝F11 物理源分離）。同 "
-                         "solo_min 慣例：單一多通道裝置（AI-Micro/Aggregate），"
-                         "絕不開兩條 stream（F7）。預設＝現行立體聲混合")
+                    help="per-voice output channels 'upper,lower', for example '0,1' sending upper to channel 0 and lower to channel 1, so the rig's units "
+                         "are picked up separately (F11, physical source separation). The same convention as solo_min: a single multi-channel device "
+                         "(AI-Micro or an aggregate), and never two streams (F7). The default is the current stereo mix")
     ap.add_argument("--dry-ch", type=int, default=None,
-                    help="配 --out-map：乾聲（你的 mic 直通）進哪個通道"
-                         "（-1＝全部；省略＝不進任何通道＝07-29 rig 慣例，"
-                         "燈只看天使）")
+                    help="with --out-map: which channel the dry signal, your microphone passed through, goes to. -1 sends it to all; omitting it sends it to "
+                         "none, which is the rig convention of 2026-07-29, where the lights watch the parts only")
     ap.add_argument("--minutes", type=float, default=20.0)
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--ddsp-repo", default=DDSP)
     ap.add_argument("--girl-model", default=f"{DDSP}/exp/combsub-girl/model_30000.pt")
-    # 07-31 Harry 拍板 live 換用 260730 重訓嘴（40.8min、07-30 盲聽平手；
-    # 「換換看」實戴順裁）。舊嘴＝--harry-model {DDSP}/exp/combsub-harry/
-    # model_30000.pt；離線 direct_mouth 預設不動＝歷史 cell 可重現。
+    # On 2026-07-31 live moved to the voice retrained on 2026-07-30 (40.8 min of
+    # data; the blind listening of 2026-07-30 was a tie, and it was settled while
+    # wearing the instrument on "let us try the other one"). The old voice is
+    # --harry-model {DDSP}/exp/combsub-harry/model_30000.pt. The offline
+    # direct_mouth default is unchanged, so historical cells stay reproducible.
     ap.add_argument("--harry-model",
                     default=f"{DDSP}/exp/combsub-harry-260730/model_30000.pt")
     a = ap.parse_args()

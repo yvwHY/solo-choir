@@ -8,7 +8,7 @@
 ---
 
 ## A. Company & research lineage
-- ✅ **Kanru Hua (华侃如)** — founder of Dreamtonics, creator of Synthesizer V / SynthV Studio; Tokyo-based; studied at UIUC. (CCRMA talk listing)
+- ✅ **Kanru Hua** — founder of Dreamtonics, creator of Synthesizer V / SynthV Studio; Tokyo-based; studied at UIUC. (CCRMA talk listing)
 - ✅ **His DSP foundation is open-source**: [`libllsm2` / LLSM v2](https://github.com/Dreamtonics/libllsm2) — a **classical DSP two-layer source-filter speech model**: layer 0 = harmonic-plus-noise (harmonic amplitudes/phases + noise PSD); layer 1 = source-filter re-interpretation (smooth spectral envelope ≈ vocal-tract transfer function + glottal-model params). Synthesis = **Pulse-by-Pulse (PbP)**: each glottal period generated in the frequency domain, filtered by the layer-1 vocal-tract response, back to time via **overlap-add IFFT**. This is his analysis/synthesis engine for pitch/timbre manipulation.
 - ✅ His work "**bridges speech signal processing with generative models**" → the stack is **hybrid DSP + neural**, not pure end-to-end. (audio.dev speaker bio)
 - ✅ **Attribution correction (do not misstate in the thesis)**: the **Neural Homomorphic Vocoder (NHV)** patent [US11842722B2](https://patents.google.com/patent/US11842722B2) is by **Kai Yu, Zhijun Liu, Kuan Chen (SJTU / AISpeech)** — **NOT** Kanru Hua / Dreamtonics. NHV is the *academic template* for source-filter neural vocoders, not Dreamtonics IP.

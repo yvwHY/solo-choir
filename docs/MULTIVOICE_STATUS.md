@@ -78,12 +78,12 @@ model + a thicker-stack strategy are ready.
   vs the delayed output) — not worth it.
 - **The tenor model only sounds clean at/below its range.** Pitching it UP (Alto/Sop) → warble.
 - **JVS base** (`beatrice_paraphernalia_jvs`, 100 speakers) gives real female timbre WITHOUT training
-  and is clean as a SINGLE clean voice — BUT it's Japanese-trained, so the rounded Chinese **[u] "嗚"
+  and is clean as a SINGLE clean voice — BUT it's Japanese-trained, so the rounded Chinese **[u] vowel
   comes out as the wrong vowel** (everything else is correct). Non-commercial license. A stopgap only.
 
 ## 4. Adding the self-trained FEMALE model (when it lands)
 
-Goal: real S/A from your own Chinese female model — correct vowels (fixes "嗚"), sings high, stable
+Goal: real S/A from your own Chinese female model — correct vowels (fixes the [u] vowel), sings high, stable
 like your tenor. The architecture already supports it; this is mostly config.
 
 1. **Get the model dir** (the `paraphernalia_data_*` folder with the 5 `.bin` files). Keep it OUT of

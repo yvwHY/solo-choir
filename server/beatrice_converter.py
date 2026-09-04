@@ -142,7 +142,7 @@ class BeatriceSoloChoir:
         self._glide_cand = None
         self._glide_cand_cnt = 0
         self._glide_target = 0.0
-        # Quantized-angel mode (2026-08-18, Harry「和諧度不如 ddsp 離線版」):
+        # Quantized-parts mode (2026-08-18, after "less in tune than the offline ddsp version"):
         # OFF (default) = the voice is the singer's live contour + an integer
         # shift, so his every intonation wobble is copied onto every voice and
         # the chord has NO in-tune anchor. ON = the voice sings the ABSOLUTE
@@ -153,44 +153,65 @@ class BeatriceSoloChoir:
         # neural engine's frame rate. All attrs poked by the wrapper; nothing
         # in the app sets them → default path byte-identical.
         self.quantize = False
-        self.q_glide = 0.25               # target ramp, st/hop（換音 ~140ms 內完成＝
-                                          # 圓滑線速度；0.05 版被 Harry 判「滑音嚴重」）
-        self.q_rest_hops = 20             # 靜默超過此 hop 數（200ms）＝新句：目標
-                                          # 直接落點，不從上一句的音滑過來
+        self.q_glide = 0.25               # target ramp in semitones per hop; a note change
+                                          # completes in about 140 ms, the speed of a
+                                          # smooth line. The 0.05 version was judged
+                                          # to have heavy portamento.
+        self.q_rest_hops = 20             # silence longer than this many hops (200 ms)
+                                          # starts a new phrase: the target lands
+                                          # directly instead of gliding from the
+                                          # last note of the previous phrase
         self._q_uv = 0
         self.vib_cents = 0.0              # own vibrato depth (peak, cents)
         self.vib_hz = 5.0                 # own vibrato rate
-        self.vib_onset_hops = 30          # 起音先直、顫音 ~300ms 漸開（真人唱法；
-                                          # 純正弦一開口就滿幅＝合成感）
+        self.vib_onset_hops = 30          # straight at the attack, with vibrato opening
+                                          # over about 300 ms, as a singer does. A
+                                          # pure sine at full depth from the first
+                                          # instant sounds synthetic.
         self._vib_ph = 0.0
-        self._vib_am_ph = 0.0             # 深度慢速呼吸（~0.5Hz ±15%）
-        self._q_age = 0                   # 距上次換音的 hop 數（顫音漸開用）
+        self._vib_am_ph = 0.0             # slow breathing in depth, about 0.5 Hz at +/-15%
+        self._q_age = 0                   # hops since the last note change, for the vibrato ramp
         self._qtgt = None                 # ramped absolute target (MIDI float)
-        self.q_snap = 3.5                 # 目標跳動超過此半音數＝直接落點不滑
-                                          # （音級圓滑線最多 ~四五度；更大＝偵測
-                                          # 修正或真大跳，滑過去＝「極速滑音」實案）
-        self._q_cont3 = []                # 句首進場檢查：連續 3 hop 音高一致
-        # 補償項平滑（08-18 Harry「聲部還是會抖」）：applied=目標−cont，
-        # cont 的逐 hop 估計噪音（幾 cents）會原封印在天使音上。中值(5)＋
-        # EMA(0.35)＝~45ms 延遲換掉估計噪音；長音穩定拿到、真移動照樣跟。
+        self.q_snap = 3.5                 # a target jump larger than this many semitones
+                                          # lands directly instead of gliding. A
+                                          # smooth diatonic line moves at most a
+                                          # fourth or fifth; anything larger is a
+                                          # detection correction or a real leap, and
+                                          # gliding it produced the extremely fast
+                                          # slide that was reported.
+        self._q_cont3 = []                # entry check at the start of a phrase: the pitch
+                                          # must agree over three consecutive hops
+        # Smoothing the compensation term, after "the parts still wobble"
+        # (2026-08-18). applied = target - cont, so the few cents of per-hop
+        # estimation noise in cont would print straight onto the part. A median
+        # of 5 with an EMA of 0.35 trades about 45 ms of delay for that noise:
+        # sustained notes come out steady, and real movement is still followed.
         self.q_comp_smooth = True
         self._q_med5 = []
         self._q_cs = None
-        self.q_commit_hops = 4            # 新目標要連續站穩 40ms 才採納＝圓滑
-                                          # 路過的中間音（<40ms）不再被咬住
-        self._q_held = None               # quantize 自管的已提交音符
-        self._q_raw_held = None           # 目標快取（held 換了才重算）
+        self.q_commit_hops = 4            # a new target is adopted only after holding for
+                                          # 40 ms, so passing notes inside a smooth
+                                          # line, which last under 40 ms, are no
+                                          # longer latched onto
+        self._q_held = None               # the committed note, owned by quantize
+        self._q_raw_held = None           # cached target, recomputed only when held changes
         self._q_raw_tgt = None
-        self._q_far = 0                   # 連續「遠離 held」hop 數：1–2＝飛點
-                                          # （凍結）；≥3＝他真的在移動（釘住舊
-                                          # 目標，別讓輸出跟著走——165c 走音實案）
-        # 純律（08-18 和諧度）：天使相對「他的音」取純律比值而非平均律格。
-        # 四度只差 2c，但三度差 13.7c＝換音程時這裡就是「鎖住」與「將就」的差。
+        self._q_far = 0                   # consecutive hops far from held: 1-2 is an
+                                          # outlier and is frozen; 3 or more means the
+                                          # singer really is moving, so the old target
+                                          # is pinned rather than followed, which is
+                                          # what caused the 165-cent excursion
+        # Just intonation (2026-08-18): the parts take just ratios against the
+        # singer's note rather than the equal-tempered grid. A fourth differs by
+        # only 2 cents, but a third by 13.7, which is the difference between a
+        # chord that locks and one that merely gets by.
         self.q_ji = False
-        # 平台跟他調音：共享 dict（各聲部指到同一個）＝和弦內部鎖死、整體
-        # 慢慢貼上他的音準中心（τ ≈ 2.5s；只在他站在音上時更新；夾 ±0.35st）。
-        self.q_tune = None                # {"off": st}；None＝關
-        self.q_tune_lead = False          # 只有 leader 聲部更新（其餘只讀）
+        # The ensemble tunes to the singer through a shared dict that every
+        # part points at, so the chord locks internally while the whole slowly
+        # tracks the singer's tuning centre (time constant about 2.5 s, updated
+        # only while they are holding a note, clamped to +/-0.35 semitones).
+        self.q_tune = None                # {"off": st}; None disables it
+        self.q_tune_lead = False          # only the leader part updates it; the others read
 
     def process_frame(self, seg16k: np.ndarray, f0_override: float | None = None) -> np.ndarray:
         """seg16k: 160 float32 @16k. Returns the tenor (harmony) output @24k.
@@ -213,19 +234,27 @@ class BeatriceSoloChoir:
                 # else None`, which forced diatonic=0 and jumped the TUNE mid-sustain → neural crackle.
                 shift = self.harmonizer.compute_shift(np.array([f0], dtype=np.float32))
                 diatonic = float(shift) if shift is not None else 0.0
-            # quantize 模式**不跑**舊判音鏈：它的輸出這裡用不到，而它的副作
-            # 用（median+遲滯的 held、auto_chord 的和弦狀態）會跟量化的判音
-            # 搶同一個和弦記憶＝雙重驅動（08-18 free 接線時定的雷）。
+            # In quantize mode the old note chain does not run: its output is
+            # unused here, and its side effects, the median-plus-hysteresis held
+            # and auto_chord's chord state, would compete with the quantised
+            # note detection for the same chord memory, which is the double
+            # drive identified when free was wired in on 2026-08-18.
         self._last_f0 = f0   # Task 2.4: expose the f0 used this frame so peer voices can reuse it
         if self.quantize and self.harmonizer.enabled:
-            # Quantized angel（08-18，v2 重寫）：天使唱「他所站音符」的調內
-            # 絕對目標＋自有顫音；他的連續音高逐 hop 被抵消。音符提交不再走
-            # harmonizer 的 median+遲滯鏈——那條鏈會把圓滑「路過值」提交成
-            # held（實案：降全音時 held 卡 46、他站 45、差 1.0 恰在遲滯縫上
-            # ＝天使永遠不跟）。這裡的唯一提交來源＝「站穩的音高」（3 hop
-            # 範圍 <0.35st）：路過值天生站不穩＝進不來；落地 30ms 即提交。
+            # Quantised parts (2026-08-18, rewritten as v2): each part sings
+            # the absolute in-key target of the note the singer is standing on,
+            # with its own vibrato, and the singer's continuous pitch is
+            # cancelled hop by hop. Notes are no longer committed through the
+            # harmoniser's median-plus-hysteresis chain, which committed passing
+            # values of a smooth line as held. In one case, descending a whole
+            # tone, held stuck at 46 while the singer stood on 45, and the
+            # difference of 1.0 fell exactly in the hysteresis gap, so the part
+            # never followed. The only source of a commit here is a pitch that
+            # holds still, within 0.35 semitones over three hops. A passing value
+            # cannot hold still and so cannot enter; a landed note commits after
+            # 30 ms.
             if f0 <= 0.0:
-                self._q_uv += 1               # 靜默過門檻＝下一句從頭起音
+                self._q_uv += 1               # silence past the threshold: the next phrase attacks afresh
                 if self._q_uv > self.q_rest_hops and self._q_held is not None:
                     self._q_held = None
                     self._qtgt = None
@@ -241,28 +270,35 @@ class BeatriceSoloChoir:
                         and max(self._q_cont3) - min(self._q_cont3) < 0.35)
                 if stab and (self._q_held is None
                              or abs(med3 - self._q_held) > 0.6):
-                    self._q_held = int(round(med3))   # 0.6＝提交遲滯（顫音/
-                                                      # 飄移不觸發、換音必觸發）
+                    self._q_held = int(round(med3))   # 0.6 is the commit hysteresis: vibrato
+                                                      # and drift do not trigger it, a
+                                                      # note change always does
                 if self._q_held is None:
-                    pass                              # 句首還沒站穩＝天使不進場
+                    pass                              # not settled yet at the start of a phrase, so the
+                                                      # parts stay out
                 elif abs(cont - self._q_held) > 2.5:
                     self._q_far += 1
                     if self._q_far >= 3 and self._qtgt is not None:
-                        # 持續遠離＝他真的在大幅移動：用當下 cont 釘住舊目標
-                        # ＝守音；凍結會讓輸出跟著他走出走音（165c 實案）
+                        # Persistently far away means the singer really is
+                        # moving a long way: pin the old target using the current
+                        # cont and hold the note. Freezing instead would let the
+                        # output follow them out of tune, which is the 165-cent
+                        # case.
                         tune = (self.q_tune["off"]
                                 if self.q_tune is not None else 0.0)
                         ns = self._qtgt + tune + self.pitch_offset - cont
                         if ns != self._cur_shift:
                             self.sb.set_pitch_shift_semitone(ns)
                             self._cur_shift = ns
-                    # 前 2 hop＝可能是飛點：維持上一個 shift
+                    # the first two hops may be outliers: keep the previous shift
                 else:
                     self._q_far = 0
                     if self._q_raw_held != self._q_held:
-                        # held 換了才重算一次（auto_chord 有狀態：和弦記憶＋
-                        # voice-lead 的自家上一音；逐 hop 重呼叫既浪費又可能
-                        # 在邊界打抖）。和弦狀態的**唯一**驅動源＝量化 held。
+                        # Recomputed only when held changes. auto_chord carries
+                        # state, the chord memory and voice-lead's own previous
+                        # note, so calling it every hop would waste work and
+                        # could chatter at a boundary. The quantised held is the
+                        # only driver of the chord state.
                         if getattr(self.harmonizer, "auto_chord", False):
                             self._q_raw_tgt = float(
                                 self.harmonizer._auto_chord_target(self._q_held))
@@ -274,15 +310,15 @@ class BeatriceSoloChoir:
                         self._q_raw_held = self._q_held
                     tgt = self._q_raw_tgt
                     if self._qtgt is None:
-                        self._qtgt = tgt              # 新句＝直接落點，零滑音
+                        self._qtgt = tgt              # a new phrase lands directly, with no glide
                         self._q_age = 0
                     d = tgt - self._qtgt
                     if abs(d) > 0.3:
-                        self._q_age = 0               # 換音＝顫音重新漸開
+                        self._q_age = 0               # a note change restarts the vibrato ramp
                     else:
                         self._q_age += 1
                     if abs(d) > self.q_snap:
-                        self._qtgt = tgt              # 大跳/修正＝直接落點
+                        self._qtgt = tgt              # a leap or a correction lands directly
                     elif abs(d) <= self.q_glide:
                         self._qtgt = tgt
                     else:
@@ -314,7 +350,7 @@ class BeatriceSoloChoir:
                         self._q_med5 = (self._q_med5 + [cont])[-5:]
                         m = float(np.median(self._q_med5))
                         if self._q_cs is None or abs(cont - self._q_cs) > 0.35:
-                            self._q_cs = cont             # 死區：大動即時跟
+                            self._q_cs = cont             # dead zone: a large move is followed at once
                             self._q_med5 = [cont]
                         else:
                             self._q_cs += 0.35 * (m - self._q_cs)

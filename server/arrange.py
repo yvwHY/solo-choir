@@ -111,7 +111,7 @@ def _render_voice(mel16k, score, model, speaker, glide=0.4, hold=1, mel_score=No
     mel_score (melody notes, same tuple format): when given, the shift is computed SCORE-TO-SCORE —
     target note − melody note, constant within a note — instead of target − per-frame detected pitch.
     Offline we know both sides, so the singer's jitter/vibrato transfers in PARALLEL into the harmony
-    (intervals against the dry lead stay exact) rather than modulating the shift (the "游移"
+    (intervals against the dry lead stay exact) rather than modulating the shift (the wandering
     instability). Also skips f0 autocorr entirely. None = old frame-level tracking path."""
     score_shift = mel_score is not None
     h = SoloChoirHarmonizer(enabled=not score_shift)   # score_shift path needs no pitch tracking

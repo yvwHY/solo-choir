@@ -56,7 +56,7 @@ On the older beta.1 engine the internal `quantized_pitch` is exposed and could b
    solved latency outright. (Decision: don't chase RVC GPU.)
 3. **Sustained-note warble ("oo-ee")** — input f0 jitter flipped the snapped note across a
    scale boundary; fixed with held-note **hysteresis** in `SoloChoir.py`.
-4. **Constant high-freq buzz ("滋滋") live, but VCClient clean** — ROOT CAUSE: the harness
+4. **Constant high-frequency buzz live, but VCClient clean** — ROOT CAUSE: the harness
    resampled **statelessly per callback block** (`resample_poly`), restarting the filter every
    10 ms → a ~100 Hz boundary comb heard as sizzle. Fixed by **stateful `soxr.ResampleStream`**
    (continuous across blocks). This reached VCClient parity.
@@ -73,6 +73,8 @@ Environment: conda env `vcclient-dev` (Python 3.10). Engine path via `BEATRICE_E
 (default points at the extracted rc.0 engine; see license note).
 
 ```bash
+# `揚聲器` below is the macOS speaker device name on a zh-Hant system; it is
+# matched literally, so substitute whatever `--list-devices` prints on yours.
 cd server
 # list devices
 PYTHONPATH=. python beatrice_solo_choir_live.py --list-devices
@@ -92,8 +94,9 @@ Intervals: `-2` third below (default), `+2` third above, `-5` sixth below, `+5` 
 Key: `--key C..B`, `--minor 1` for natural minor.
 
 Tested device setup on this machine: input `USB PnP Audio Device`, output `MacBook Pro的揚聲器`
-(or `外接耳機` headphones). With headphones there's no feedback regardless of mic. Devices are
-selected **by name** because their numeric indices shuffle when headphones are plugged/unplugged.
+(the MacBook Pro speakers, or `外接耳機`, the external headphones; these are macOS
+device names on a zh-Hant system and are matched literally). With headphones
+there's no feedback regardless of mic. Devices are selected **by name** because their numeric indices shuffle when headphones are plugged/unplugged.
 
 ## License caveat (important)
 

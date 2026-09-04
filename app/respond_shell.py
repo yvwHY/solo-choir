@@ -1,10 +1,15 @@
-"""respond_shell — pywebview 殼：應答式 live（respond2）的展場/測試介面。
+"""respond_shell — pywebview shell: the exhibition and test interface for the
+answering mode (respond2).
 
-08-02 §I 血訓的正解：校準與狀態只在 console＝站著唱的人看不到。這個殼把
-respond2 的 stdout 變成大字狀態（能不能唱、校準指示、句數、等待、警告），
-引擎照 CLAUDE.md 架構跑**子行程**（respond2 活在 ddsp venv，殼活在
-vcclient-dev；音訊完全在子行程裡，橋只搬文字）。不改 respond2 的行為——
-解析的就是人看的那些列印（多的只有「收句→渲染…」一行標記）。
+The lesson from 2026-08-02 §I: calibration and status printed only to the
+console are invisible to someone standing up and singing. This shell turns
+respond2's stdout into large on-screen status (whether you may sing,
+calibration instructions, phrase count, waiting, warnings). The engine runs as
+a subprocess, following the architecture in CLAUDE.md: respond2 lives in the
+ddsp venv, the shell in vcclient-dev, all audio stays inside the subprocess and
+the bridge carries text only. respond2's behaviour is unchanged; what is parsed
+here is the same output a person reads, plus one extra marker line
+("captured → rendering").
 
 Run (conda env vcclient-dev):  python app/respond_shell.py
 """
@@ -23,37 +28,46 @@ import webview
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HARMONY = REPO_ROOT / "harmony"
 UI_FILE = REPO_ROOT / "ui" / "respond_live.html"
-# respond2 的家＝ddsp venv（vcclient-dev 缺 parselmouth，worklog 08-04 §J）
+# respond2 lives in the ddsp venv (vcclient-dev has no parselmouth, worklog 2026-08-04 §J)
 import sys as _sys  # noqa: E402
 _sys.path.insert(0, str(REPO_ROOT))
 import config  # noqa: E402
 ENGINE_PY = config.PY_RESPOND
-# bank_live 的家＝6x venv（地圖 runbook 的認證跑法）
+# bank_live lives in the 6x venv (the certified launch path in the runbook)
 BANK_PY = config.PY_ENGINE
-# solo_min（神經即時模式，08-14）＝**6x venv**，跟 bank_live 同一個。
-# 原本用 conda vcclient-dev，08-14 改掉：嘴部門控要 cv2+mediapipe，那兩個
-# 只在 6x venv 裡；往 vcclient-dev 裝會拖著 numpy 版本走（1.23.5→2.x），
-# viva 前不動認證環境。實測 6x venv 跑 Beatrice **逐位相同**（同一段輸入
-# rms 0.05540 兩邊一致、RTF 0.116 vs 0.122），兩邊都是 Python 3.10.20。
+# solo_min (the neural live mode, 2026-08-14) runs in the 6x venv, the same one
+# as bank_live. It used conda vcclient-dev until 08-14, when it moved: the mouth
+# gate needs cv2 and mediapipe, which exist only in the 6x venv, and installing
+# them into vcclient-dev would drag numpy from 1.23.5 to 2.x. The certified
+# environment is not touched before the viva. Measured: Beatrice in the 6x venv
+# is bit-identical (same input, rms 0.05540 on both sides, RTF 0.116 vs 0.122);
+# both are Python 3.10.20.
 SOLO_PY = BANK_PY
 SERVER = REPO_ROOT / "server"
-# 08-14 耳裁定案的兩顆嘴：高聲部＝B 線自訓 Soprano-3（bt 3000 步，Harry
-# 08-14 判「收在 3000」），低聲部＝六月就在用的 tenor。
+# The two voices settled by ear on 2026-08-14: the upper part is the B-line
+# self-trained Soprano-3 (bt, 3000 steps, judged "stop at 3000"), the lower part
+# is the tenor that has been in use since June.
 SOLO_SOP = config.BEATRICE_MODELS / "paraphernalia_data_00003000"
 SOLO_BASS = config.BEATRICE_MODELS / "paraphernalia_data_new25_2k"
 SOLO_ALT = config.BEATRICE_MODELS / "paraphernalia_data_satb2"
 
-# stdout → UI 事件。只認人看的那些行；認不得的行照樣進 log 面板。
+# stdout to UI events. Only the human-readable lines are matched; anything
+# unrecognised still goes to the log panel.
 _PATTERNS = [
     ("cal_quiet", re.compile(r"^1\) Calibration: stay silent")),
     ("cal_sing",  re.compile(r"^2\) Calibration: sing")),
     ("sep",       re.compile(r"separation ([\d.]+) dB")),
-    # 校準**成功**時才印的那行（失敗走另一條訊息）。抓下來給後續切換用
-    # `--gate` 帶回去＝演出中切進應答模式不必再校準一次（校準要他先安靜
-    # 3 秒再唱 5 秒，那在台上做不到）。
-    # 08-17 review #16：容許科學記號——安靜鏈路的 gate 可能是 1e-05 級，引擎
-    # 改印 %.6g（0.0424 或 1.2e-05 都完整抓到；舊 %.4f 會把小 gate 印成
-    # 0.0000，重用時 --gate 0.0＝lv>0 恆真＝樂句永遠不結束）。
+    # Printed only when calibration succeeds; failure prints a different line.
+    # The value is captured so that a later mode switch can pass it back with
+    # `--gate`, which means switching into the answering mode mid-performance
+    # does not require calibrating again. Calibration asks the singer for three
+    # seconds of silence and then five seconds of singing, which cannot be done
+    # on stage.
+    # Review #16, 2026-08-17: scientific notation is allowed. On a quiet chain
+    # the gate can be of the order 1e-05, so the engine now prints %.6g; both
+    # 0.0424 and 1.2e-05 are captured whole. The old %.4f printed a small gate
+    # as 0.0000, and reusing that as --gate 0.0 makes lv>0 always true, so the
+    # phrase never ends.
     ("calgate",   re.compile(r"→ gate ([\d.eE+-]+) \(")),
     ("key",       re.compile(r"^\[key\] (.+)")),
     ("octave",    re.compile(r"^\[auto-octave\] (.+)")),
@@ -64,66 +78,76 @@ _PATTERNS = [
         r"^  phrase (\d+) .*response +([\d.]+)s .*wait +([\d.]+)s"
         r".*mute window +([\d.]+)s")),
     ("warn",      re.compile(r"^\s*⚠ (.+)")),
-    # 實體鍵的狀態（連上/斷線/退回 UDP）：不上狀態列就等於沒有——站著唱的人
-    # 看不到 10.5px 的 log 面板（08-12 審查 A3/B7）。失敗行由引擎加 ⚠ 前綴，
-    # 會先被上面的 warn 抓走＝大警告條。
+    # Button status (connected / disconnected / fallen back to UDP). If it is
+    # not on the status bar it may as well not exist: someone standing and
+    # singing cannot read a 10.5px log panel (review A3/B7, 2026-08-12).
+    # Failure lines carry a warning prefix from the engine and are caught by the
+    # warn pattern above, which raises the large warning bar.
     ("tap",       re.compile(r"^\[tap\] (.+)")),
     ("dump",      re.compile(r"^session dump: (.+?) \(")),
     ("done",      re.compile(r"^total (\d+) phrases \| (.+)")),
-    # 即時串流模式（spike_stream，08-05 §M）
+    # The live streaming mode (spike_stream, 2026-08-05 §M)
     ("stream_on", re.compile(r"^stream on ")),
     ("stream_st", re.compile(
         r"^infer p50 (\d+)ms.*under (\d+) flags (\d+)")),
-    # 即時模式 v2＝bank_live（08-12 Harry 裁決換掉 spike_stream）
-    # 門控裸奔＝both 模式回授風險，必須上大警告條不是 10.5px log（審查 A4）
+    # Live mode v2 is bank_live, which replaced spike_stream on 2026-08-12.
+    # A dead gate risks feedback in the both mode, so it must raise the large
+    # warning bar and not sit in the 10.5px log (review A4).
     ("warn",      re.compile(r"^⚠? ?\[mouth\] GATE DEAD")),
-    # 神經即時模式（solo_min，08-14）。solo_min 那幾行印在 stderr，但
-    # Popen 用 stderr=STDOUT 合併，所以照樣進得來＝不必動 solo_min。
+    # The neural live mode (solo_min, 2026-08-14). solo_min prints these lines
+    # to stderr, but Popen merges stderr into stdout, so they arrive here and
+    # solo_min itself needs no change.
     ("solo_on",   re.compile(r"^\[solo_min\] running")),
     ("solo_st",   re.compile(r"^\[solo_min\] xruns (\d+)")),
     ("bank_on",   re.compile(r"^ready \(sample bank")),
-    # backlog/dropped 為選配群組：dropped 是「掉音訊」唯一照得到的儀器
-    # （F25），原本 regex 不抓＝duo 飽和時 35ms 的洞聽得到、看不到（08-17
-    # review #4）。行尾可能還掛 ⚠GATE DEAD / ⚠WORKER DEAD，UI 端另 sniff。
+    # backlog and dropped are optional groups. dropped is the only instrument
+    # that sees audio being lost (F25); the earlier regex did not capture it, so
+    # a 35 ms hole under duo saturation was audible but invisible (review #4,
+    # 2026-08-17). The line may also end with GATE DEAD or WORKER DEAD, which
+    # the UI sniffs separately.
     ("bank_st",   re.compile(
         r"^note (\S+) +cents +([+\-][\d.]+) +mouth +(open|closed) +xrun (\d+)"
         r"(?: +backlog (\d+)(?:/dropped (\d+))?)?")),
 ]
 
 
-TAP_PORT = 8766     # tap_listen.TapListener 的埠（respond2 serial 沒插時退回聽這裡）
+TAP_PORT = 8766     # tap_listen.TapListener port; respond2 falls back to this
+                    # when the serial button is not plugged in
 
 
 class Bridge:
     def __init__(self):
         self._win = None
         self._proc: subprocess.Popen | None = None
-        self._proc2: subprocess.Popen | None = None   # both 模式的 bank_live
-        self._both_pending: dict | None = None        # respond2 校準完才起 bank
-        self._tap_seq = 0        # 同韌體協定：序號遞增、收端去重
-        self._tap_on = False     # 視窗有 focus 才發 heartbeat（失焦＝鍵斷線）
-        self._stopping = False   # SIGINT 已送出（Stop 連點防護）
-        self._stop_t = 0.0       # 上次送 SIGINT 的時刻（防護時窗用）
-        self._lock = threading.Lock()   # _both_pending 的原子拿取（審查 S2）
-        self._mode = None        # 現在在唱的模式（鍵盤切換用）
-        self._opts: dict = {}    # Start 時那組裝置/參數，切換時沿用
-        self._switch: dict | None = None   # 進行中的切換 {mode, old[], new}
-        self._gate: str | None = None      # 本場校準成功的斷句門檻（切換沿用）
-        self._octave: int | None = None    # 本場鎖到的八度（respawn 用 --octave 釘住）
-        self._key_shift: int | None = None  # 最新的調移（respawn 用 --key-seed 種回）
-        self._retired: list = []           # 已 SIGINT 退場、還沒確認死透的引擎
-        self._retired_procs: set = set()   # 曾被刻意退場的引擎（exit 事件降級用）
+        self._proc2: subprocess.Popen | None = None   # bank_live for the both mode
+        self._both_pending: dict | None = None        # bank starts only after respond2 has calibrated
+        self._tap_seq = 0        # same protocol as the firmware: rising sequence, de-duplicated at the receiver
+        self._tap_on = False     # heartbeat is sent only while the window has focus (blur = button disconnected)
+        self._stopping = False   # SIGINT already sent (guards against double-clicking Stop)
+        self._stop_t = 0.0       # time of the last SIGINT, for the guard window
+        self._lock = threading.Lock()   # atomic take of _both_pending (review S2)
+        self._mode = None        # the mode currently sounding (used by keyboard switching)
+        self._opts: dict = {}    # the devices and parameters chosen at Start, reused across switches
+        self._switch: dict | None = None   # a switch in progress: {mode, old[], new}
+        self._gate: str | None = None      # the phrase-end gate from this run's successful calibration, reused on switch
+        self._octave: int | None = None    # the octave locked this run, pinned with --octave on respawn
+        self._key_shift: int | None = None  # the latest key shift, seeded back with --key-seed on respawn
+        self._retired: list = []           # engines sent SIGINT but not yet confirmed dead
+        self._retired_procs: set = set()   # engines retired on purpose, so their exit event is downgraded
         threading.Thread(target=self._hb_loop, daemon=True).start()
         threading.Thread(target=self._ble_loop, daemon=True).start()
 
     def _ble_loop(self):
-        """BLE 實體鍵接收（08-18 Harry「那就藍牙」）。
+        """Receive the physical button over BLE.
 
-        Pico 韌體＝firmware/pico_led_button/main_ble.py：免配對自訂通知服務
-        （BLE HID 鍵盤死案＝官方 rp2 韌體沒編配對，見 GRAVEYARD）。收到
-        TAP → self.tap()＝跟 UI space **同一條路、同一個流水號**（不會跟
-        space 互吞，序號互吞那課見 tap_listen 08-18 註）。斷線自動重掃重連。
-        不擋路：bleak 沒裝／藍牙沒權限／沒這顆鍵＝執行緒安靜退場，app 照常。
+        The Pico firmware is firmware/pico_led_button/main_ble.py: a custom
+        notification service that needs no pairing. The BLE HID keyboard route
+        died because the official rp2 firmware is built without pairing; see
+        GRAVEYARD. A received TAP calls self.tap(), the same path and the same
+        running number as the UI space key, so the two cannot swallow each
+        other. Disconnection triggers a rescan and reconnect.
+        Nothing blocks: if bleak is missing, Bluetooth permission is refused, or
+        the button is absent, the thread exits quietly and the app runs on.
         """
         try:
             import asyncio
@@ -158,12 +182,12 @@ class Bridge:
                         await lost.wait()
                     self._push("tap", {"m": ["disconnected (BLE key) — "
                                              "SPACE still works"]})
-                except Exception:  # noqa: BLE001 — 藍牙關掉/權限/裝置消失
+                except Exception:  # noqa: BLE001 - Bluetooth off, permission refused, or device gone
                     await asyncio.sleep(5)
 
         try:
             asyncio.new_event_loop().run_until_complete(run())
-        except Exception:  # noqa: BLE001 — 整層兜底：BLE 死不拖 app
+        except Exception:  # noqa: BLE001 - catch-all: a dead BLE layer must not take the app down
             pass
 
     def _tap_send(self, msg):
@@ -172,7 +196,7 @@ class Bridge:
             s.sendto(msg, ("127.0.0.1", TAP_PORT))
             s.close()
         except OSError:
-            pass                 # 不擋路：發不出去＝當沒這顆鍵
+            pass                 # nothing blocks: if it cannot be sent, treat the button as absent
 
     def _hb_loop(self):
         while True:
@@ -181,14 +205,16 @@ class Bridge:
             time.sleep(2.0)
 
     def tap(self):
-        """UI space 鍵＝實體鍵：發 TAP（冗餘 3 封，收端以序號去重）。"""
+        """The UI space key acts as the physical button: send TAP three times
+        for redundancy; the receiver de-duplicates by sequence number."""
         self._tap_seq += 1
         for _ in range(3):
             self._tap_send(b"TAP %d" % self._tap_seq)
         return True
 
     def tap_presence(self, on):
-        """UI focus/blur → 有無 heartbeat（引擎 6s 沒 HB 自動回純能量斷句）。"""
+        """UI focus and blur turn the heartbeat on and off. After 6 s without a
+        heartbeat the engine falls back to energy-only phrase detection."""
         self._tap_on = bool(on)
         return True
 
@@ -201,7 +227,7 @@ class Bridge:
                 self._win.evaluate_js(
                     "window.respTele&&window.respTele(%s)"
                     % json.dumps({"kind": kind, **payload}, ensure_ascii=False))
-        except Exception:  # noqa: BLE001 — 視窗關閉中
+        except Exception:  # noqa: BLE001 - the window is closing
             pass
 
     def _reader(self, proc, who):
@@ -209,11 +235,14 @@ class Bridge:
             line = raw.rstrip("\n")
             if not line.strip():
                 continue
-            # 08-17：**退場中／切換中的舊引擎只餵 log，不再驅動 UI**。
-            # exit 降級之後，舊引擎在 ≤8s 收場窗裡的 FRAME/狀態行原本照樣
-            # 推畫面＝切走 bank 後鏡頭殘影凍住（Harry 實測抓到）；同理，
-            # 切換一開始（他點下拉的那一刻）舊引擎就該從畫面上退場——聲音
-            # 繼續唱（無縫），但 UI 跟著**他的意圖**走，不是跟著舊引擎走。
+            # 2026-08-17: an engine that is retiring, or being switched away
+            # from, feeds the log only and no longer drives the UI. Once exit
+            # was downgraded, status lines from the old engine inside its <=8 s
+            # shutdown window still pushed to the screen, which froze a stale
+            # camera image after switching away from bank. By the same
+            # argument, the old engine should leave the screen the moment the
+            # switch is requested: the sound continues seamlessly, but the UI
+            # follows the performer's intent rather than the old engine.
             sw0 = self._switch
             if (proc in self._retired_procs
                     or (sw0 and proc in sw0.get("old", []))):
@@ -221,9 +250,11 @@ class Bridge:
                     self._push("log", {"line": line})
                 continue
             if line.startswith("FRAME "):
-                # 08-18 Harry：「UI 鏡頭顯示都拿掉」＝影像不再推 UI。凍結
-                # 配置已不帶 --frame-b64，這裡是兜底：任何 FRAME 行（舊版
-                # 引擎/手帶旗標）直接丟掉，不進 log、不掃 _PATTERNS。
+                # 2026-08-18: the camera view was removed from the UI, so
+                # images no longer reach it. The frozen configuration does not
+                # pass --frame-b64; this is the backstop. Any FRAME line, from
+                # an older engine or a hand-set flag, is dropped without
+                # reaching the log or the pattern scan.
                 continue
             ev = {"line": line}
             kind = "log"
@@ -233,37 +264,46 @@ class Bridge:
                     kind, ev["m"] = name, list(m.groups())
                     break
             if kind == "calgate":
-                # 校準成功的門檻記下來（只記成功那條；失敗那條走別的訊息）。
-                # 08-17 review #15：只收**現任或切換中**引擎的值——退場中的
-                # 舊引擎晚到的行不得覆寫（它可能還活 ≤8s）。
+                # Record the gate from a successful calibration; a failure
+                # prints a different line. Review #15, 2026-08-17: accept the
+                # value only from the current engine or the one being switched
+                # in. A late line from a retiring engine, which may live up to
+                # 8 s, must not overwrite it.
                 sw0 = self._switch
                 if proc is self._proc or (sw0 and sw0.get("new") is proc):
                     self._gate = ev["m"][0]
             elif kind == "octave":
-                # 08-17 review #16：記住鎖到的八度＝之後帶 --gate 重生的引擎
-                # 用 --octave 釘住，不再退回「最初 6 tick」估計器（08-02 實測
-                # 同素材鎖出 +0 與 +12 兩種＝live 鎖錯就整場都錯）。
+                # Review #16, 2026-08-17: remember the locked octave, so an
+                # engine respawned with --gate can pin it with --octave instead
+                # of falling back to the first-six-ticks estimator. Measured on
+                # 2026-08-02, the same material locked to both +0 and +12; a
+                # wrong lock live is wrong for the whole performance.
                 mo = re.search(r"(?:locked|pinned to) ([+-]?\d+)", line)
                 if mo and (proc is self._proc
                            or (self._switch or {}).get("new") is proc):
                     self._octave = int(mo.group(1))
             elif kind == "key":
-                # 同上：最新調移（seeded/rotation 行的最後一個帶號整數）
+                # As above: the latest key shift, the last signed integer on
+                # the seeded or rotation line.
                 mk = re.findall(r"[+-]\d+", line)
                 if mk and (proc is self._proc
                            or (self._switch or {}).get("new") is proc):
                     self._key_shift = int(mk[-1])
             self._push(kind, ev)
-            # 切換中的新引擎報到＝退場舊引擎（要在 both_pending 之前處理，
-            # 這樣切到 both 時 _proc2 才會掛在新的那顆 respond2 底下）
+            # The incoming engine reporting ready retires the old one. This
+            # must run before both_pending, so that switching to both attaches
+            # _proc2 under the new respond2.
             self._switch_ready(proc, kind)
             if kind == "live" and proc is self._proc:
-                # both 模式：respond2 校準完成開聽了，bank 才進場——早進會把
-                # 和聲餵進 respond2 的安靜/唱歌校準窗（plan 08-12 Step 3）。
-                # 競態（審查 S2）：先原子拿走 pending 再 spawn；spawn 期間
-                # Stop 進來的話，spawn 完立刻補刀。
-                # `proc is self._proc`（08-17 review #15）：退場中的舊 respond2
-                # 晚到的 live 行不得代領 pending、把 bank 掛錯位子。
+                # In the both mode, bank enters only once respond2 has
+                # calibrated and started listening. Entering earlier would feed
+                # harmony into respond2's silence and singing calibration
+                # windows (plan of 2026-08-12, step 3).
+                # Race (review S2): take pending atomically, then spawn. If
+                # Stop arrives during the spawn, finish it and stop it at once.
+                # `proc is self._proc` (review #15, 2026-08-17): a late live
+                # line from a retiring respond2 must not claim pending and
+                # attach bank to the wrong engine.
                 with self._lock:
                     o, self._both_pending = self._both_pending, None
                 if o is not None and not self._stopping:
@@ -273,15 +313,18 @@ class Bridge:
         code = proc.wait()
         with self._lock:
             sw = self._switch
-            # 新引擎還沒 ready 就死了＝切換作廢、**舊的留著繼續唱**。
-            # （不作廢的話 _switch 會永遠卡著，之後每一次按鍵都被當成
-            #   「切換進行中」而靜靜忽略＝鍵盤整場失效。）
+            # The incoming engine died before reporting ready, so the switch
+            # is cancelled and the old engine keeps singing. Without cancelling,
+            # _switch would stay set for good and every later key press would be
+            # read as "a switch is in progress" and silently ignored, which
+            # kills the keyboard for the rest of the performance.
             dead_new = bool(sw and sw["new"] is proc)
             if dead_new:
                 self._switch = None
         if dead_new:
-            # 08-17「一動作一動」之後：舊引擎在點擊時已退場＝失敗不是
-            # 「staying on」而是全停，switch_fail 讓 UI 還原成 Start。
+            # Since the one-action-one-move change of 2026-08-17 the old engine
+            # is already retired at the moment of the click, so a failure is not
+            # "staying on" but a full stop; switch_fail returns the UI to Start.
             self._push("warn", {"line": f"⚠ switch to {sw['mode']} died "
                                         f"({code}) — engines stopped, press "
                                         f"Start", "m": [sw["mode"]]})
@@ -290,12 +333,16 @@ class Bridge:
             with self._lock:
                 self._mode = None
         if proc is self._proc:
-            self._both_pending = None   # 主引擎死＝both 排程作廢（審查 A3）
-        # 審查 S1：exit 帶「誰死的」與「還有沒有活的」，UI 據此決定要不要
-        # 把按鈕還原成 Start（另一顆還在唱時還原＝假 ENDED＋孤兒）。
-        # 08-17 review #19：**刻意退場**的引擎不發 exit——原本每次成功切換
-        # 都會觸發 UI 的「another engine is still running」黃色假警報、佔住
-        # warn bar 直到下次 Start（跟 GATE DEAD 同一條 bar＝訓練人忽略它）。
+            self._both_pending = None   # the main engine died, so the both schedule is void (review A3)
+        # Review S1: exit carries which engine died and whether any is still
+        # alive, so the UI can decide whether to return the button to Start.
+        # Returning it while the other engine is still singing would show a
+        # false ENDED and leave an orphan.
+        # Review #19, 2026-08-17: an engine retired on purpose sends no exit.
+        # Every successful switch used to raise the UI's yellow "another engine
+        # is still running" false alarm, which held the warning bar until the
+        # next Start. That is the same bar as GATE DEAD, so it trained the
+        # performer to ignore it.
         if proc in self._retired_procs:
             self._push("log", {"line": f"{who} retired ({code})"})
         else:
@@ -303,110 +350,167 @@ class Bridge:
                                 "who": who, "still": self.running()})
 
     def _spawn_bank(self, o, boot_kind="boot"):
-        """bank_live 子行程＝**viva 凍結配置**（08-14 補齊；原本只帶
-        --attack 0.06）。
+        """The bank_live subprocess, in the frozen viva configuration
+        (completed 2026-08-14; it previously carried only --attack 0.06).
 
-        修的是什麼：08-13 一整天做的東西**全部是預設關的旗標**，所以
-        「app 跑的是 v26 之前的行為」——排練用 CLI、上台開 app＝兩台不同
-        的機器，這是當時唯一的排練/演出不一致點。每個旗標的來歷：
-          （--sing-gate 1 曾在此：27 維嘴/下巴模型，跨場次 acc 0.934、
-                         閉嘴與微張誤觸 0%（v34.1）。08-18 隨鏡頭退役移除
-                         ——門權威已是 mic 電平，見 --mic-gate / --mouth 0）
-          --vl 2         預設 1＝上三部 79-100% 唱同一顆音（四聲部其實是
-                         三份齊唱）。改 2 後齊唱 0%、完整三和弦 43-50%，
-                         並把各聲部拉出模型破音區（tenor 66-87%→4-9%）
-          --tenor 1      多開 tenor 聲部（v31；v42 起領唱嘴＝reflow-male8
-                         spk7，**不再是同一顆 bass 嘴**——bass1 在 65-68
-                         是壞音）
-          --trim bass=+7,tenor=+6  耳朵層平衡（08-16 定案，原為 tenor=+3）。
-                         Harry：「--trim 就共鳴問題，bass tenor 可以再大聲
-                         一些」。**A 加權**量到 alto 最響，bass 差 4.7dB、
-                         tenor 差 4.0dB（等響值），他要更突出 → 各加 2dB。
-                         ⚠ 一定要用 A 加權不能用平坦 rms：bass 降八度後
-                         兩者差 **13.3dB**（tenor 8.7 / alto 5.3 / sop 1.3）
-                         ——平坦 rms 會把 bass 判成「夠大聲」而耳朵聽不到，
-                         那正是 --balance 判死的原因（08-13）
-          --vib 25       預設 0＝完全沒有顫音，是「修過音」最強的指紋。
-                         3-8Hz 佔比 11.6%→19.9%（Harry 本人 22.7%）
-          --min-level -44  預設 -100＝音量門關閉。閉嘴 -54dBFS 仍有 43%
-                         幀報音高（自相關對音量無感）。**08-19 Harry「音量
-                         門檻都拉更高」：-50→-44（+6 dB）**
-          --deadzone 0.35  預設 0＝來回跳 32%。0.35：來回 19%、漏真音
-                         0/41、commit 延遲 0ms（上限鎖 0.45，見碼內）
-          --maxlag 2     輸出延遲棘輪的上限（預設 3）
-          --per-part 4   預設 1＝四聲部只有四條線。08-16 Harry 三段盲聽
-                         （A=4 條線／B=16 人失諧複製／C=16 人含真人音色）
-                         裁「B、C 分不太出來，也比較像一群人」＝**16 人要，
-                         真人音色不加分**。C 沒贏是結構性的：MEM_SPK 每聲部
-                         只有 1 位存活歌手（12 位耳裁只活 4 位），所以
-                         per-part 4 的組成是 領唱＋1 位真人＋2 個失諧複製
-                         ＝16 個聲音裡只有 4 個是真人。CPU 已驗：離線台架
-                         median 2.7ms／35ms 預算、零超支（F25）
-          --mouth 0      **08-18 Harry：「UI 鏡頭顯示都拿掉」＝鏡頭整條
-                         退役**。門權威同日已改 mic（見 --mic-gate），畫面
-                         一拿掉鏡頭就零功能＝連 mediapipe 執行緒都不起，
-                         省 CPU 也少一個故障模式（[mouth] GATE DEAD 類警告
-                         從此不會來自鏡頭）。--sing-gate 1 與 --frame-b64 5
-                         一併移除（沒有鏡頭就是死旗標）。要回鏡頭版：拿掉
-                         --mouth 0、帶回那兩支旗標，UI 端 mouthCam 在
-                         08-18 之前版本的 respond_live.html。
-          --mem-real 0   **08-16：這是「一下一下的雜音」的元兇。**（08-17 起
-                         引擎預設也翻成 0；這裡仍明寫＝凍結配置不靠預設。）
-                         原預設 1＝團員可借別顆模型的真人歌手（v39c）。兩份不同錄音
-                         的同一個音疊在一起，必然有微小音高差＝聽得到、
-                         但頻譜找不到（它不是多出來的成分，是干涉）。
-                         定位方式＝把七層處理全關成裸版再逐項加回：
-                           per-part 1 + 顫音        → 乾淨
-                           per-part 4 + 顫音        → 有
-                           per-part 4 全副本相同    → 乾淨
-                           per-part 4 只拿掉真人    → **乾淨**
-                         音樂上零損失：Harry 同日耳裁 T2(失諧複製) vs
-                         T3(含真人音色)「分不太出來」，16 人感靠失諧維持。
-                         ⚠ 五支儀器全部照不到它（dropped/xrun/高頻能量/
-                         非諧波能量/roughness），判準只有耳朵。
-          --pad 0        預設 1.5＝慢層和弦墊開著。08-16 Harry 聽四聲部隔離
-                         時抓到「除了本身的聲部音，好像還有一個底層旋律」
-                         ——就是它（錨音駐留 1.5s 才換和弦＝自己走出一條沒
-                         人唱的線）。量測：pad 在他**唱的時候**只貢獻 +0.8dB、
-                         在他**不唱時**貢獻 +5.2dB（不唱時仍 >−40dB 的比例
-                         97.3%→53.9%）＝它主要在他停下來時自己撐著。Harry
-                         裁「先關掉」。⚠ 關 pad **不會**解決「停唱後 3 秒才
-                         安靜」：兩者的衰減曲線幾乎一樣（3s 後 −0.8 vs −1.1dB），
-                         那條尾巴另有來源（且離線 --file 無鏡頭＝門控全開，
-                         這個數字要 live 才量得準）
-        **--vowels 刻意不帶**（＝預設 0，全「啊」）：08-13 下午 Harry 走完
-        多母音四版後的最終耳裁是「改回都是啊、多母音整條線不上 viva」。
-        當晚那份紀錄裡列的 `--vowels 1 --layers 2,3,4` 自己標著「母音開關
-        ＝耳裁項」＝**尚未定案**，所以這裡採用已經定案的那個。要翻案就
-        改這裡並在 STATE 記一筆。
+        What this fixed: everything built on 2026-08-13 sat behind flags that
+        default to off, so the app was running pre-v26 behaviour. Rehearsing
+        from the CLI and performing from the app meant two different
+        instruments, and this was the only rehearsal-to-performance mismatch at
+        the time. Where each flag comes from:
+          (--sing-gate 1 was here: a 27-dimension mouth and jaw model, 0.934
+                         accuracy across sessions, 0% false trigger on a closed
+                         or slightly open mouth (v34.1). Removed on 2026-08-18
+                         with the camera; the gate authority is now microphone
+                         level, see --mic-gate and --mouth 0.)
+          --vl 2         The default of 1 had the upper three parts singing the
+                         same note 79-100% of the time, so four parts were
+                         really three in unison. At 2, unison drops to 0%, full
+                         triads reach 43-50%, and each part is pulled out of the
+                         model's break region (tenor 66-87% to 4-9%).
+          --tenor 1      Adds the tenor part (v31). From v42 the lead voice is
+                         reflow-male8 spk7 and no longer the same voice as the
+                         bass, because bass1 is broken in the 65-68 range.
+          --trim bass=+7,tenor=+6
+                         Balance settled by ear on 2026-08-16 (tenor was +3).
+                         The note was that this is a resonance problem and that
+                         bass and tenor could be louder. A-weighted measurement
+                         put alto loudest, with bass 4.7 dB and tenor 4.0 dB
+                         below it in equal-loudness terms, and both were asked
+                         to stand out more, so each gained 2 dB.
+                         Use A-weighting, never flat rms: once the bass is an
+                         octave down the two disagree by 13.3 dB (tenor 8.7,
+                         alto 5.3, soprano 1.3). Flat rms calls the bass loud
+                         enough while the ear cannot hear it, which is exactly
+                         why --balance was abandoned on 2026-08-13.
+          --vib 25       The default of 0 means no vibrato at all, which is the
+                         strongest fingerprint of a corrected sound. The 3-8 Hz
+                         share rises from 11.6% to 19.9% (a human singer here
+                         measures 22.7%).
+          --min-level -44
+                         The default of -100 leaves the level gate open. With
+                         the mouth closed at -54 dBFS, 43% of frames still
+                         report a pitch, because autocorrelation is blind to
+                         level. Raised from -50 to -44 (+6 dB) on 2026-08-19.
+          --deadzone 0.35
+                         The default of 0 flickers between notes 32% of the
+                         time. At 0.35: flicker 19%, real notes missed 0 of 41,
+                         commit latency 0 ms. The upper bound is clamped at
+                         0.45 in the code.
+          --maxlag 2     Ceiling of the output-latency ratchet (default 3).
+          --per-part 4   The default of 1 gives four parts and four voices. A
+                         three-way blind listening on 2026-08-16 (A = four
+                         voices, B = sixteen detuned copies, C = sixteen
+                         including real timbres) found B and C hard to tell
+                         apart and both more like a group of people, so sixteen
+                         voices are wanted and real timbres add nothing. C could
+                         not win structurally: MEM_SPK holds only one surviving
+                         singer per part (4 of 12 passed the ear test), so
+                         per-part 4 is lead plus one real singer plus two
+                         detuned copies, which is 4 real voices out of 16. CPU
+                         verified on the offline bench: median 2.7 ms against a
+                         35 ms budget, no overruns (F25).
+          --mouth 0      2026-08-18: the camera view was removed from the UI and
+                         the camera retired entirely. Gate authority had moved
+                         to the microphone the same day (see --mic-gate); with
+                         the view gone the camera had no function left, so the
+                         mediapipe thread never starts. That saves CPU and
+                         removes a failure mode, since GATE DEAD warnings can no
+                         longer come from the camera. --sing-gate 1 and
+                         --frame-b64 5 went with it, being dead flags without a
+                         camera. To bring the camera back: drop --mouth 0,
+                         restore those two flags, and take mouthCam from the
+                         pre-2026-08-18 respond_live.html.
+          --mem-real 0   2026-08-16: this was the cause of the intermittent
+                         noise. The engine default flipped to 0 on 2026-08-17;
+                         it is still written out here, because the frozen
+                         configuration does not rely on defaults.
+                         The old default of 1 let a part borrow a real singer
+                         from another model (v39c). Two different recordings of
+                         the same note laid on top of each other always differ
+                         slightly in pitch, which is audible but invisible to a
+                         spectrum, because it is interference and not an added
+                         component.
+                         Located by turning all seven processing layers off to
+                         a bare version and adding them back one at a time:
+                           per-part 1 + vibrato        -> clean
+                           per-part 4 + vibrato        -> present
+                           per-part 4, identical copies -> clean
+                           per-part 4, real timbre removed only -> clean
+                         Musically nothing is lost: the same day's ear test
+                         found T2 (detuned copies) and T3 (with real timbres)
+                         hard to tell apart, so the sense of sixteen singers
+                         rests on detuning.
+                         All five instruments are blind to it (dropped, xrun,
+                         high-frequency energy, inharmonic energy, roughness);
+                         the ear is the only judge.
+          --pad 0        The default of 1.5 leaves the slow chord pad on. On
+                         2026-08-16, listening to the four parts in isolation
+                         turned up "something like an extra low melody besides
+                         the part itself", which was the pad: the anchor note
+                         holds for 1.5 s before the chord changes, so it walks a
+                         line nobody is singing. Measured, the pad adds only
+                         +0.8 dB while the singer sings and +5.2 dB while they
+                         do not (the share of frames above -40 dB in silence
+                         falls from 97.3% to 53.9%), so it mostly holds itself
+                         up in the gaps. Judged: turn it off.
+                         Turning the pad off does not fix the three seconds of
+                         sound after the singer stops: the two decay curves are
+                         almost identical (-0.8 vs -1.1 dB after 3 s), so that
+                         tail has another source. Offline --file runs have no
+                         camera and therefore an open gate, so this number is
+                         only accurate live.
+        --vowels is deliberately absent (that is, 0, everything on "ah"). After
+        four multi-vowel versions on the afternoon of 2026-08-13 the final
+        judgement by ear was to go back to a single vowel and keep the whole
+        multi-vowel line out of the viva. That evening's note lists
+        `--vowels 1 --layers 2,3,4` while marking the vowel switch as still to
+        be judged by ear, that is, not settled, so the settled option is used
+        here. To reverse it, change this and record the decision in STATE.
 
-        不帶 --gain：過耳版預設 1.0，UI gain 欄是 respond 語意，0.5 硬套會
-        偏離認證。
-        boot_kind="log"＝both 模式：boot 事件會把 UI 蓋成 LOADING、而 respond2
-        的心跳在他開唱時不印＝LOADING 掛滿第一句（審查 A5），所以只進 log。
+        --gain is not passed: the version that passed by ear defaults to 1.0,
+        and the UI gain field carries respond semantics, so forcing 0.5 would
+        depart from the certified configuration.
+        boot_kind="log" is for the both mode: a boot event would cover the UI
+        with LOADING, and respond2's heartbeat is silent while the singer sings,
+        so LOADING would sit over the whole first phrase (review A5). It
+        therefore goes to the log only.
           --mic-gate 1 --mic-open -18 --bleed -13.5
-                         **08-18 Harry：「live 只用麥克風就可以觸發」**＝門
-                         的權威從鏡頭改成 mic 電平（bank_live v43）。開門＝
-                         hop RMS 贏過 max(-18dBFS, 最近8hop輸出-13.5+6dB)
-                         （-26→-24＝08-18 稍後 Harry 耳測 OK 後「可以更嚴格
-                         點」；他唱的電平 ≥-22、山谷在 -24~-22＝-24 貼谷底）
-                         **08-19 Harry「都拉更高」：-24→-18（+6 dB）。
-                         退回＝把這裡與 _spawn_solo 的 --mic-open 改回 -24**
-                         連續 2 hop；關門＝低於地板 0.8s。首版帶 -45/-17.5
-                         （08-10 CALIB k）上機即翻車：Harry 實測「一直觸發」
-                         ＝首場 dump（app_bank_0818_134915）量到門開 88.6%。
-                         病因兩條：①房間+回授底噪坐在 -34~-28dBFS，-45 門
-                         檻形同虛設；②本機當日實測耦合中位 -13.4dB（p90
-                         -7.9），比 CALIB 的 -17.5 漏更多。新值＝拿該場錄音
-                         掃參數格選的：門開 15.9%、唱到的 hop 96% 有開、
-                         回授誤開 9%（舊值 88/100/88）。（--sing-gate 與
-                         --frame-b64 曾短暫留著當純 UI 畫面；08-18 稍後
-                         Harry 裁「UI 鏡頭顯示都拿掉」＝隨 --mouth 0 移除，
-                         見上。）誠實邊界（F26）：能量域把回授誤判成在
-                         唱的死穴仍在＝重開了 08-16「門控不可靠」的判決，
-                         生死交 Harry 耳測。
-        已知邊界（審查 B10）：bank 固定寫 ch0/1，respond 用 --out-map 分路時
-        會疊到 D 聲道——分路演出要用 both 模式前先議聲道配置。"""
+                         2026-08-18: live should be triggered by the microphone
+                         alone, so gate authority moved from the camera to
+                         microphone level (bank_live v43). The gate opens when
+                         the hop RMS beats max(-18 dBFS, the last 8 hops of
+                         output -13.5 + 6 dB) for two consecutive hops, and
+                         closes after 0.8 s below the floor. The threshold went
+                         -26 to -24 later on 2026-08-18 after an ear check
+                         called for something stricter (singing level is at or
+                         above -22 and the valleys sit between -24 and -22, so
+                         -24 hugs the valley floor), then -24 to -18 (+6 dB) on
+                         2026-08-19. To roll back, set --mic-open here and in
+                         _spawn_solo to -24.
+                         The first version carried -45 and -17.5 (CALIB k,
+                         2026-08-10) and failed on contact: it triggered
+                         constantly, and the first session dump
+                         (app_bank_0818_134915) measured the gate open 88.6% of
+                         the time. Two causes: the room plus feedback noise
+                         floor sits at -34 to -28 dBFS, which makes a -45
+                         threshold meaningless; and the coupling measured on
+                         this machine that day had a median of -13.4 dB (p90
+                         -7.9), leaking more than CALIB's -17.5. The new values
+                         come from a parameter sweep over that session's
+                         recording: gate open 15.9%, 96% of sung hops open,
+                         9% false opens from feedback (the old values were
+                         88 / 100 / 88).
+                         (--sing-gate and --frame-b64 stayed briefly as a
+                         picture-only UI feature; they were removed with
+                         --mouth 0 later on 2026-08-18, see above.)
+                         Honest boundary (F26): in the energy domain, feedback
+                         can still be mistaken for singing. That reopens the
+                         2026-08-16 finding that the gate is not reliable, and
+                         the decision rests on the ear.
+        Known boundary (review B10): bank always writes ch0/1, so when respond
+        routes parts with --out-map they pile onto channel D. Agree the channel
+        layout before performing the both mode with split routing."""
         o = o or {}
         cmd = [str(BANK_PY), "bank_live.py",
                "--tenor", "1", "--vl", "2", "--trim", "bass=+7,tenor=+6",
@@ -414,18 +518,23 @@ class Bridge:
                "--min-level", "-44", "--attack", "0.06",
                "--per-part", "4", "--mem-real", "0", "--pad", "0",
                "--view", "0", "--mouth", "0",
-               # bank 音量（08-18 Harry：「duo 裡 bank 蓋過 neural」）：UI 的
-               # bank 欄，預設 1.0＝過耳認證原值（原本刻意不帶 --gain，帶
-               # 1.0 逐位元等價）。⚠ 引擎在 Start/切換時讀旗標＝調完要重按
-               # Start 或切換模式才生效，不是即時鈕。空/非數字照 1.0。
+               # bank level, from 2026-08-18: "in duo, bank covers neural".
+               # Driven by the UI bank field; the default of 1.0 is the value
+               # that passed by ear, and passing 1.0 explicitly is bit-identical
+               # to the earlier practice of omitting --gain. The engine reads
+               # its flags at Start and at a switch, so a change takes effect
+               # only after pressing Start again or switching mode; it is not a
+               # live control. Empty or non-numeric falls back to 1.0.
                "--gain", str(o["bank_gain"]
                              if o.get("bank_gain") not in (None, "")
                              else 1.0),
                "--mic-gate", "1", "--mic-open", "-18", "--bleed", "-13.5",
                "--dump", "scratchpad/app_bank_" + time.strftime("%m%d_%H%M%S")]
-        # 分聲道（08-18 Harry：「neural/live/live+neural 都要能分聲道」）。
-        # UI 的 map B·T·A·S ＝ bank_live VOICES 順序（bass,tenor,alto,sop）
-        # 原樣傳。四格沒選滿＝bankMapValue 回空＝不帶旗標＝原立體聲 pan。
+        # Channel routing, 2026-08-18: neural, live and live+neural should all
+        # be routable. The UI map B-T-A-S is the bank_live VOICES order
+        # (bass, tenor, alto, soprano) and is passed through unchanged. If the
+        # four fields are not all set, bankMapValue returns empty, no flag is
+        # passed, and the original stereo pan runs.
         _bm = str(o.get("bank_map") or "").strip()
         if _bm:
             cmd += ["--out-map", _bm]
@@ -442,98 +551,143 @@ class Bridge:
         return p
 
     def _spawn_solo(self, o, boot_kind="boot"):
-        """solo_min 子行程（神經即時＝量化天使版，08-18 Harry「更新進 neural」）。
+        """The solo_min subprocess: the neural live mode, quantised version,
+        adopted on 2026-08-18.
 
-        08-18 晚場整輪耳裁收斂的凍結配置（工程細節見 worklog 08-18 晚場）：
-          量化天使（--quantize）：天使唱「他所站音符」的調內絕對目標＝
-            和弦有準的錨（舊版＝他的音準複本，他飄全體跟著飄，Harry 裁
-            「和諧度不如 ddsp 離線版」的根子）。含純律＋共享調音中心
-            （τ≈2.5s 貼他的音準中心）。音符只從站穩 30ms 的音高提交＝
-            路過音進不來（「降音天使不動」「極速下滑」兩實案的根治）。
-          編制：alto（satb2 spk0 女聲）四度上＋tenor（new25_2k＝他自己的
-            嗓）四度下＋乾聲＝三部（08-18 連環裁決；四聲部 sop/bass 舊制
-            退役，回舊制＝git 08-18 之前的本函式）。
-          --vib 14@5.2,12@4.6：各聲部自有顫音（速率不同＝互相獨立）、
-            起音 300ms 漸開＋深度呼吸＝不是合成正弦。
-          --wet-send 0.28：合唱濕層（同一個廳＝合唱膠水；乾聲不濕）。
-          --voice-delay 25/40ms：起音錯開＝合唱跟主唱的那點拖。
-          --blocksize 960（20ms）：兩顆**不同**模型同跑會 cache thrash
-            （08-14 耳判 480=滋滋波波）；單模型才可 480。
-        門控：mic 電平門（見下方 --mic-gate 註記），不開鏡頭。"""
+        The frozen configuration that a full evening of listening converged on
+        (engineering detail in the worklog for the evening of 2026-08-18):
+          Quantised parts (--quantize): each part sings the absolute in-key
+            target of the note the singer is standing on, which gives the chord
+            something accurate to stand against. The older version copied the
+            singer's own intonation, so when they drifted the whole choir
+            drifted, which was the root of "less in tune than the offline ddsp
+            version". Includes just intonation and a shared tuning centre, with
+            a time constant of about 2.5 s tracking the singer's own centre.
+            A note is committed only from a pitch that has held for 30 ms, so
+            passing notes cannot enter; this cured both "the descending part
+            does not move" and "an extremely fast slide".
+          Casting: alto (satb2 spk0, female) a fourth above, tenor (new25_2k,
+            the singer's own voice) a fourth below, plus the dry voice, giving
+            three parts. Decided in sequence on 2026-08-18; the older four-part
+            soprano and bass arrangement is retired, and returning to it means
+            this function as it stood before 2026-08-18 in git.
+          --vib 14@5.2,12@4.6: each part has its own vibrato at a different
+            rate, so they are independent, opening over 300 ms at the attack and
+            breathing in depth, which is not a synthetic sine.
+          --wet-send 0.28: a shared reverb layer, the same hall, which is the
+            glue of a choir; the dry voice stays dry.
+          --voice-delay 25/40 ms: staggered attacks, the small lag of a choir
+            behind a lead singer.
+          --blocksize 960 (20 ms): two different models running together thrash
+            the cache; 480 was judged by ear on 2026-08-14 as crackling. Only a
+            single model can use 480.
+        Gate: microphone level (see the --mic-gate note below), camera off."""
         o = o or {}
-        # key：diatonic 要調名。UI 的 key 欄填 C..B（含 #/b）就用它；
-        # auto/空/整數＝先用 C 起跑（logged）。小調要 --minor，尚未拉上 UI。
-        # ⚠ 08-18 音程＝Harry 當日連環裁決的終點（八度→三度→四度對稱）；
-        # 要改音程只動 --steps/--steps2（quantize 的音符/純律邏輯自動跟）。
+        # key: diatonic needs a key name. If the UI key field holds C..B,
+        # with sharps or flats, it is used; auto, empty or an integer starts on
+        # C and logs it. Minor keys need --minor, which is not yet in the UI.
+        # The intervals of 2026-08-18 are the end point of that day's chain of
+        # decisions (octave, then third, then symmetrical fourths). To change
+        # them, touch only --steps and --steps2; the note and just-intonation
+        # logic of quantize follows automatically.
         _k = str(o.get("key") or "").strip()
         if not re.fullmatch(r"[A-Ga-g][#b]?", _k):
             _k = "C"
         cmd = [str(SOLO_PY), "solo_min.py",
                "--model", str(SOLO_ALT), "--speaker", "0",
                "--mode", "diatonic", "--key", _k,
-               # 08-18 Harry「有高樓但缺屋頂」：上聲部錨 +3（四度）→ +7
-               # （八度區）＝free 的和弦音改在你上方八度那帶撿＝真正蓋頂；
-               # 太高/太尖就退 +5（六度）。tenor 錨不動。
+               # 2026-08-18, "tall building but no roof": the upper part's
+               # anchor moves from +3 (a fourth) to +7 (the octave region), so
+               # free picks its chord tones an octave above the singer and
+               # actually caps the texture. If it sits too high or too sharp,
+               # fall back to +5 (a sixth). The tenor anchor is unchanged.
                "--steps", "7",
-               # 08-18 Harry「第三個天使補中間」：中層＝同顆 satb2 女聲、錨
-               # +3（四度區＝原上聲部的位置，正好當樓層）；--model2 不帶＝
-               # 繼承 --model。三顆嘴兩模型 @960＝08-14 驗過的負載同級。
+               # 2026-08-18, "a third voice to fill the middle": the middle
+               # layer is the same satb2 female model anchored at +3 (the
+               # fourth region, where the upper part used to sit, which makes it
+               # the middle floor). --model2 is not passed, so it inherits
+               # --model. Three voices from two models at a 960 block is the
+               # same load verified on 2026-08-14.
                "--steps2", "3",
                "--model3", str(SOLO_BASS), "--steps3", "-3",
                "--voices", "3",
-               # 08-18 Harry「四度組成不適用大多數歌」→ free 和弦推測＋
-               # voice-lead 獨立聲線（**08-18 晚 Harry 耳裁「可以 過」＝認證**，
-               # 含四部制＋轉音收斂那組值）：天使配和弦音
-               # 而非固定音程；steps ±3 降級為音域錨。台架已驗：和弦音配置
-               # 正確、共同音留住、聲線 ≤5 半音、量化 held 是和弦狀態唯一
-               # 驅動源（舊判音鏈在 quantize 下已斷＝無雙重驅動）。
-               # 回固定四度＝刪掉這兩支旗標。
+               # 2026-08-18, "a fourth-based texture does not suit most
+               # songs": free chord inference plus voice-lead independent
+               # lines, passed by ear the same evening together with the
+               # four-part and note-transition values. The parts take chord
+               # tones rather than fixed intervals, and steps +/-3 are demoted
+               # to range anchors. Verified on the bench: chord tones assigned
+               # correctly, common tones held, voice motion within 5 semitones,
+               # and quantised held is the only driver of chord state, since the
+               # old note chain is broken under quantize, so there is no double
+               # drive. To return to fixed fourths, remove these two flags.
                "--free", "--voice-lead",
-               # 08-18 Harry「轉音有時糊在一起」：換音收利落——滑速 0.4→
-               # 0.7（三度 ~43ms 完成）、>2.5st 直接落點、殘響 t60 1.2→0.9、
-               # 起音錯開 25/33/40→20/28/36ms。長音判準（穩定/鎖住）不動。
+               # 2026-08-18, "note changes sometimes smear together": tighten
+               # the transitions. Glide 0.4 to 0.7 (a third completes in about
+               # 43 ms), jumps over 2.5 semitones land directly, reverb t60 1.2
+               # to 0.9, attack stagger 25/33/40 to 20/28/36 ms. The sustained-
+               # note criteria (stable, locked) are unchanged.
                "--quantize", "1", "--q-glide", "0.7", "--q-snap", "2.5",
                "--vib", "14@5.2,13@4.9,12@4.6",
                "--wet-send", "0.28", "--wet-t60", "0.9",
                "--voice-delay", "0.02,0.028,0.036",
-               # 神經聲部音量：UI 的 neural 欄生效；預設 1.0＝08-18 的
-               # +5dB 帳（(choir/√2)/you＝(1/1.414)/0.4＝1.77＝+5dB，
-               # Harry 裁「兩聲部比我大聲 5dB」）。duo 模式預設再砍半。
-               # 08-17 review #17：「非空才收」判法不變。
+               # Level of the neural parts, driven by the UI neural field. The
+               # default of 1.0 is the +5 dB accounting of 2026-08-18:
+               # (choir/sqrt2)/you = (1/1.414)/0.4 = 1.77 = +5 dB, judged as
+               # "the two parts 5 dB above me". The duo mode halves this again
+               # by default. Review #17, 2026-08-17: the accept-only-if-non-empty
+               # rule is unchanged.
                "--choir-gain", str(o["ngain"]
                                    if o.get("ngain") not in (None, "")
                                    else 1.0),
                "--gate-floor", "0.02",
                "--blocksize", "960", "--cushion-ms", "20",
-               # 門控（08-18 Harry：「neural 也改成不用鏡頭觸發，如同 bank」
-               # ＝跟進 bank_live v43 的裁決）：權威從鏡頭改成 mic 電平，
-               # solo_min **完全不開鏡頭**（cv2/mediapipe 不載）。開門＝
-               # hop RMS 贏過 max(-26dBFS, 最近280ms輸出峰-13.5+6dB) 連續
-               # 70ms；關門＝低於地板 0.8s。-26/-13.5 直接沿用 bank 今天在
-               # 本機掃出來的值（同一支 mic 同一個房間；bank 首版帶預設
-               # -45 上機即翻車「一直觸發」——別走回頭路）。要回鏡頭版：
-               # 這行換回 "--mouth-gate 1 --gate-fail open"（08-14 版）。
-               # 誠實邊界同 bank（F26）：能量域可能把回授誤判成在唱，生死
-               # 交耳測；鏡頭版「講話誤觸 11%」變成「講話一定觸發」——
-               # mic 門分不出唱與講，對觀眾講話前先按 Stop 或把 neural 拉 0。
+               # Gate. 2026-08-18: neural should trigger without the camera,
+               # like bank, following the bank_live v43 decision. Authority
+               # moves from the camera to microphone level, and solo_min never
+               # opens the camera at all (cv2 and mediapipe are not loaded). The
+               # gate opens when the hop RMS beats
+               # max(-26 dBFS, peak output over the last 280 ms - 13.5 + 6 dB)
+               # for 70 ms, and closes after 0.8 s below the floor. The -26 and
+               # -13.5 are taken straight from the sweep bank ran on this
+               # machine the same day, with the same microphone in the same
+               # room. bank's first version used the -45 default and failed on
+               # contact by triggering constantly, so do not go back.
+               # To return to the camera version, replace this line with
+               # "--mouth-gate 1 --gate-fail open" (the 2026-08-14 version).
+               # Honest boundary, as for bank (F26): in the energy domain
+               # feedback can be mistaken for singing, and the ear decides.
+               # The camera version's 11% false trigger on speech becomes
+               # "speech always triggers", because a microphone gate cannot tell
+               # singing from speech. Press Stop, or pull neural to 0, before
+               # talking to an audience.
                "--mic-gate", "1", "--mic-open", "-18", "--bleed", "-13.5"]
-        # dry 直通：**要留著**（Harry 08-14：拿掉之後「聽不出來和聲，只剩
-        # 兩個乾聲」——和聲需要一個參照物才成立）。回音的真兇不是直通本身，
-        # 是 `--dry-delay-ms 40`：那個延遲是為了讓直通對齊**轉換後的和聲**，
-        # 前提是他戴耳機（空氣裡沒有他）。用喇叭演出時他本人就在現場，直通
-        # 該對齊的是**他的真實聲音**⇒ 延遲 0，否則就是 slap-back。
-        # 代價：和聲比他慢約 40ms——那本來就是合唱團跟著主唱的樣子。
-        # you 欄 0＝完全不直通（戴耳機或走 PA 分軌時才這樣設）。
+        # The dry pass-through stays. Removing it on 2026-08-14 left "no
+        # audible harmony, just two dry voices": harmony needs a reference to
+        # exist against. The echo was not caused by the pass-through itself but
+        # by `--dry-delay-ms 40`. That delay aligned the pass-through with the
+        # converted harmony, which only makes sense on headphones, where the
+        # singer is not in the air. Performing through speakers the singer is
+        # present in the room, so the pass-through should align with their real
+        # voice, which means zero delay; anything else is slap-back.
+        # The cost is that the harmony trails the singer by about 40 ms, which
+        # is what a choir following a lead singer does anyway.
+        # Setting the you field to 0 removes the pass-through entirely, which is
+        # only right on headphones or with split PA routing.
         _you = float(o.get("you_gain") if o.get("you_gain") not in (None, "")
-                     else 0.3)   # 08-18：Harry app 實測「user 聲音有點大」
-                                 # 0.4→0.3（天使相對乾聲 +5→+7.4dB）
+                     else 0.3)   # 2026-08-18, judged in the app as "my own
+                                 # voice is a bit loud": 0.4 to 0.3, which puts
+                                 # the parts +7.4 dB over the dry voice instead
+                                 # of +5.
         cmd += ["--dry-delay-ms", "0"]
         cmd += ["--no-dry"] if _you <= 0 else ["--you-gain", str(_you)]
-        # 分聲道（08-18 Harry：「neural/live/live+neural 都要能分聲道」）。
-        # UI 的 map D·U·L·S 在 neural 的語意：U=屋頂(+7)、S=中層(+3)、
-        # L=tenor(−3)＝solo_min --out-map 的 v1,v2,v3 順序；D=乾聲 --dry-ch。
-        # S 留空＝跟 U 同道（respond 同慣例）。沒選滿＝mapValue 回空＝不帶
-        # 旗標＝原混音路徑（引擎端逐位元不變）。
+        # Channel routing. 2026-08-18: neural, live and live+neural should all
+        # be routable. In neural, the UI map D-U-L-S means U = the roof (+7),
+        # S = the middle layer (+3), L = tenor (-3), which is the v1,v2,v3 order
+        # of solo_min --out-map; D is the dry voice, --dry-ch. Leaving S empty
+        # puts it on the same channel as U, as in respond. An incomplete
+        # selection returns an empty mapValue, so no flag is passed and the
+        # original mix path runs, bit-identical at the engine.
         _om = str(o.get("out_map") or "").strip()
         if _om:
             _p = _om.split(",")
@@ -553,26 +707,35 @@ class Bridge:
         return p
 
     def _spawn_respond(self, o, boot_kind="boot"):
-        """respond2 子行程（應答模式的主引擎；both 模式也是它打頭陣）。
+        """The respond2 subprocess: the main engine of the answering mode, and
+        the one that leads in the both mode.
 
-        `--gate`：**演出中切進應答模式時，沿用本場已經校準好的門檻。**
-        不這樣做的話每次切進來都要重跑校準（安靜 3 秒＋唱 5 秒）——那在台
-        上做不到，而且校準期間他必須配合機器而不是唱他的曲子＝那不叫無縫。
-        只有本場校準**成功**過才會有值（失敗那條印的是別的訊息，不會被抓
-        到）；沒有值就照舊校準。前提是 mic/房間沒變，同一場內成立。
+        `--gate` reuses the threshold already calibrated in this session when
+        switching into the answering mode mid-performance. Without it, every
+        switch would rerun calibration, three seconds of silence and five of
+        singing, which cannot be done on stage; during calibration the singer
+        has to follow the machine rather than sing their piece, which is not
+        seamless. A value exists only if calibration has succeeded in this
+        session, since a failure prints a different line that is not matched.
+        With no value, calibration runs as before. This holds within one
+        session, as long as the microphone and the room are unchanged.
         """
         cmd = [str(ENGINE_PY), "respond2.py", "--live",
-               # 08-19 Harry「音量門檻都拉更高」：校準門檻 x2（+6 dB）。
-               # 引擎預設 1.0＝原行為，退回就是把這兩個字拿掉。
+               # 2026-08-19, "raise all the level thresholds": calibration
+               # threshold doubled (+6 dB). The engine default of 1.0 is the
+               # original behaviour, so rolling back means removing these two
+               # arguments.
                "--gate-boost", "2.0",
                "--key", str(o.get("key") or "auto"),
                "--gain", str(o.get("gain") or 0.5),
                "--stab", str(o.get("stab") or 1),
                "--max-min", str(o.get("max_min") or 40)]
         if o.get("gap"):
-            # 08-14 Harry：「SING 自動切到 HOLD 的等待時間太快了，不夠唱」。
-            # 引擎預設 0.35s（他換氣實測 0.3-0.5s）＝換氣稍長就被當成唱完。
-            # 拉到 UI 上讓他自己調，不要寫死一個我猜的值。
+            # 2026-08-14: "SING switches to HOLD too quickly, there is not
+            # enough time to sing". The engine default of 0.35 s sits inside the
+            # measured breath range of 0.3-0.5 s, so a slightly long breath is
+            # read as the end of the phrase. Exposed in the UI to be set by the
+            # performer rather than fixed at a guessed value.
             cmd += ["--gap", str(o["gap"])]
         if o.get("gate"):
             cmd += ["--gate", str(o["gate"])]
@@ -580,11 +743,15 @@ class Bridge:
             cmd += ["--gate", self._gate]
             self._push("log", {"line": f"[switch] reusing calibrated gate "
                                        f"{self._gate} — no recalibration"})
-            # 08-17 review #16：帶 --gate 重生＝跳過校準＝原本退回「最初 6
-            # 個有聲 tick」的八度估計器（08-02 同素材鎖出 +0 與 +12 兩種；
-            # live 鎖錯就整場都錯）、--key auto 也失去校準種子從 0 起跑。
-            # 把本場已鎖到的值種回去：--octave 釘八度、--key-seed 種調（引擎
-            # 仍逐句修）。只掛在 gate 重用這條——全新校準的 Start 自己會鎖。
+            # Review #16, 2026-08-17: respawning with --gate skips calibration,
+            # which used to fall back to the first-six-voiced-ticks octave
+            # estimator (on 2026-08-02 the same material locked to both +0 and
+            # +12, and a wrong lock live is wrong all evening), and left
+            # --key auto without its calibration seed, starting from 0.
+            # Seed back what this session already locked: --octave pins the
+            # octave, --key-seed seeds the key, and the engine still corrects
+            # phrase by phrase. This hangs only off the gate-reuse path; a Start
+            # with fresh calibration locks its own.
             if self._octave is not None:
                 cmd += ["--octave", str(self._octave)]
             if (self._key_shift is not None
@@ -594,11 +761,11 @@ class Bridge:
             cmd += ["--in-name", str(o["in_name"])]
         if o.get("out_name"):
             cmd += ["--out-name", str(o["out_name"])]
-        if o.get("out_map"):                 # 'D,U,L' → respond2 --out-map（分路）
+        if o.get("out_map"):                 # 'D,U,L' -> respond2 --out-map (split routing)
             cmd += ["--out-map", str(o["out_map"])]
-        if o.get("reverb") not in (None, ""):    # 悠遠：殘響送出量（預設 0.20）
+        if o.get("reverb") not in (None, ""):    # distance: reverb send (default 0.20)
             cmd += ["--reverb", str(o["reverb"])]
-        if o.get("tail_s") not in (None, ""):    # 悠長：唱完天使自己延幾秒
+        if o.get("tail_s") not in (None, ""):    # length: seconds the parts sustain after the singer stops
             cmd += ["--tail-s", str(o["tail_s"])]
         p = subprocess.Popen(
             cmd, cwd=str(HARMONY), stdout=subprocess.PIPE,
@@ -609,41 +776,53 @@ class Bridge:
         return p
 
     def _spawn_mode(self, mode, o, boot_kind="boot"):
-        """依模式生引擎，回 (主引擎, [同時起的其他引擎])。
+        """Spawn the engines for a mode and return (main engine, [others
+        started alongside it]).
 
-        **Start 與鍵盤切換共用這一條**——08-14 加切換時刻意先抽出來：
-        `_spawn_bank` 旗標寫死那件事的教訓就是「同一件事有兩條路徑＝遲早
-        變成兩台不同的機器」。
-        「主引擎」＝報 ready 的那顆，切換以它為準退場舊的。"""
+        Start and keyboard switching share this one path. It was factored out
+        deliberately when switching was added on 2026-08-14: the lesson from the
+        hard-coded flags in `_spawn_bank` is that two paths to the same thing
+        eventually become two different instruments.
+        The main engine is the one that reports ready, and the switch retires
+        the old engines against it."""
         if mode == "stream":
-            # 即時模式 v2＝bank_live（08-12 Harry 裁決換掉 spike_stream；
-            # 舊路線要回來：cmd 換 [ENGINE_PY, "spike_stream.py", "--gain",
-            # "0.6", "--block", "0.20", "--crossfade", "0.08", "--extra",
-            # "0.7"]＝08-05 §M v14 原樣）。
+            # Live mode v2 is bank_live, which replaced spike_stream on
+            # 2026-08-12. To bring the old route back, set cmd to
+            # [ENGINE_PY, "spike_stream.py", "--gain", "0.6", "--block",
+            # "0.20", "--crossfade", "0.08", "--extra", "0.7"], which is v14 of
+            # 2026-08-05 §M unchanged.
             return self._spawn_bank(o, boot_kind), []
         if mode == "solo":
-            # 神經即時（08-14 Harry 裁決接入：不想讓觀眾看到換 app）
+            # Neural live, added on 2026-08-14 so the audience never sees the
+            # application being changed.
             return self._spawn_solo(o, boot_kind), []
         if mode == "duo":
-            # 08-14 Harry：「live neural + live 試試看」＝取樣器四聲部＋神經
-            # 兩顆嘴＋他的乾聲同時響。鏡頭兩邊都不開了（08-18：門權威改
-            # mic 電平；同日稍後 Harry「UI 鏡頭顯示都拿掉」＝bank 連純畫面
-            # 的鏡頭也退役）。主引擎取 bank（它的 ready 比較晚到：要載音
-            # 庫），切換退場時兩顆都已在唱。
-            # duo 起點＝把神經那半再砍一半（Harry 08-14 實測它比取樣器大
-            # 太多）。UI 的 neural 欄仍然生效——這裡只是把它的**預設**在
-            # duo 模式下減半，他填了值就照他的。
+            # 2026-08-14, "try live neural plus live": the sampled four parts,
+            # the two neural voices and the dry voice all sounding at once.
+            # Neither side opens the camera any more (2026-08-18: gate authority
+            # moved to microphone level, and later the same day the camera view
+            # was removed from the UI, retiring bank's picture-only camera too).
+            # bank is taken as the main engine because its ready arrives later,
+            # having to load the sample bank, so both are already singing when
+            # the switch retires the old ones.
+            # The duo starting point halves the neural side again, measured on
+            # 2026-08-14 as much louder than the sampler. The UI neural field
+            # still applies; only its default is halved in the duo mode, and a
+            # value typed in is used as given.
             od = dict(o)
-            # 08-17 review #17：不能用 `or`——UI 送來的是字串，float 之後 0
-            # 是 falsy，「把 neural 調到 0」會被 _spawn_solo 的預設復活成 0.5
-            # 且不砍半＝靜音請求反轉成雙倍音量（隔壁 you_gain 的慣用法才對）
+            # Review #17, 2026-08-17: `or` cannot be used here. The UI sends
+            # strings, and 0 is falsy after float(), so setting neural to 0
+            # would be revived by _spawn_solo's default to 0.5 and not halved,
+            # turning a request for silence into double the level. The you_gain
+            # idiom next to it is the correct one.
             od["ngain"] = float(o["ngain"] if o.get("ngain") not in (None, "")
                                 else 0.5) * 0.5
             partner = self._spawn_solo(od, "log")
-            # 08-18 Harry duo 平衡終判「0.5/0.5」：bank 欄留空時 duo 用 0.5
-            # （UI neural 0.5×砍半=0.25 那半由上面既有機制達成）；bank 單獨
-            # 跑（mode 2）留空仍是認證的 1.0（_spawn_bank 的 fallback）。
-            # 他手動填值＝兩種模式都照他的。
+            # Duo balance settled on 2026-08-18 as 0.5/0.5: with the bank field
+            # empty, duo uses 0.5, while the neural half reaches 0.25 through
+            # the halving above. Running bank alone (mode 2) with the field
+            # empty still uses the certified 1.0, from _spawn_bank's fallback.
+            # A value typed in is used as given in both modes.
             ob = dict(o)
             if ob.get("bank_gain") in (None, ""):
                 ob["bank_gain"] = 0.5
@@ -652,38 +831,50 @@ class Bridge:
 
     def start(self, opts: dict):
         """opts: {mode, gain, stab, key, gap, in_name, out_name, out_map,
-        max_min, reverb, tail_s, ngain, bank_gain, you_gain} — 全部有預設；
-        誰讀哪幾欄看 _spawn_*（respond/bank/solo 各取所需，其餘欄位忽略）。"""
+        max_min, reverb, tail_s, ngain, bank_gain, you_gain} - all have
+        defaults. Which fields are read by which engine is in the _spawn_*
+        methods; respond, bank and solo each take what they need and ignore the
+        rest."""
         if self.running():
             return False
         self._stopping = False
-        self._both_pending = None   # 上一場殘留的排程作廢（審查 A3：respond2
-        #   校準期就掛→換純應答重開，舊 pending 會讓 bank 憑空冒出）
+        # Void any schedule left over from the previous run (review A3): if
+        # respond2 died during calibration and the answering mode alone was
+        # restarted, an old pending would make bank appear out of nowhere.
+        self._both_pending = None
         o = opts or {}
-        # 換了輸入裝置＝上一場校準出來的門檻對這支 mic 不成立，作廢重校。
-        # 不作廢的話它會被靜靜沿用整場，而症狀（斷不出句／整首變一句）跟
-        # 「換了 mic」看起來毫無關聯。
+        # A different input device makes the previous calibration's threshold
+        # invalid for this microphone, so it is discarded and calibration runs
+        # again. Otherwise it would be reused silently all evening, and the
+        # symptom, phrases not ending or a whole song read as one phrase, looks
+        # unrelated to having changed the microphone.
         if o.get("in_name") != (self._opts or {}).get("in_name"):
             self._gate = None
-        self._opts = dict(o)        # 切換時沿用同一組裝置/參數
+        self._opts = dict(o)        # the same devices and parameters are reused across switches
         self._mode = o.get("mode") or "respond"
         if self._mode == "both":
-            # 第三模式（08-12 Harry 裁決）：respond2 先走，_reader 等到
-            # 「respond2 live.」（校準完成）才起 bank_live。
+            # The third mode, decided on 2026-08-12: respond2 goes first, and
+            # _reader starts bank_live only on "respond2 live.", which marks the
+            # end of calibration.
             self._both_pending = o
         self._proc, extra = self._spawn_mode(self._mode, o)
         self._proc2 = extra[0] if extra else None
         return True
 
     def _retire(self, procs):
-        """引擎退場（SIGINT）＋確保它終會死透（08-17 review #15）。
+        """Retire an engine with SIGINT and make sure it really dies
+        (review #15, 2026-08-17).
 
-        原本切換退場只送一發裸 SIGINT、引用直接丟進區域變數＝引擎 hang 在
-        CoreAudio 關流（playbook 已知）時**永遠**抱著 mic/輸出/鏡頭不放，
-        stop()/_on_closed 都看不到它——逐字重演 _on_closed 的 docstring 說
-        要防的「下一次開演 space 鍵直接是死的」。這裡：記進 _retired registry
-        （stop()/_on_closed 會一併收）、標記 _retired_procs（exit 事件降級）、
-        並起一條 8s reaper 兜底 SIGKILL（預算與 stop() 相同＝dump 寫得完）。"""
+        Retiring on a switch used to send one bare SIGINT and drop the reference
+        into a local variable. When the engine hung closing a CoreAudio stream,
+        a known entry in the playbook, it held the microphone, the output and
+        the camera for good, and neither stop() nor _on_closed could see it.
+        That reproduced, word for word, the failure _on_closed's docstring warns
+        about: the space key being dead at the next performance.
+        Here the process is recorded in the _retired registry, which stop() and
+        _on_closed also collect, marked in _retired_procs so its exit event is
+        downgraded, and given an 8 s reaper thread that falls back to SIGKILL.
+        The budget matches stop(), which is enough for the dump to be written."""
         alive = [p for p in procs if p and p.poll() is None]
         if not alive:
             return
@@ -692,7 +883,7 @@ class Bridge:
                              if q.poll() is None] + alive
             self._retired_procs.update(alive)
         for p in alive:
-            p.send_signal(signal.SIGINT)     # 自己會把 dump 寫完再退
+            p.send_signal(signal.SIGINT)     # the engine finishes writing its dump before leaving
 
         def _r():
             t0 = time.time()
@@ -707,64 +898,76 @@ class Bridge:
                     p.kill()
         threading.Thread(target=_r, daemon=True).start()
 
-    # 模式 → 「這顆引擎真的在唱了」的事件種類。切換就是等這個事件才殺舊的。
-    # both 仍可用但 UI 已拿掉（08-14 Harry：「respond+live 模式拿掉」），
-    # 保留機制不刪碼＝要回來只是 UI 加一個 option。
+    # Mode to the event that means "this engine is really singing". A switch
+    # waits for that event before stopping the old engines.
+    # both still works but was removed from the UI on 2026-08-14; the mechanism
+    # is kept rather than deleted, so bringing it back is one UI option.
     _READY = {"respond": "live", "both": "live",
               "stream": "bank_on", "solo": "solo_on", "duo": "bank_on"}
 
     def switch_mode(self, mode, opts=None):
-        """鍵盤 1-4／滑鼠下拉切換：**點下去舊引擎立刻停**，新引擎載入期間
-        安靜（UI 撐 SWITCHING），ready 後開唱。
+        """Switching by keys 1-4 or the drop-down: the old engine stops on the
+        click, nothing sounds while the new one loads (the UI holds SWITCHING),
+        and it sings once ready.
 
-        08-17 Harry 裁決「一動作一動」：舊設計（先起新的、等 ready 才殺舊
-        的＝聲音無縫）在切換期間舊引擎**還在跟著他反應**——樂器不服從動作。
-        廢除重疊；切換失敗＝什麼都不唱、回 Start（switch_fail 事件負責把
-        UI 還原）。"""
+        Decided on 2026-08-17, one action one move. The old design started the
+        new engine and killed the old one only on ready, which kept the sound
+        seamless, but the old engine went on responding to the singer during the
+        switch, so the instrument did not obey the action. The overlap is gone.
+        A failed switch leaves nothing sounding and returns to Start, with the
+        switch_fail event restoring the UI."""
         if mode not in self._READY:
             return False
         if not self.running() or self._stopping:
-            return False            # 還沒開演就切＝沒有意義，要按 Start
+            return False            # switching before the piece starts is
+                                    # meaningless; press Start
         with self._lock:
             if self._switch is not None:
-                return False        # 切換進行中：連按忽略（不排隊＝不會積
-                #                     一串切換在後面自己跑）
+                # A switch is in progress: repeated presses are ignored rather
+                # than queued, so a string of switches cannot pile up and run on
+                # their own.
+                return False
             if mode == self._mode:
                 return True
             old = [p for p in (self._proc, self._proc2)
                    if p and p.poll() is None]
             self._switch = {"mode": mode, "old": old, "new": None, "extra": []}
-        # 切換時吃 UI **當下**的欄位值（neural / gap / you…）。只用 Start 那
-        # 一組的話，他調完 neural 再按鍵會發現沒反應——而畫面上那個數字明明
-        # 已經改了＝顯示與行為不一致。裝置欄位仍以 Start 那組為準（演出中
-        # 換音訊裝置不在這條路徑的守備範圍）。
+        # A switch takes the UI field values as they are now (neural, gap,
+        # you and so on). Using only the Start set would mean that adjusting
+        # neural and then pressing a key appears to do nothing, while the number
+        # on screen has clearly changed, so display and behaviour disagree.
+        # Device fields still come from the Start set; changing audio devices
+        # mid-performance is out of scope for this path.
         o = dict(self._opts or {})
         for k, v in (opts or {}).items():
             if k not in ("mode", "in_name", "out_name", "out_map"):
                 o[k] = v
         o["mode"] = mode
         try:
-            p, extra = self._spawn_mode(mode, o, boot_kind="log")  # boot 會蓋 LOADING
-        except Exception as e:      # noqa: BLE001 — 生不出來＝舊的留著唱
+            p, extra = self._spawn_mode(mode, o, boot_kind="log")  # a boot event would cover the UI with LOADING
+        except Exception as e:      # noqa: BLE001 - if it cannot be spawned, the old engine keeps singing
             with self._lock:
                 self._switch = None
             self._push("warn", {"line": f"⚠ switch to {mode} failed ({e})",
                                 "m": [str(e)]})
             return False
         with self._lock:
-            cancelled = self._switch is None    # stop() 在 spawn 期間進來了
+            cancelled = self._switch is None    # stop() arrived during the spawn
             if not cancelled:
                 self._switch["new"] = p
                 self._switch["extra"] = extra
                 old_now = list(self._switch["old"])
                 if mode == "both":
-                    self._both_pending = o  # ready 之後 bank 才接著上
+                    self._both_pending = o  # bank follows only after ready
         if cancelled:
-            self._retire([p] + extra)       # 連組合模式的夥伴一起補刀
-            #   （_retire 自己拿鎖，所以要在鎖外呼叫）
+            # Also stop the partner of a combined mode. _retire takes the lock
+            # itself, so it must be called outside the lock.
+            self._retire([p] + extra)
             return False
-        # 08-17「一動作一動」：舊引擎在**點擊當下**退場（寫完 dump 就走），
-        # 不再唱到新引擎 ready。載入期間的安靜由 UI 的 SWITCHING 撐著。
+        # One action one move, 2026-08-17: the old engine retires at the moment
+        # of the click, leaving once its dump is written, rather than singing on
+        # until the new engine is ready. The silence while the new one loads is
+        # covered by SWITCHING in the UI.
         self._retire(old_now)
         self._push("switching", {"line": f"switching to {mode}…",
                                  "m": [mode]})
@@ -775,24 +978,29 @@ class Bridge:
     SWITCH_TIMEOUT = 30.0
 
     def _switch_watchdog(self, proc, mode):
-        """新引擎**活著但一直不報 ready** 的看門狗。
+        """Watchdog for a new engine that is alive but never reports ready.
 
-        沒有這個的話：引擎卡住（音庫渲到一半、CoreAudio 開流卡死、鏡頭搶
-        不到）⇒ `_switch` 永遠留著 ⇒ 之後每一次按鍵都被當成「切換進行中」
-        而靜靜忽略＝**鍵盤整場失效，而且台上沒有任何症狀告訴你為什麼**。
-        行程死掉那條路 _reader 有處理，卡住這條只能靠時間。
+        Without it, an engine that hangs part-way through rendering the sample
+        bank, opening a CoreAudio stream, or claiming the camera would leave
+        `_switch` set for good, and every later key press would be read as "a
+        switch is in progress" and silently ignored. The keyboard would be dead
+        for the rest of the performance, with nothing on stage to say why.
+        _reader covers the case where the process dies; a hang can only be
+        caught by time.
 
-        08-17 review #3：計時改「**距最後一行輸出** 30s」不是「距啟動 30s」
-        ——冷 cache 的 bank 重渲要好幾分鐘，但引擎每 8 音印一行進度＝一直
-        有活動；真卡死（沒輸出）維持 30s 就收。t_act 由 _switch_ready 每行
-        蓋章。"""
+        Review #3, 2026-08-17: the clock runs 30 s from the last line of output,
+        not 30 s from launch. Re-rendering the bank from a cold cache takes
+        several minutes, but the engine prints a progress line every 8 notes, so
+        there is activity throughout; a real hang produces no output at all and
+        is collected after 30 s. t_act is stamped by _switch_ready on every
+        line."""
         t0 = time.time()
         while True:
             time.sleep(0.5)
             with self._lock:
                 sw = self._switch
                 if sw is None or sw["new"] is not proc:
-                    return              # 已經 ready 或已被取消
+                    return              # already ready, or cancelled
                 last = max(t0, sw.get("t_act", t0))
             if time.time() - last >= self.SWITCH_TIMEOUT:
                 break
@@ -802,8 +1010,9 @@ class Bridge:
                 return
             self._switch = None
             victims = [sw["new"]] + sw["extra"]
-        self._retire(victims)           # 卡住的新引擎要收掉（含 8s 兜底
-        #                                 SIGKILL），否則抱著裝置/鏡頭不放
+        # The hung incoming engine has to be collected, with the 8 s SIGKILL
+        # backstop, or it holds the audio device and the camera.
+        self._retire(victims)
         self._push("warn", {"line": f"⚠ switch to {mode} timed out "
                                     f"({self.SWITCH_TIMEOUT:g}s with no "
                                     f"output) — engines stopped, press Start",
@@ -813,29 +1022,34 @@ class Bridge:
             self._mode = None
 
     def _switch_ready(self, proc, kind):
-        """新引擎報到＝退場舊引擎。回 True 表示這一拍已經處理掉切換。"""
+        """The incoming engine reporting ready retires the old ones. Returns
+        True when this line has completed the switch."""
         with self._lock:
             sw = self._switch
             if sw and sw["new"] is proc:
-                sw["t_act"] = time.time()   # 看門狗的活動蓋章（冷 cache 渲庫
-                #                             有進度行＝不會被 30s 誤殺）
+                # Activity stamp for the watchdog: rendering the bank from a
+                # cold cache prints progress lines, so it is not killed at 30 s.
+                sw["t_act"] = time.time()
             if not sw or sw["new"] is not proc or kind != self._READY[sw["mode"]]:
                 return False
             self._switch = None
             self._mode = sw["mode"]
-            # 組合模式的夥伴要接手到 _proc2，否則它不在 stop()/running() 的
-            # 視野裡＝孤兒抱著音訊裝置與鏡頭不放
+            # The partner of a combined mode must be handed to _proc2, or it
+            # falls outside the view of stop() and running() and becomes an
+            # orphan holding the audio device and the camera.
             self._proc, self._proc2 = proc, (sw["extra"] or [None])[0]
             old = sw["old"]
-        self._retire(old)                   # 08-17 起舊引擎在點擊時就退場，
-        #                                     這裡只是兜底（_retire 只碰還活
-        #                                     著的）；hang 住由 reaper 收
+        # Since 2026-08-17 the old engines retire at the click, so this is only
+        # a backstop; _retire touches live processes only, and a hang is
+        # collected by the reaper.
+        self._retire(old)
         self._push("switched", {"line": f"now {self._mode}", "m": [self._mode]})
         return True
 
     def devices(self):
-        """列出音訊裝置給 UI 下拉選單（08-05）。用引擎的 venv 問 sounddevice
-        ＝跟 respond2 開流看到的是同一張表。"""
+        """List audio devices for the UI drop-downs. sounddevice is queried
+        from the engine's own venv, so this is the same table respond2 sees when
+        it opens a stream."""
         try:
             r = subprocess.run(
                 [str(ENGINE_PY), "-c",
@@ -848,30 +1062,38 @@ class Bridge:
                  "}, ensure_ascii=False))"],
                 capture_output=True, text=True, timeout=15)
             return json.loads(r.stdout.strip().splitlines()[-1])
-        except Exception as e:  # noqa: BLE001 — UI 顯示錯誤即可
+        except Exception as e:  # noqa: BLE001 - showing the error in the UI is enough
             return {"in": [], "out": [], "err": str(e)}
 
     def stop(self):
-        """SIGINT → dump 先落檔（08-04 修過）。CoreAudio 關流掛死（playbook）
-        ＝等 8s 還不退就 SIGKILL——dump 已安全，不再需要 lldb 救。
+        """SIGINT lets the dump be written first (fixed 2026-08-04). Closing a
+        CoreAudio stream can hang, a known playbook issue, so anything still
+        alive after 8 s is sent SIGKILL; the dump is already safe by then and no
+        lldb rescue is needed.
 
-        連點防護（08-12 審查 A7）：第二個 SIGINT 會打進正在寫 dump 的
-        sf.write ⇒ 檔案截斷。已經送過就只是等。"""
+        Guard against double clicks (review A7, 2026-08-12): a second SIGINT
+        would land inside the sf.write that is writing the dump and truncate the
+        file. If one has already been sent, this only waits."""
         self._both_pending = None
         with self._lock:
-            sw, self._switch = self._switch, None   # 切換作廢（新的一起殺）
-            retired = list(self._retired)   # 08-17 review #15：退場中但可能
-            #   還沒死透的引擎也要收——否則它 hang 住＝孤兒抱著裝置
+            sw, self._switch = self._switch, None   # cancel the switch and stop the incoming engine too
+            # Review #15, 2026-08-17: engines that are retiring but may not yet
+            # be dead must be collected too, or a hang leaves an orphan holding
+            # the device.
+            retired = list(self._retired)
         procs = [p for p in ([self._proc, self._proc2] + retired
                              + ([sw["new"]] + sw["extra"] if sw else []))
                  if p and p.poll() is None]
-        self._last_stop_procs = procs       # _on_closed 要等同一份名單
+        self._last_stop_procs = procs       # _on_closed waits on this same list
         if not procs:
             return True
-        # 連點防護＝時窗而非永久閂：both 模式 stop/spawn 競態若漏出孤兒
-        # bank，第二次 Stop（時窗後）還收得到它，不會永遠空轉。
-        # 時窗＝reaper 預算 8s＋4s margin（審查 B8：綁死關係，改預算要一起改，
-        # 時窗 < 預算＝第二個 SIGINT 打進正在寫 dump 的 sf.write＝檔案截斷）。
+        # The double-click guard is a time window, not a permanent latch: if
+        # the stop/spawn race in the both mode leaks an orphan bank, a second
+        # Stop after the window still collects it rather than spinning for good.
+        # The window is the reaper budget of 8 s plus a 4 s margin (review B8:
+        # the two are tied, so changing the budget means changing this. A window
+        # shorter than the budget lets a second SIGINT land in the sf.write that
+        # is writing the dump and truncate the file).
         if self._stopping and time.time() - self._stop_t < 8 + 4:
             return True
         self._stopping = True
@@ -895,27 +1117,35 @@ class Bridge:
         sw = self._switch
         return bool((self._proc and self._proc.poll() is None)
                     or (self._proc2 and self._proc2.poll() is None)
-                    # 切換中的新引擎也算「還在跑」：漏算的話 UI 會在重疊
-                    # 期間把按鈕還原成 Start，而且 Stop 收不到它＝孤兒抱著
-                    # 音訊裝置不放（審查 S1 那類的假 ENDED）
+                    # An engine being switched in also counts as running.
+                    # Missing it would let the UI return the button to Start
+                    # during the overlap, and Stop would not collect it, leaving
+                    # an orphan holding the audio device: the false ENDED of
+                    # review S1.
                     or (sw and any(q and q.poll() is None
                                    for q in [sw["new"]] + sw["extra"])))
 
     def _on_closed(self):
-        """關窗＝直譯器馬上就要退出，stop() 那條 daemon reaper 會被一起砍掉
-        ⇒ 8s 後的 SIGKILL 永遠不會送出 ⇒ 卡在 CoreAudio 關流的引擎變孤兒、
-        抱著 :8766 與音訊裝置不放，下一次開演 space 鍵直接是死的（08-12 審查
-        S1/A5）。所以這裡同步收屍：SIGINT → 有界等待 → kill。"""
+        """Closing the window means the interpreter is about to exit, which
+        takes the daemon reaper thread in stop() with it, so the SIGKILL after
+        8 s is never sent. An engine stuck closing a CoreAudio stream then
+        becomes an orphan holding port 8766 and the audio device, and the space
+        key is dead at the next performance (review S1/A5, 2026-08-12). So the
+        collection happens synchronously here: SIGINT, bounded wait, kill."""
         self.stop()
-        # 08-17 review #15：等 stop() 實際瞄準的那份名單（含切換中/退場中
-        # 的引擎）——原本只快照 (_proc,_proc2)，關窗時正在切換的引擎會被
-        # 漏掉＝SIGINT 到一半直譯器退出、reaper 陪葬＝孤兒。
+        # Review #15, 2026-08-17: wait on the list stop() actually aimed at,
+        # including engines being switched in or retired. Snapshotting only
+        # (_proc, _proc2) missed an engine mid-switch when the window closed,
+        # so the interpreter exited part-way through the SIGINT, the reaper died
+        # with it, and an orphan was left.
         procs = [p for p in getattr(self, "_last_stop_procs", []) if p]
-        # 8s＝跟 stop() 的 reaper 同一個預算：渲染中關窗時 SIGINT 要等
-        # torch 回到 Python、dump 的 sf.write 可能上百 MB——3s 會把正在
-        # 寫檔的引擎 SIGKILL＝整場錄音截斷（08-12 驗收 N1）。
-        # 兩顆共用同一個 deadline（審查 B7：逐顆各 8s＝最壞 16s 卡 GUI 主
-        # 執行緒，期間所有 evaluate_js 全阻塞）。
+        # 8 s is the same budget as the reaper in stop(). Closing the window
+        # mid-render means SIGINT has to wait for torch to return to Python, and
+        # the dump's sf.write can be hundreds of megabytes; 3 s would SIGKILL an
+        # engine that is still writing and truncate the whole recording
+        # (verified N1, 2026-08-12).
+        # Both engines share one deadline (review B7: 8 s each would block the
+        # GUI main thread for up to 16 s, with every evaluate_js stalled).
         deadline = time.time() + 8
         for p in procs:
             try:
@@ -931,7 +1161,7 @@ def main():
         raise SystemExit(f"engine python not found: {ENGINE_PY}")
     bridge = Bridge()
     window = webview.create_window(
-        "Solo Choir · 應答", url=str(UI_FILE), width=760, height=640,
+        "Solo Choir - Respond", url=str(UI_FILE), width=760, height=640,
         min_size=(560, 480), background_color="#10141a", js_api=bridge)
     bridge._attach(window)
     window.events.closed += bridge._on_closed

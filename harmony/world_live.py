@@ -88,13 +88,19 @@ class Ear:
 
 
 class ExpressiveF0:
-    """規則表現層 streaming 版（07-31 F21 過耳測；參數與 direct_mouth.EXPR 同源，
-    量測出處見該處註解）。每 frame step() 吐 cents 偏差：每音偏置＋慢漂移＋
-    快抖＋不規則顫音（速率隨機走）＋樂句頭進音彎。固定 seed＝決定性；
-    per-voice 不同 seed＝兩天使自然去同步（收掉 07-28「同相位同速率齊振」）。
-    與離線版差異：live porta 對所有換音生效（無 leap_snap），故進音彎只加在
-    樂句頭（cur==0 落點），級進/大跳交給 porta 不疊彎；噪音態在休止中繼續走
-    ＝漂移跨樂句連續（同離線）。"""
+    """The streaming form of the rule-based expression layer (F21, passed by ear
+    on 2026-07-31; the parameters share their source with direct_mouth.EXPR and
+    the measurements are cited in the comments there). Each frame, step() emits
+    a deviation in cents: a per-note bias, a slow drift, a fast tremor, an
+    irregular vibrato whose rate performs a random walk, and a scoop into the
+    first note of a phrase. A fixed seed makes it deterministic, and a different
+    seed per voice desynchronises the parts naturally, which cured the
+    mechanically synchronised vibrato at one phase and rate found on 2026-07-28.
+    Differences from the offline version: live porta applies to every note
+    change, with no leap_snap, so the scoop is added only at the head of a phrase
+    where cur == 0, and steps and leaps are left to porta without a second bend.
+    The noise state keeps running through rests, so the drift is continuous
+    across phrases, as offline."""
 
     BIAS_SD, BIAS_CLIP = 22.0, 35.0
     DRIFT_SD, DRIFT_FC = 13.0, 1.5
@@ -109,7 +115,7 @@ class ExpressiveF0:
         self.rng = np.random.default_rng(seed)
         self.gain = gain
         self.dt = FRAME_MS / 1000.0
-        self._lp = {}          # name -> [一極係數, 穩態 std（正規化用）, 狀態]
+        self._lp = {}          # name -> [one-pole coefficient, steady-state std for normalisation, state]
         for k, fc in (("drift", self.DRIFT_FC), ("jit", self.JIT_FC),
                       ("walk", self.VIB_WALK_FC)):
             a = 1.0 - np.exp(-2 * np.pi * fc * self.dt)
@@ -117,10 +123,11 @@ class ExpressiveF0:
         self.phase = self.bias = self.bend = 0.0
         self.bend_a = 0.0
         self.depth = self.depth_t = self.VIB_DEPTH
-        self.a_dep = 1.0 - np.exp(-self.dt / 0.03)   # 換音深度 30ms 平滑
+        self.a_dep = 1.0 - np.exp(-self.dt / 0.03)   # 30 ms smoothing of the note-change depth
 
     def note_on(self, snapped):
-        """新音符實例；snapped＝骨架瞬間落點（樂句頭）→ 進音彎。"""
+        """A new note instance. snapped means the skeleton landed instantly, at
+        the head of a phrase, which calls for a scoop."""
         r = self.rng
         self.bias = float(np.clip(r.normal(0.0, self.BIAS_SD),
                                   -self.BIAS_CLIP, self.BIAS_CLIP))
@@ -147,11 +154,15 @@ class ExpressiveF0:
 
 
 def pv_crossfade(a, b, fade_in):
-    """相位聲碼器交叉淡化——上游 gui.phase_vocoder 的 numpy 逐行移植（07-31
-    波波聲案）：線性 sin²/cos² 淡化對相位未完全對齊的兩段（SOLA 殘差＋
-    combsub 每窗相位重啟）會在接縫中心掉能量，每 hop 一次＝6.7Hz 振幅泵動
-    ＝Harry 聽到的「波波聲」（量測：串流版 5–9Hz AM 6.4–7.4 vs 離線 1.8）。
-    PV 把兩段的共同頻譜以內插相位重建成 cross 項補回能量。"""
+    """Phase-vocoder crossfade, a line-by-line numpy port of upstream
+    gui.phase_vocoder, from the pulsing case of 2026-07-31. A linear sin^2/cos^2
+    crossfade between two segments whose phases are not fully aligned, from the
+    SOLA residual and combsub restarting its phase every window, loses energy at
+    the centre of the join. That happens once per hop, giving a 6.7 Hz amplitude
+    pumping, which is the pulsing that was heard: measured, the streaming version
+    had 5-9 Hz AM at 6.4-7.4 against 1.8 offline.
+    The phase vocoder reconstructs the shared spectrum of the two segments with
+    interpolated phase as a cross term, which puts the energy back."""
     n = len(a)
     fade_out = 1.0 - fade_in
     window = np.sqrt(fade_out * fade_in)
@@ -176,7 +187,7 @@ class Mouth:
 
     def __init__(self, out_ring, expr=None):
         self.out = out_ring
-        self.expr = expr   # ExpressiveF0 或 None（None＝07-31 前固定顫音行為）
+        self.expr = expr   # ExpressiveF0 or None; None is the fixed-vibrato behaviour from before 2026-07-31
         self.prev_note = None
         nf = int(len(out_ring) / FRAME_HOP) + 1
         self.accepted = 0
@@ -213,7 +224,7 @@ class Mouth:
                 self.cur = 0.0
                 self.f0_t[k] = 0.0
                 if self.expr is not None:
-                    self.expr.step()   # 休止中噪音態繼續走＝漂移跨樂句連續
+                    self.expr.step()   # the noise state keeps running through rests, so the drift is continuous across phrases
             self.prev_note = note
             g = self.f0_t[k] > 0
             self.env_g += (float(g) - self.env_g) * (self.a_up if g > self.env_g else self.a_dn)
@@ -332,7 +343,7 @@ class DDSPMouth(Mouth):
     """DDSP-SVC combsub as the singing mouth (F18 blind winner).
 
     content = hubert units from HIS live audio (vowels follow the mouth),
-    f0 = the brain's target curve (target-式 by construction),
+    f0 = the brain's target curve (target-style by construction),
     volume = his mic energy gated by the target envelope (angel breathes
     with him; silent when he is silent -- unlike WorldMouth's borrow-hold).
     Same bounded window + splice emission as WorldMouth (F17 machinery).
@@ -342,35 +353,44 @@ class DDSPMouth(Mouth):
     BLOCK = 512  # model hop @44.1k
     BOUNDF = 140  # 0.7 s resynth window (vs WORLD's 1.0 s): trims the MPS
                   # hubert+model cost spikes that starved the ring live
-    UV_W, UV_TAU_LO, UV_TAU_HI = 2048, 55, 551  # 自相關窗、80–800Hz lag 帶
-    UV_HI, UV_LO, UV_ENTER = 0.60, 0.35, 8      # 施密特遲滯、8 幀=40ms 進 uv
-    # v2 防抖（07-31 深夜 Harry 定罪「波波＝遮罩在抖」，--uv-gate 0 A/B 過）：
-    UV_EXIT = 3        # 出 uv 也要 3 幀連續強週期（v1 單幀＝高速開關的一半元凶）
-    UV_DWELL = 40      # 換態後最小停留 200ms＝物理上限抖動頻率
-    UV_WEAK = 0.5      # 邊緣帶（LO_DEEP–LO）進 uv 需 rms < 0.5×近期 voiced
-                       # rms；果斷非週期（< LO_DEEP＝呼吸特徵）不受位準限制
-                       # ——大聲呼吸照關、軟唱震顫不誤關
-    UV_LO_DEEP = 0.25  # 果斷非週期門檻
-    UV_FLOOR = 0.05    # 軟遮罩：uv 壓 -26dB 不硬歸零＋25ms 平滑坡——殘餘切換
-                       # 從開關爆點變凹陷（活動區切換 1.86→1.14/s；0.15 版
-                       # breath_v% 回彈 40.9 太鬆、0.05 實測壓回）
+    UV_W, UV_TAU_LO, UV_TAU_HI = 2048, 55, 551  # autocorrelation window, and the lag band for 80-800 Hz
+    UV_HI, UV_LO, UV_ENTER = 0.60, 0.35, 8      # Schmitt hysteresis; 8 frames, 40 ms, to enter uv
+    # v2 anti-chatter, after the pulsing was pinned on the mask chattering late
+    # on 2026-07-31 and the --uv-gate 0 A/B confirmed it:
+    UV_EXIT = 3        # leaving uv also needs 3 consecutive strongly periodic frames; the
+                       # single frame of v1 was half the cause of the fast switching
+    UV_DWELL = 40      # minimum dwell of 200 ms after a change, which caps the chatter rate
+    UV_WEAK = 0.5      # in the border band (LO_DEEP to LO), entering uv needs
+                       # rms below 0.5 of the recent voiced rms. Decisively
+                       # aperiodic frames, below LO_DEEP, which is the signature
+                       # of a breath, are not level-limited, so a loud breath
+                       # still closes the gate while a soft quavering note is not
+                       # closed by mistake
+    UV_LO_DEEP = 0.25  # threshold for decisively aperiodic
+    UV_FLOOR = 0.05    # soft mask: uv is pushed down 26 dB rather than hard
+                       # zeroed, over a 25 ms ramp, which turns the residual
+                       # switching from a click into a dip. Switching in the
+                       # active region fell from 1.86 to 1.14 per second. At
+                       # 0.15 the breath_v% rebounded to 40.9, too loose; 0.05
+                       # measured it back down
 
     def __init__(self, out_ring, repo, model_path, device="mps", expr=None,
                  uv_gate=False, free_run=False, bound_f=None):
         super().__init__(out_ring, expr)
-        if bound_f:            # 重渲染窗（幀）：hop 成本 ∝ 窗長；縮窗＝縮回捲深度
+        if bound_f:            # re-render window in frames: the hop cost is proportional to the
+                               # window length, so a shorter window means a shallower rewind
             self.BOUNDF = int(bound_f)
         self.uv_gate = uv_gate
-        self.vuv = np.ones(len(self.f0_t))  # per-frame 發聲遮罩（1=voiced）
+        self.vuv = np.ones(len(self.f0_t))  # per-frame sounding mask (1 = voiced)
         self.vuv_done = 0
         self.vuv_state, self.vuv_run = True, 0
         self.vuv_xrun, self.vuv_dwell, self.vuv_vr = 0, 999, 0.05
         self.free_run = free_run
-        self.t_enc, self.t_fwd = [], []   # hop 內分段計時（hubert / model）
-        self.emitted = 0   # 發射前緣（絕對樣本，單調；分歧回捲唯一例外）
-        self.eff = []      # tick → 建構當下實際用的音（含 hold 假設），單流真相
-        self.snap = {}     # tick → 進入該 tick 首幀前的完整狀態（回捲點）
-        self.checked = 0   # 假設已對過帳的 tick 數
+        self.t_enc, self.t_fwd = [], []   # per-stage timing inside a hop: hubert and model
+        self.emitted = 0   # the emission front, in absolute samples, monotonic apart from a rewind on divergence
+        self.eff = []      # tick -> the note actually used when built, including the hold assumption; the single stream of truth
+        self.snap = {}     # tick -> the complete state before the first frame of that tick, the rewind point
+        self.checked = 0   # ticks whose assumption has been reconciled
         import torch
         sys.path.insert(0, str(repo))
         from ddsp.vocoder import Units_Encoder, Volume_Extractor, load_model
@@ -387,19 +407,28 @@ class DDSPMouth(Mouth):
         assert int(margs.data.sampling_rate) == SR
 
     def _update_vuv(self, mic, upto_f):
-        """他 mic 的 per-frame 發聲偵測（07-31 呼吸被唱案：同音符線同模型下
-        live 嘴 breath_v% 54.1 vs 離線 13.9——volume=mic 能量×音符 envelope，
-        呼吸有能量、腦的 f0 又永遠有音高，模型就把呼吸/子音渲染成帶音高的音。
-        離線 (a) 修復的 voicing gate 從沒移植過來；live 版只需靜音不需透傳
-        ——他的真呼吸本來就在空氣裡）。
+        """Per-frame sounding detection on the singer's microphone, from the
+        "breaths get sung" case of 2026-07-31: with the same note line and the
+        same model, the live voice measured breath_v% 54.1 against 13.9 offline.
+        Volume is microphone energy times the note envelope, a breath has energy,
+        and the model's f0 always carries a pitch, so breaths and consonants were
+        rendered as pitched notes. The voicing gate that fixed this offline in
+        (a) had never been ported; the live version only needs silence and not
+        pass-through, because the singer's real breath is already in the air.
 
-        自相關峰週期性＋RMS 門檻（0.005＝pitch.RMS_GATE 同口徑）＋因果遲滯：
-        連續 UV_ENTER 幀無週期才進 uv 並回溯標記——bounded 重合成窗把追認
-        蓋回 ring，lag(0.5–0.6s) > hop 節奏(150ms)＝聽到之前已修正；單幀強
-        週期即回 voiced（樂句中不開洞優先，同離線錨定的成本不對稱原則）。
-        seg_take 上對離線 voicing_mask 一致率 95%，門檻面平坦（HI/LO ±0.05
-        不動結果）。遮罩乘在模型輸出上（hop 內 SOLA 之後），不動 vol 條件
-        ——理由見 hop 內註解。"""
+        Autocorrelation peak periodicity plus an RMS threshold (0.005, the same
+        terms as pitch.RMS_GATE) plus causal hysteresis: uv is entered only after
+        UV_ENTER consecutive aperiodic frames, and the marking is applied
+        retroactively. The bounded resynthesis window writes that correction back
+        into the ring, and since the lag of 0.5-0.6 s exceeds the hop rate of
+        150 ms, it is corrected before it is heard. A single strongly periodic
+        frame returns to voiced, giving priority to not opening a hole inside a
+        phrase, the same asymmetric cost principle as the offline anchoring.
+        On seg_take it agrees with the offline voicing_mask 95% of the time, and
+        the threshold surface is flat: HI and LO moved by 0.05 change nothing.
+        The mask multiplies the model's output, after the SOLA inside the hop,
+        and does not touch the vol condition; the reason is in the hop
+        comments."""
         lo, hi = self.vuv_done, min(upto_f, len(self.vuv))
         if hi <= lo:
             return
@@ -414,7 +443,7 @@ class DDSPMouth(Mouth):
                 / np.maximum(r[:, 0], 1e-12))
         for i, k in enumerate(range(lo, hi)):
             hard = rms[i] < 0.005
-            if peak[i] > self.UV_HI and not hard:      # 近期 voiced 位準追蹤
+            if peak[i] > self.UV_HI and not hard:      # track the recent voiced level
                 self.vuv_vr += (1 - np.exp(-1 / 100.0)) * (rms[i] - self.vuv_vr)
             self.vuv_dwell += 1
             if self.vuv_state:
@@ -440,7 +469,8 @@ class DDSPMouth(Mouth):
         self.vuv_done = hi
 
     def _uv_gain(self, pos):
-        """vuv → 出口增益曲線：幀域 hann 平滑（~25ms 坡）＋UV_FLOOR 軟底。"""
+        """vuv to an output gain curve: a Hann smoothing in the frame domain,
+        about a 25 ms ramp, over the soft floor UV_FLOOR."""
         lo = max(0, int(pos[0]) - 8)
         hi = min(len(self.vuv), int(pos[-1]) + 8)
         kern = np.hanning(7)
@@ -449,13 +479,21 @@ class DDSPMouth(Mouth):
                 * np.interp(pos, np.arange(lo, hi), sm))
 
     def _build_hold(self, upto_f, notes, n_ticks):
-        """單流建構＋tick 邊界快照（07-31 解耦 v2）。v1（確定/臨時雙區、臨時
-        區每 hop 從快照重起算）被 Harry 長音耳測抓出結構錯誤：長音時音符不
-        變、聽感全靠 expr 紋理，而每 ~150ms 發射塊各自帶著重新起算的顫音/
-        漂移相位＝「重複播放同一個音」。v2：狀態（expr/porta/env/樂句）每幀
-        只走一次＝紋理天生連續；未決定的 tick 用最後已決定的音（hold）並記
-        入 eff；新 tick 確定後對帳，假設被推翻才回捲到該 tick 的快照重建＋
-        發射前緣回捲重貼（彎音落地）。假設成立＝零重工zero rework。"""
+        """Single-stream construction with a snapshot at each tick boundary
+        (decoupling v2, 2026-07-31). v1 had a settled region and a provisional
+        one, with the provisional region restarted from a snapshot every hop, and
+        listening to a sustained note exposed the structural error: on a
+        sustained note the pitch does not change and the whole impression rests
+        on the expression texture, while each emitted block of about 150 ms
+        carried its own restarted vibrato and drift phase, which sounded like the
+        same note being played over and over.
+        In v2 the state (expression, porta, envelope, phrase) advances once per
+        frame, so the texture is continuous by construction. An undecided tick
+        uses the last decided note, a hold, and records it in eff. When the new
+        tick is settled it is reconciled, and only if the assumption is overturned
+        does it rewind to that tick's snapshot, rebuild, and rewind the emission
+        front to re-lay the audio, which lands the bend. When the assumption
+        holds, there is zero rework."""
         lim_t = min(n_ticks, len(self.eff))
         for t in range(self.checked, lim_t):
             if self.eff[t] != notes[t]:
@@ -475,7 +513,7 @@ class DDSPMouth(Mouth):
                                 self.prev_note, self.env_g, self.accepted,
                                 copy.deepcopy(self.phrase), self.built)
                 self.eff.append(notes[t] if t < n_ticks else last)
-                self.snap.pop(t - 16, None)   # 決策延遲最多幾個 tick，舊的丟
+                self.snap.pop(t - 16, None)   # the decision lag is at most a few ticks; older snapshots are dropped
             end_f = min(upto_f, int(np.ceil((t + 1) * TICK_SAMPS / FRAME_HOP)))
             new_lo = self.accepted
             self._build_target(end_f, self.eff)
@@ -505,10 +543,14 @@ class DDSPMouth(Mouth):
         if self.uv_gate:
             self._update_vuv(mic, min(lim_f, len(self.vuv)))
         if self.free_run:
-            # 解耦（07-31）：嘴不等腦——渲染前緣不再被音符決定硬鎖，換音
-            # 瞬間是 ~200ms 掛留式殘留＋彎入，不是 0.5s 的整體等待。機制
-            # 見 _build_hold（v2 單流版）。已知代價：樂句「進場」仍等腦
-            # （hold 的 rest 不開樂句），彎音只救得了樂句內的換音。
+            # Decoupling (2026-07-31): the voice does not wait for the model.
+            # The render front is no longer hard-locked by the note decision, so
+            # a note change becomes a suspension-like residue of about 200 ms
+            # followed by a bend in, rather than a 0.5 s wait for everything. The
+            # mechanism is in _build_hold, the v2 single-stream form. Known cost:
+            # entering a phrase still waits for the model, since a held rest does
+            # not open a phrase, so the bend only rescues note changes inside a
+            # phrase.
             self._build_hold(min(lim_f, len(self.f0_t)), notes, n_ticks)
             if self.phrase is None:
                 self.t_hop.append(time.perf_counter() - t0)
@@ -532,7 +574,8 @@ class DDSPMouth(Mouth):
         b = max(0, self.phrase["len"] - self.BOUNDF)
         s0 = int(round(s * FRAME_HOP))
         w_lo = (int(round((s + b) * FRAME_HOP)) // self.BLOCK) * self.BLOCK
-        # ↑ 窗起點對齊絕對 512 格＝兩張嘴的 units 可互相切片共享（見下）
+        # The window start is aligned to the absolute 512 grid, so the units of
+        # the two voices can be sliced and shared; see below.
         n_blocks = (int(round(e * FRAME_HOP)) - w_lo) // self.BLOCK
         if n_blocks < 2:
             self.t_hop.append(time.perf_counter() - t0)
@@ -542,10 +585,15 @@ class DDSPMouth(Mouth):
         torch = self.torch
         with torch.no_grad():
             t1 = time.perf_counter()
-            # units 共享（07-31 §M）：兩張嘴的 content 來自同一段他的 mic、
-            # 同一個 hubert encoder——每 hop 週期只算一次（enc＝嘴成本的 2/3，
-            # 實測 16ms vs fwd 8ms）。窗已對齊 512 格 → 第二張嘴切片即用；
-            # 窗不含於快取（樂句開頭長度不同時）→ 自己算並更新快取。
+            # Shared units (2026-07-31 section M): the content of both voices
+            # comes from the same span of the singer's microphone through the
+            # same HuBERT encoder, so it is computed once per hop cycle. The
+            # encoder is two thirds of a voice's cost, measured at 16 ms against
+            # 8 ms for the forward pass. The window is already aligned to the 512
+            # grid, so the second voice slices it directly; when the window is
+            # not contained in the cache, which happens at the start of a phrase
+            # where the lengths differ, it computes its own and updates the
+            # cache.
             if (shared is not None and shared.get("units") is not None
                     and shared["lo"] <= w_lo
                     and w_lo + n_blocks * self.BLOCK <= shared["hi"]):
@@ -556,9 +604,12 @@ class DDSPMouth(Mouth):
                 units = self.encoder.encode(audio_t, SR, self.BLOCK)
                 if shared is not None:
                     shared.update(lo=w_lo, hi=w_hi, units=units)
-            _ = float(units[0, -1, 0])   # 讀值＝計時同步邊界（torch.mps.synchronize
-            # 會與 tick 線的 MPS encode 撞 Metal assertion——實測炸過；.cpu()/.item()
-            # 式的讀值同步與既有程式併發共存已驗證）
+            # Reading a value is the synchronisation boundary for timing.
+            # torch.mps.synchronize collides with the MPS encode on the tick
+            # thread and raises a Metal assertion, which happened in practice;
+            # synchronising by reading a value, through .cpu() or .item(), has
+            # been verified to coexist with the existing concurrency.
+            _ = float(units[0, -1, 0])
             self.t_enc.append(time.perf_counter() - t1)
             # target f0 at block centres; rests forward-filled (uv f0=0 is
             # out-of-distribution for the model; volume mutes them anyway)
@@ -592,10 +643,13 @@ class DDSPMouth(Mouth):
         elif d < 0:
             wav_b = np.concatenate([np.full(-d, wav_b[0]), wav_b[:d]])
         if self.uv_gate:
-            # 出口遮罩：vol 只是 unit2ctrl 的條件輸入（輸出＝combtooth×預測
-            # 濾波器＋noise×濾波器），歸零靜不了模型——第一版走 vol 實測
-            # uv 段能量只降 8%。SOLA 之後才乘＝對齊用的 overlap 不被挖洞；
-            # np.interp 在 0/1 幀格上＝5ms 線性斜坡。
+            # Output mask: vol is only a conditioning input to unit2ctrl, whose
+            # output is a comb tooth through a predicted filter plus noise
+            # through a filter, so zeroing it does not silence the model; the
+            # first version went through vol and measured only an 8% drop in
+            # energy over uv spans. The mask is applied after the SOLA, so the
+            # overlap used for alignment is not punched through, and np.interp
+            # over the 0/1 frame grid gives a 5 ms linear ramp.
             pos = (w_lo + np.arange(len(wav_b))) / FRAME_HOP
             wav_b = wav_b * self._uv_gain(pos)
         self.splice_emit(wav_b, s0, w_lo, hold)
@@ -607,31 +661,40 @@ class DDSPMouth(Mouth):
 
 
 class StreamMouth(DDSPMouth):
-    """真串流 DDSP 嘴（07-31 深夜；Harry「為什麼 solo_min 可以又即時又順？」）。
+    """A genuinely streaming DDSP voice, written late on 2026-07-31 after the
+    question "why is solo_min both immediate and smooth?"
 
-    solo_min 順＝Beatrice 是裝配線：每樣本合成一次、狀態跨幀連續、零接縫。
-    DDSPMouth 是批次渲染器硬塞進 live：每 hop 重算 0.45–0.7s 整窗＋SOLA＋
-    crossfade 貼尾＝每秒 6.7 個接縫（波波＝接縫能量凹陷、碎＝負載下貼晚）。
+    solo_min is smooth because Beatrice is an assembly line: it synthesises once
+    per sample, its state is continuous across frames, and there are no joins.
+    DDSPMouth is a batch renderer forced into a live setting: every hop it
+    recomputes a whole 0.45-0.7 s window, does a SOLA and crossfades the tail on,
+    which is 6.7 joins per second. The pulsing is the energy dip at those joins,
+    and the fragmentation is joins landing late under load.
 
-    本類把 combsub 開成裝配線：forward 的 initial_phase 入口（vocoder.py:655）
-    ＝激振器相位跨塊續接 → 每樣本合成一次、無 SOLA 無重渲染；塊間以 256
-    樣本線性淡接（相位連續＝相關訊號，線性淡化不掉能量）。相位推進用與
-    模型逐位元同式的 core.upsample＋float32 cumsum 重算。彎音免費：幀在
-    渲染前最後一刻才建構，腦晚到的決定由 porta 從當下音高滑入＝掛留語彙
-    ——free-run 的 eff/快照/回捲機制全部不需要。休止段跳過 model（相位
-    解析推進、輸出靜音）＝MPS 成本 ∝ 有聲新音訊。"""
+    This class opens combsub into an assembly line. The initial_phase entry of
+    forward (vocoder.py:655) carries the exciter phase across blocks, so it
+    synthesises once per sample with no SOLA and no re-rendering, and blocks are
+    joined by a 256-sample linear fade; with the phase continuous the signals are
+    correlated, so a linear fade loses no energy. The phase is advanced by
+    recomputing core.upsample plus a float32 cumsum, bit-identical to the model.
+    Bends are free: frames are built at the last possible moment before
+    rendering, and a decision that arrives late is slid in by porta from the
+    current pitch, which is the vocabulary of a suspension. None of the
+    free-running eff, snapshot and rewind machinery is needed. Rests skip the
+    model entirely, advancing the phase analytically and outputting silence, so
+    the MPS cost is proportional to new sounding audio."""
 
-    E = 2        # 左緣額外渲染塊（istft 邊窗吃掉，只用於淡接）
-    CTXB = 28    # hubert 左 context 塊（0.325s，unit 品質用）
-    CHUNK_MAX = 43   # 單 hop 渲染上限（0.5s；catch-up 突發保護）
+    E = 2        # extra blocks rendered at the left edge, eaten by the istft window and used only for the fade
+    CTXB = 28    # HuBERT left-context blocks (0.325 s, for unit quality)
+    CHUNK_MAX = 43   # ceiling on one hop's rendering (0.5 s), protecting against a catch-up burst
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
         sys.path.insert(0, str(kw.get("repo") or args[1]))
         from ddsp.core import upsample as _up
         self._up = _up
-        self.next_b = None   # 下一個要發射的絕對 block
-        self.phase = 0.0     # 激振器相位（radians，chunk 渲染起點處）
+        self.next_b = None   # the next absolute block to emit
+        self.phase = 0.0     # exciter phase in radians, at the start of the rendered chunk
 
     def hop(self, mic, t_end, notes, n_ticks, closing=False, shared=None):
         t0 = time.perf_counter()
@@ -639,7 +702,7 @@ class StreamMouth(DDSPMouth):
         lim_f = int(lim / FRAME_HOP)
         if self.uv_gate:
             self._update_vuv(mic, min(lim_f, len(self.vuv)))
-        self._build_target(min(lim_f, len(self.f0_t)), notes)  # 最後一刻建構
+        self._build_target(min(lim_f, len(self.f0_t)), notes)  # built at the last moment
         lim_b = lim // self.BLOCK
         if self.next_b is None:
             self.next_b = max(self.E, lim_b - 1)
@@ -649,9 +712,11 @@ class StreamMouth(DDSPMouth):
             self.t_hop.append(time.perf_counter() - t0)
             return
         b1, r0 = b0 + n_new, b0 - self.E
-        r1 = min(b1 + self.E, len(mic) // self.BLOCK)  # 右緣渲染塊：istft 尾窗
-        # 沒有右鄰 overlap-add 會把每 chunk 最後一塊削出振幅凹陷（首驗 AM
-        # 殘餘的來源）——多渲染 E 塊丟棄，發射區間不變
+        r1 = min(b1 + self.E, len(mic) // self.BLOCK)  # blocks rendered at the right edge, for the istft tail window
+        # Without a right neighbour, the overlap-add carves an amplitude dip out
+        # of the last block of every chunk, which was the source of the residual
+        # AM in the first test. Render E extra blocks and discard them; the
+        # emitted span is unchanged.
         centres = ((np.arange(r0, r1) + 0.5) * self.BLOCK) / FRAME_HOP
         f0 = np.interp(centres, np.arange(len(self.f0_t)), self.f0_t)
         nz = f0 > 0
@@ -661,14 +726,16 @@ class StreamMouth(DDSPMouth):
             f0[f0 <= 0] = f0[nz][0]
         else:
             f0[:] = 200.0
-        # 出口遮罩曲線（env×vuv；vol 條件靜不了模型——07-31 呼吸案教訓）
+        # Output mask curve (env times vuv). The vol condition cannot silence
+        # the model, which is the lesson of the breath case of 2026-07-31.
         pos = (r0 * self.BLOCK + np.arange((r1 - r0) * self.BLOCK)) / FRAME_HOP
         g = np.interp(pos, np.arange(len(self.env)), self.env)
         if self.uv_gate:
             g = g * self._uv_gain(pos)
         torch = self.torch
         if g.max() < 1e-3:
-            # 休止：跳過 model，相位解析推進（靜音中連續性無聽感，float64 即可）
+            # Rest: skip the model and advance the phase analytically.
+            # Continuity is inaudible in silence, so float64 is enough.
             self.phase = (self.phase + 2 * np.pi * float(f0[: n_new].sum())
                           * self.BLOCK / SR) % (2 * np.pi)
             self.out[b0 * self.BLOCK: b1 * self.BLOCK] = 0.0
@@ -708,13 +775,16 @@ class StreamMouth(DDSPMouth):
             out, _, _ = self.model(units[:, :n], f0_t, vol_t, spk_id=self.spk,
                                    initial_phase=torch.tensor(float(self.phase)))
             wav = out.squeeze(0).cpu().numpy().astype(np.float64)
-            # encoder 輸出偶爾比請求少一塊（重採樣邊界）→ 發射端點收斂到實際
+            # The encoder occasionally returns one block fewer than requested,
+            # at a resampling boundary, so the emission end point converges to
+            # what was actually produced.
             b1a = min(b1, r0 + n)
             if b1a <= b0:
                 self.t_hop.append(time.perf_counter() - t0)
                 return
-            # 相位推進：與模型同式（core.upsample＋float32 cumsum），取下一
-            # chunk 渲染起點（b1a-E）處的累積相位
+            # Advance the phase by the same formula as the model, core.upsample
+            # plus a float32 cumsum, taking the accumulated phase at the start of
+            # the next chunk's rendering, b1a - E.
             f0_up = self._up(f0_t.float().cpu(), self.BLOCK)
             x = torch.cumsum(f0_up.float() / SR, 1)
             k = (b1a - self.E - r0) * self.BLOCK - 1

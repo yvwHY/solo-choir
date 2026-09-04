@@ -6,7 +6,7 @@
 
 | Situation | Read FIRST |
 |---|---|
-| Where is the project now / what's next | `STATE.md` (single source of truth; CLAUDE.md carries no state) |
+| How the project got here, phase by phase | `PROCESS.md` (the rolling state file was a working note and stayed in the development repository) |
 | About to try a new approach (streaming, pitch, ensemble, timbre, transcription, hardware) | `GRAVEYARD.md` — 19 dead ends with root causes; do not re-run them |
 | Need validated numbers (glide rates, latency, decorrelation, RTF, wiring) | `FINDINGS.md` |
 | About to edit audio-path code (`server/`, live threading, bridges) | `VERIFICATION.md` — declare Regime A/B/C before editing; A must prove max-abs-diff 0.0 via `tools/render_diff.py` |
@@ -18,4 +18,4 @@
 1. Audio/DSP code in `server/` is validated and sensitive: understand it before editing, change the minimum, commit a working state first so `git checkout` reverts.
 2. Never commit license-restricted binaries: no `.bin/.pth/.onnx`, no `beatrice_engine*`, no `paraphernalia_*`, no model dirs, nothing in `recordings/`.
 3. Small steps with human by-ear checkpoints. Never self-certify audio quality — hand precise listening instructions to the user.
-4. When an approach fails, register it in `GRAVEYARD.md` before moving on; after a commit checkpoint, update `STATE.md`.
+4. When an approach fails, register it in `GRAVEYARD.md` before moving on.

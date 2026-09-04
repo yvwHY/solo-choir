@@ -59,7 +59,7 @@ TELEMETRY_HZ = 12   # UI push rate; lowered from 30 → fewer evaluate_js round-
 SATB_VOICES = [
     # SATB: LIVE default = clean all-tenor (You + Bass + Tenor on the validated tenor model) — the
     # only combo this laptop runs cleanly real-time. A 2nd model OR the female pitched up live →
-    # 滋滋波波 + warble (cache / real-time limit; MULTIVOICE_STATUS §3/§5/§7, TRAINING_NOTES 2026-06-20).
+    # crackle + warble (cache / real-time limit; MULTIVOICE_STATUS §3/§5/§7, TRAINING_NOTES 2026-06-20).
     # Real male+female S/A is delivered via the OFFLINE render (clean): flip Alto/Sop on (they use the
     # self-trained female model) for render_satb. The 2-speaker satb2 model stays available by path.
     {"part": "Bass",  "model": "tenor",  "speaker": 0, "octave": -1, "interval": -7, "formant": 0.0, "on": True},
@@ -70,7 +70,7 @@ SATB_VOICES = [
 # LIVE "choir mode" (2026-06-21) — validated better-sounding by ear: the female S/A come through
 # and aren't buried by Bass (vs the single-voice You+Bass default). ONE self-trained satb2 model
 # serves every part via target_speaker (sp1 = male T/B, sp0 = female S/A) → a single weight set in
-# CPU cache, so the live multi-pass stays clean (no 滋滋波波 thrash). Formant-preserving thickening is
+# CPU cache, so the live multi-pass stays clean (no crackle thrash). Formant-preserving thickening is
 # the engine's native neural conversion (= Harmonizr's core; no DSP pitch-shifter needed). Runs with
 # the big-buffer + no-You config (see _start_engine). Separate from SATB_VOICES so the offline
 # render_satb path (female model) is untouched. Deferred: stereo spacing (SynthV) + true low latency
@@ -98,7 +98,7 @@ TENOR_ALTO_VOICES = [
 # parts: S=jvs61 (bright), T=jvs69 (mid), B=jvs47 (dark), all on ONE jvs model via target_speaker.
 # Alto (added 2026-06-22 per user) is the self-trained FEMALE model — so this is now 4 passes across
 # TWO weight sets (jvs + female), no longer the single-cache CHOIR_VOICES win: re-verify by ear it
-# stays clean on --pump (watch RTF + 滋滋波波 cache-thrash; drop Alto if it crackles). JVS base =
+# stays clean on --pump (watch RTF + crackle cache-thrash; drop Alto if it crackles). JVS base =
 # academic/non-commercial license (gitignored, by path).
 # Must stay in lockstep with the UI `parts` array (model is set HERE; the UI only sends
 # on/interval/octave/speaker/formant, matched by part name). Revert: point __init__'s voices
@@ -108,7 +108,7 @@ JVS_SATB_VOICES = [
     {"part": "Tenor", "model": "jvs",    "speaker": 69, "octave": 0,  "interval": -2, "formant": 0.0, "on": True},
     # Alto = the self-trained FEMALE model (_FEMALE_MODEL, single-speaker → 0), +2 above the melody —
     # the female setting validated by ear on 6/21 (TENOR_ALTO_VOICES). This adds a SECOND model
-    # alongside jvs → 2 weight sets in CPU cache; watch for 滋滋波波 cache-thrash + the 4th pass on RTF.
+    # alongside jvs → 2 weight sets in CPU cache; watch for crackle cache-thrash + the 4th pass on RTF.
     {"part": "Alto",  "model": "female", "speaker": 0,  "octave": 0,  "interval": 2,  "formant": 0.0, "on": True},
     # Sop bumped +2 → +4 so it sits above the new Alto (standard SATB ascending stack; matches the
     # offline SATB_VOICES voicing). Bass/Tenor unchanged.
@@ -135,6 +135,8 @@ MYVOICE_VOICES = [
     {"part": "Sop",   "model": "tenor", "speaker": 0, "octave": 0,  "interval": 4,  "formant": 0.0, "on": True},
 ]
 # output devices we must NEVER auto-pick (built-in speaker -> mic feedback loop)
+# The two Chinese entries are macOS device names on a zh-Hant system
+# ("Built-in" / "Speakers"). They are match targets, not prose: do not translate.
 SPEAKER_HINTS = ("built-in", "macbook", "speaker", "internal", "內建", "揚聲器")
 
 
@@ -186,7 +188,7 @@ class Bridge:
         # multi-voice passes stay within the low buffer + BLAS=1, so 'low' is the right default again.
         self.latency = "low"   # choir mode: Tier-1 finding — 'low' on the Aggregate Device gives ~77ms for 3 passes (vs ~207ms at 0.2); test by ear that it stays clean
         # SATB multi-voice live is OFF — this laptop only runs the single-voice path cleanly in real
-        # time (live multi-pass / a 2nd model / female pitched up = 滋滋波波 + warble; see
+        # time (live multi-pass / a 2nd model / female pitched up = crackle + warble; see
         # TRAINING_NOTES 2026-06-20, MULTIVOICE_STATUS §3/§5/§7). Live = the proven, byte-identical
         # You + one harmony. Full male+female SATB is delivered via the OFFLINE render (clean).
         self.satb = True   # choir mode ON (satb2 single-model multi-voice; CHOIR_VOICES). Revert: set False
@@ -365,7 +367,7 @@ class Bridge:
     def log_practice(self, entry):
         """Track A Phase 4 — record one practice attempt's aggregates to recordings/practice_log.csv
         (gitignored local study data). The UI sends per-attempt stats; we stamp the time and write.
-        subject + channel are the (子) study's independent variables — eval/practice_report.py groups
+        subject + channel are the (sub-)study's independent variables — eval/practice_report.py groups
         by them. Rewrites the whole (small) log each attempt so an older header (pre-subject/channel)
         is migrated by back-filling blanks; atomic via a temp file + replace."""
         try:
@@ -820,6 +822,8 @@ class Bridge:
         # which cascades into crackle + flickering telemetry + UI jitter.
         # "speaker_set" = this rig's Aggregate Device (it isn't named "Aggregate"); a single Core
         # Audio clock domain, verified healthy for live 4-voice (RTF ~0.45, zero 'input overflow').
+        # Chinese entries are the localised macOS name for an Aggregate Device.
+        # Match targets, not prose: do not translate.
         agg_hints = ("aggregate", "聚集", "聚合", "speaker_set")
         agg_in, agg_out = prefer(ins, agg_hints), prefer(outs, agg_hints)
         if agg_in and agg_out:
@@ -829,6 +833,7 @@ class Bridge:
         # input: prefer the USB PnP mic, else first available
         self.in_name = prefer(ins, ("usb pnp", "usb")) or (ins[0] if ins else None)
         # output: prefer headphones/bone-conduction; NEVER the built-in speaker (feedback)
+        # "耳機" is the localised macOS word for headphones. Match target, not prose.
         self.out_name = (prefer(outs, ("headphone", "耳機", "bone", "airpod", "bluetooth", "blackhole"))
                          or first_not(outs, SPEAKER_HINTS) or (outs[0] if outs else None))
         print(f"[bridge] default devices: in={self.in_name!r} out={self.out_name!r} "

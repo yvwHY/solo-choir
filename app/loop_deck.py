@@ -1,34 +1,42 @@
 #!/usr/bin/env python3
-"""loop_deck.py — Solo Choir 現場疊層底床（插件；主 app 一行不改）
+"""loop_deck.py — a live layered bed for Solo Choir. A plug-in: not one line
+of the main app changes.
 
-訊號路徑
---------
-    主 app ──▶ 多輸出裝置（喇叭 ＋ BlackHole 2ch）
-                                  │
-                                  ▼
-                          loop_deck 錄下來 ──▶ 喇叭（只送 loop 層）
+Signal path
+-----------
+    main app --> multi-output device (speakers + BlackHole 2ch)
+                                  |
+                                  v
+                          loop_deck records it --> speakers (loop layer only)
 
-主 app 完全不知道這支程式存在。它只是把輸出送到一個「同時含 BlackHole」
-的裝置。loop_deck 從 BlackHole 收到「主 app 剛送出去的東西」，錄成循環
-層，再從自己的輸出送去喇叭。
+The main app does not know this program exists. It simply sends its output to a
+device that also contains BlackHole. loop_deck takes what the main app has just
+sent from BlackHole, records it into a loop layer, and sends that to the
+speakers from its own output.
 
-為什麼不做直通（passthrough）
-    直通＝主 app 輸出只送 BlackHole、由本程式轉送。那樣本程式一掛＝全場
-    沒聲音。改成「多輸出裝置」後，本程式掛掉只是底床沒了，主 app 的聲音
-    照樣從喇叭出來。救場成本差很多。
+Why there is no passthrough
+    A passthrough would send the main app's output to BlackHole alone and have
+    this program forward it, which means that if this program dies there is no
+    sound at all. With a multi-output device, this program dying only removes
+    the bed, and the main app still reaches the speakers. The cost of a rescue
+    is very different.
 
-按鍵（打在本程式的終端機視窗）
-    空白   第一次＝開始錄／再按＝停止並定下 loop 長度、立刻開始循環
-           之後＝疊下一層（從當前相位開始錄，繞滿一圈自動加入）
-    u      撤銷最後一層
-    c      全部清空（回到沒有底床）
-    m      靜音／解除（底床瞬間消失，救場用）
-    q      離開
+Keys (pressed in this program's terminal window)
+    space  first press starts recording; the second stops, fixes the loop
+           length and starts looping at once. After that, each press records the
+           next layer, starting from the current position and joining the loop
+           when it comes round.
+    u      undo the last layer
+    c      clear everything and return to no bed
+    m      mute and unmute: the bed disappears at once, for a rescue
+    q      quit
 
-回授安全
-    輸入是 BlackHole＝主 app 的輸出，不是麥克風。疊層不會把房間聲收進來，
-    也不會無限回授。前提：**不要把本程式的輸出裝置也設成含 BlackHole 的
-    裝置**，那會讓自己錄自己。啟動時會擋掉這個設定。
+Feedback safety
+    The input is BlackHole, that is, the main app's output, not a microphone.
+    Layering does not pick up the room and cannot feed back without limit. This
+    holds as long as this program's output device is not itself a device
+    containing BlackHole, which would record itself. That setting is refused at
+    start-up.
 """
 import argparse
 import queue
@@ -42,60 +50,60 @@ import numpy as np
 import sounddevice as sd
 
 SR_DEFAULT = 48000
-MAX_LOOP_S = 90.0          # 第一層最長；超過就自動停錄
+MAX_LOOP_S = 90.0          # longest first layer; recording stops automatically past this
 
 
 class LoopDeck:
     def __init__(self, sr, ch, block, max_loop_s, lat_ms, gain):
         self.sr, self.ch, self.block = sr, ch, block
         self.gain = float(gain)
-        self.lat = int(round(lat_ms * 1e-3 * sr))   # 輸入延遲補償（樣本）
+        self.lat = int(round(lat_ms * 1e-3 * sr))   # input latency compensation, in samples
         self.cap = int(max_loop_s * sr)
 
-        self.L = 0                                  # loop 長度（樣本）；0＝還沒定
-        self.mix = None                             # (L, ch) 已 commit 的層總和
-        self.layers = []                            # 每層一份 (L, ch)，撤銷用
-        self.layer_on = []                          # 每層開／關（關＝不出聲但留著）
-        self.beats = 0                              # 一圈幾拍；0＝沒有拍的概念
-        self.bpm = 0.0                              # 速度；0＝自由長度（按停決定）
-        self.clk = 0                                # 自由運行的節拍時鐘（樣本）
-        self.armed = False                          # 已按錄、正在等下一個第 1 拍
-        self.cin_beats = 4                          # 預備幾拍（0＝按了就錄）
-        self.cin = 0                                # 預備還剩幾個樣本
-        self.cin_all = 0                            # 這次預備一共幾個樣本
-        self.p = 0                                  # 播放相位
+        self.L = 0                                  # loop length in samples; 0 = not yet fixed
+        self.mix = None                             # (L, ch): the sum of committed layers
+        self.layers = []                            # one (L, ch) per layer, kept for undo
+        self.layer_on = []                          # per-layer on/off; off keeps the layer but silences it
+        self.beats = 0                              # beats per loop; 0 = no beat grid
+        self.bpm = 0.0                              # tempo; 0 = free length, fixed by the stop press
+        self.clk = 0                                # free-running beat clock, in samples
+        self.armed = False                          # record pressed, waiting for the next beat 1
+        self.cin_beats = 4                          # count-in beats; 0 = record on the press
+        self.cin = 0                                # samples left in the count-in
+        self.cin_all = 0                            # total samples in this count-in
+        self.p = 0                                  # playback position
 
-        self.rec = False                            # 正在錄
-        self.first = True                           # 下一次錄是不是第一層
+        self.rec = False                            # recording
+        self.first = True                           # whether the next recording is the first layer
         self.pend = np.zeros((self.cap, ch), np.float32)
-        self.pend_n = 0                             # 第一層已寫入長度
-        self.wpos = 0                               # 第 2 層起的寫入位置
-        self.wdone = 0                              # 第 2 層起已寫入樣本數
+        self.pend_n = 0                             # samples written so far in the first layer
+        self.wpos = 0                               # write position from layer 2 on
+        self.wdone = 0                              # samples written from layer 2 on
 
         self.muted = False
-        self.in_n = 0                               # 錄音 callback 進來幾次
+        self.in_n = 0                               # how many times the record callback has run
         self.xruns = 0
-        self.click_hi = self._mk_click(1800.0)      # 第 1 拍
-        self.click_lo = self._mk_click(1100.0)      # 其他拍
+        self.click_hi = self._mk_click(1800.0)      # beat 1
+        self.click_lo = self._mk_click(1100.0)      # other beats
         self.click_cur = self.click_lo
-        self.click_i = -1                           # 敲聲播到第幾個樣本；-1＝沒在敲
+        self.click_i = -1                           # position in the click; -1 = not clicking
         self.lock = threading.Lock()
-        self.msg = queue.Queue()                    # callback 不列印，丟訊息出去
+        self.msg = queue.Queue()                    # the callback never prints; it posts messages instead
 
-    # ---- 預備拍的「噠」 -------------------------------------------------
+    # ---- the count-in click ---------------------------------------------
     def _mk_click(self, f):
-        """30 毫秒的短音。只在預備拍出現，錄音時不敲。"""
+        """A 30 ms blip. It appears only in the count-in, never while recording."""
         n = int(self.sr * 0.03)
         t = np.arange(n, dtype=np.float32) / self.sr
         w = np.sin(2 * np.pi * f * t) * np.exp(-t * 70.0) * 0.30
         return np.repeat(w.astype(np.float32)[:, None], self.ch, axis=1)
 
     def beat_len(self):
-        """一拍幾個樣本；沒設速度＝0。"""
+        """Samples per beat; 0 when no tempo is set."""
         return int(round(self.sr * 60.0 / self.bpm)) if self.bpm > 0 else 0
 
     def _emit_click(self, outdata, frames):
-        """上一塊沒播完的敲聲，接在這一塊開頭播完。"""
+        """Finish a click left over from the previous block at the start of this one."""
         if self.click_i < 0:
             return
         c = self.click_cur
@@ -115,11 +123,11 @@ class LoopDeck:
         outdata[off:off + n] += c[:n]
         self.click_i = n if n < c.shape[0] else -1
 
-    # ---- 音訊 callback（不配置記憶體、不列印） -------------------------
+    # ---- audio callbacks: no allocation, no printing ---------------------
     def rec_cb(self, indata, frames, tinfo, status):
         if status:
             self.xruns += 1
-        self.in_n += 1                              # 心跳：證明錄音裝置真的在送資料
+        self.in_n += 1                              # heartbeat: proof the input device is really delivering
         if not self.rec:
             return
         if self.first:
@@ -127,11 +135,11 @@ class LoopDeck:
             if n > 0:
                 self.pend[self.pend_n:self.pend_n + n] = indata[:n]
                 self.pend_n += n
-            if self.pend_n >= self.cap:             # 撞到上限＝自動停
+            if self.pend_n >= self.cap:             # the ceiling was reached, so stop
                 self.rec = False
                 self.msg.put(("auto_stop", None))
             return
-        # 第 2 層起：長度已知，寫進環狀位置，繞滿一圈就收工
+        # From layer 2 on the length is known: write into the ring and finish after one lap
         L = self.L
         n = min(frames, L - self.wdone)
         if n <= 0:
@@ -156,7 +164,7 @@ class LoopDeck:
         outdata[:] = 0.0
         self._emit_click(outdata, frames)
 
-        if self.cin > 0:                         # ── 預備拍：時鐘還沒開始走
+        if self.cin > 0:                         # -- count-in: the clock has not started yet
             bl = self.beat_len()
             done = self.cin_all - self.cin
             if bl:
@@ -165,10 +173,10 @@ class LoopDeck:
                 if off < frames:
                     self._start_click(outdata, frames, off, k == 0)
             self.cin -= frames
-            if self.cin <= 0:                    # 數完＝從這一刻起是第 1 拍
+            if self.cin <= 0:                    # count finished: this instant is beat 1
                 self.cin = 0
                 L = self.L
-                if not L:                        # 主執行緒剛好取消掉了＝不開錄
+                if not L:                        # the main thread just cancelled, so do not start
                     return
                 self.clk = 0
                 self.p = 0
@@ -179,16 +187,17 @@ class LoopDeck:
             return
 
         base = self.clk
-        self.clk = base + frames                 # 時鐘永遠在走＝節拍器不必等錄音
+        self.clk = base + frames                 # the clock always runs, so the metronome need not wait for recording
         L = self.L
         if self.armed and L:
-            # 等第 1 拍：時鐘在這條 callback 裡走，所以繞回起點的那一刻在這裡
-            # 判最準。以前是在錄音 callback 裡判「圈內位置 < 兩個 block」——
-            # 那是另一條執行緒、另一顆時鐘，窗口只有幾毫秒，錯過就再等一整圈，
-            # 甚至圈圈都錯過＝按了永遠不開錄。
+            # Waiting for beat 1. The clock runs in this callback, so the moment it
+            # wraps is judged here most accurately. It used to be judged in the record
+            # callback as "position in the loop < two blocks", which was another thread
+            # and another clock, with a window of a few milliseconds; missing it cost a
+            # whole lap, or every lap, so the press never started a recording.
             bl = self.beat_len()
             if bl and self.cin_beats and (L - base % L) <= min(self.cin_beats * bl, L):
-                pos = base % L                   # 起點前幾拍先敲，讓人接得上
+                pos = base % L                   # click for a few beats before the start so the player can join
                 k = (pos + bl - 1) // bl
                 off = k * bl - pos
                 if off < frames:
@@ -200,7 +209,7 @@ class LoopDeck:
                 self.rec = True
                 self.msg.put(("rec_layer", None))
         if L and self.bpm > 0:
-            self.p = base % L                    # 有速度時播放位置綁在時鐘上，不會漂
+            self.p = base % L                    # with a tempo, playback is tied to the clock and cannot drift
         if self.mix is None or self.muted or L == 0:
             return
         p = self.p
@@ -214,22 +223,22 @@ class LoopDeck:
         if self.bpm <= 0:
             self.p = end % L
 
-    # ---- 控制（主執行緒） ----------------------------------------------
+    # ---- control, on the main thread -------------------------------------
     def target_L(self):
-        """設了速度和拍數時，一圈該有多長（樣本）。沒設就回 0＝自由長度。"""
+        """Loop length in samples when tempo and beats are set; 0 means free length."""
         if self.bpm > 0 and self.beats > 0:
             return int(round(self.sr * 60.0 / self.bpm * self.beats))
         return 0
 
     def toggle(self):
-        if self.cin > 0:                            # 預備數到一半反悔
+        if self.cin > 0:                            # cancelled part-way through the count-in
             self.cin = self.cin_all = 0
-            self.rec = False                        # 音訊那邊剛好搶開錄也一併收掉
-            self.L = 0                              # 一圈長度還沒定案，退回待命
+            self.rec = False                        # also stop a recording the audio side has just begun
+            self.L = 0                              # the loop length is not fixed yet, so return to idle
             self.first = True
             self.msg.put(("cancel_arm", None))
             return
-        if self.armed:                              # 還沒開始錄就反悔
+        if self.armed:                              # cancelled before recording began
             self.armed = False
             self.msg.put(("cancel_arm", None))
             return
@@ -237,15 +246,16 @@ class LoopDeck:
             if self.first:
                 self._commit_first()
             else:
-                self.rec = False                    # 提早喊停＝丟掉未錄滿的一圈
+                self.rec = False                    # stopped early, so the incomplete lap is discarded
                 self.msg.put(("cancel", None))
             return
 
         tl = self.target_L()
         if tl and not self.layers:
-            # 節拍器模式、還一軌都沒有：一圈長度算得出來，而且還沒有東西在播＝
-            # 沒有既有拍點要對。所以不等，按下去那一刻就是第 1 拍（時鐘歸零），
-            # 之後照樣錄滿一圈自動收。等下一圈只在「已經有底床」時才有意義。
+            # Metronome mode with no track yet: the loop length is known and nothing
+            # there is no existing beat to align to. Do not wait: the
+            # press is beat 1, the clock resets, and one full lap still ends it.
+            # Waiting for the next lap only makes sense once a bed exists.
             with self.lock:
                 self.L = tl
                 self.first = False
@@ -274,14 +284,14 @@ class LoopDeck:
         else:
             if self.L == 0:
                 return
-            self.wpos = (self.p + self.lat) % self.L   # 對齊播放相位，補輸入延遲
+            self.wpos = (self.p + self.lat) % self.L   # align to the playback position and compensate input latency
             self.wdone = 0
             self.rec = True
             self.msg.put(("rec_layer", None))
 
     def _rebuild_locked(self):
-        """從還開著的層重算 mix。全部關掉＝出零，不是 None（None 會被當成
-        「還沒錄」，UI 會退回待命）。"""
+        """Recompute the mix from the layers still on. All off produces zeros, not
+        None, which would read as "nothing recorded" and send the UI back to idle."""
         if not self.layers:
             self.mix = None
             return
@@ -326,7 +336,7 @@ class LoopDeck:
         return None
 
     def drop(self, i):
-        """刪掉指定的一層。刪光＝回到沒錄過的狀態。"""
+        """Delete one layer. Deleting the last returns to the un-recorded state."""
         with self.lock:
             if not (0 <= i < len(self.layers)):
                 return len(self.layers)
@@ -358,7 +368,7 @@ class LoopDeck:
 
 
 def _resolve(name_or_idx, kind):
-    """裝置名（部分字串）或編號 → 編號。"""
+    """Device name, as a partial string, or index, to an index."""
     if name_or_idx is None:
         return None
     try:
@@ -372,69 +382,72 @@ def _resolve(name_or_idx, kind):
         if chans > 0 and want in d["name"].lower():
             hits.append(i)
     if not hits:
-        sys.exit(f"找不到{'輸入' if kind == 'in' else '輸出'}裝置：{name_or_idx}")
+        sys.exit(f"{'input' if kind == 'in' else 'output'} device not found: {name_or_idx}")
     return hits[0]
 
 
 
-# ── 訊息處理（兩種介面共用）────────────────────────────────────────────
-_hb = {"n": -1, "t": 0.0, "warned": False}     # 錄音心跳：上次看到的計數與時間
+# -- message handling, shared by both interfaces -----------------------
+_hb = {"n": -1, "t": 0.0, "warned": False}     # record heartbeat: the last count seen and when
 
 def pump(deck, max_loop_s, say):
-    """把 callback 丟出來的訊息消化掉。say(text) 決定顯示到哪。"""
-    # 錄音裝置停止送資料的話，畫面會停在「錄音中」不動。與其讓人乾等，直接講。
+    """Consume the messages posted by the callbacks. say(text) decides where
+    they are shown."""
+    # If the input device stops delivering, the display would sit on "recording"
+    # for ever. Say so rather than let the player wait.
     now = time.monotonic()
     if deck.in_n != _hb["n"]:
         _hb.update(n=deck.in_n, t=now, warned=False)
     elif now - _hb["t"] > 2.0 and not _hb["warned"]:
         _hb["warned"] = True
-        say("⚠ 錄音裝置 2 秒沒送資料進來（麥克風權限？BlackHole 沒在跑？）")
+        say("! no input for 2 s (microphone permission? BlackHole not running?)")
     while not deck.msg.empty():
         kind, val = deck.msg.get()
         if kind == "rec_first":
-            say("● 錄第一層…（再按一次停）")
+            say("* recording the first layer... (press again to stop)")
         elif kind == "countin":
-            say(f"預備 {val} 拍…（數完自己開始錄）")
+            say(f"count-in {val} beats... (recording starts on its own)")
         elif kind == "rec_bar1":
-            say("● 錄第 1 層…（從這一刻算第 1 拍，錄滿一圈自動收）")
+            say("* recording layer 1... (this is beat 1; one full lap ends it)")
         elif kind == "rec_layer":
-            say(f"● 疊第 {len(deck.layers) + 1} 層…（錄滿一圈自動加入）")
+            say(f"* recording layer {len(deck.layers) + 1}... (joins after one full lap)")
         elif kind == "first_done":
-            say(f"✓ loop 長度 {val:.2f}s，開始循環")
+            say(f"loop length {val:.2f}s, looping")
         elif kind == "commit":
             deck.commit_layer()
         elif kind == "layer_done":
-            say(f"✓ 第 {val} 層加入")
+            say(f"layer {val} added")
         elif kind == "armed":
-            say("⏳ 等下一個第 1 拍…")
+            say("waiting for the next beat 1...")
         elif kind == "cancel_arm":
-            say("✗ 不錄了")
+            say("recording cancelled")
         elif kind == "cancel":
-            say("✗ 這一層取消（沒錄滿一圈）")
+            say("layer cancelled (did not complete a lap)")
         elif kind == "too_short":
-            say("✗ 太短（<0.25s），沒收")
+            say("too short (<0.25 s), discarded")
         elif kind == "auto_stop":
-            say(f"⚠ 撞到 {max_loop_s:.0f}s 上限，自動停錄")
+            say(f"! hit the {max_loop_s:.0f}s ceiling, recording stopped")
             deck._commit_first()
 
 
 def _act(deck, c):
-    """一個按鍵 → 一個動作。回傳要顯示的話，或 None（沒話說），或 "QUIT"。"""
+    """One key, one action. Returns the text to show, None when there is
+    nothing to say, or "QUIT"."""
     if c == " ":
         deck.toggle(); return None
     if c == "u":
-        n = deck.undo(); return f"↩ 撤銷，剩 {n} 層" if n else "↩ 撤銷，已清空"
+        n = deck.undo(); return f"undo: {n} layers left" if n else "undo: now empty"
     if c == "c":
-        deck.clear(); return "⌫ 清空"
+        deck.clear(); return "cleared"
     if c == "m":
         deck.muted = not deck.muted
-        return "🔇 靜音" if deck.muted else "🔊 解除靜音"
+        return "muted" if deck.muted else "unmuted"
     if c in ("q", "\x03"):
         return "QUIT"
     return None
 
 
-# ── 介面一：視窗（預設）────────────────────────────────────────────────
+# -- interface 1: window, the default ----------------------------------
 def run_ui(deck, a, i_name, o_name, rs, ps):
     import tkinter as tk
 
@@ -442,19 +455,19 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
     IDLE, REC, PLAY, MUTE = "#5a6472", "#e5484d", "#3dd68c", "#e8a33d"
 
     root = tk.Tk()
-    root.title("疊層底床")
+    root.title("Layered bed")
     root.configure(bg=BG)
     root.geometry("470x600")
     root.minsize(430, 520)
     if not a.no_top:
         root.attributes("-topmost", True)
 
-    # ── 狀態區 ──
+    # -- status --
     head = tk.Frame(root, bg=BG)
     head.pack(pady=(16, 0))
     lamp = tk.Label(head, text="", font=("Helvetica", 40, "bold"), bg=BG, fg=IDLE)
     lamp.pack(side="left")
-    # 每繞回起點閃一下＝看得到「一圈開始了」，不必心裡數
+    # a flash on every wrap makes the start of a lap visible, so it need not be counted
     flash = tk.Label(head, text="●", font=("Helvetica", 26), bg=BG, fg=BG)
     flash.pack(side="left", padx=(10, 0))
 
@@ -466,53 +479,55 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
     bar = cv.create_rectangle(0, 0, 0, 26, fill=IDLE, width=0)
     grid_ids = []
 
-    # 節拍燈：一拍一顆，第 1 拍是重拍（換顏色）。錄第一軌時就能跟著它唱。
+    # Beat lamps: one per beat, with beat 1 accented in another colour. The
+    # first track can be sung against them.
     dots = tk.Canvas(root, height=26, bg=BG, highlightthickness=0)
     dots.pack(fill="x", padx=24, pady=(6, 0))
     dot_ids = []
 
     beatrow = tk.Frame(root, bg=BG)
     beatrow.pack(pady=(4, 6))
-    tk.Label(beatrow, text="速度", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
+    tk.Label(beatrow, text="Tempo", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
     pv = tk.StringVar(value=f"{deck.bpm:.0f}")
     ent_bpm = tk.Entry(beatrow, textvariable=pv, width=4, justify="center",
                        font=("Helvetica", 13))
     ent_bpm.pack(side="left", padx=(4, 2))
-    tk.Label(beatrow, text="× 一圈", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
+    tk.Label(beatrow, text="x loop", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
     bv = tk.StringVar(value=str(deck.beats))
     ent = tk.Entry(beatrow, textvariable=bv, width=4, justify="center",
                    font=("Helvetica", 13))
     ent.pack(side="left", padx=(4, 2))
-    tk.Label(beatrow, text="拍", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
-    tk.Label(beatrow, text="　預備", font=("Helvetica", 12), bg=BG,
+    tk.Label(beatrow, text="beats", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
+    tk.Label(beatrow, text="  count-in", font=("Helvetica", 12), bg=BG,
              fg=DIM).pack(side="left")
     cinv = tk.StringVar(value=str(deck.cin_beats))
     ent_cin = tk.Entry(beatrow, textvariable=cinv, width=3, justify="center",
                        font=("Helvetica", 13))
     ent_cin.pack(side="left", padx=(4, 2))
-    tk.Label(beatrow, text="拍", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
+    tk.Label(beatrow, text="beats", font=("Helvetica", 12), bg=BG, fg=DIM).pack(side="left")
     beatlbl = tk.Label(beatrow, text="", font=("Helvetica", 11), bg=BG, fg=DIM)
     beatlbl.pack(side="left", padx=(8, 0))
 
-    # ── 軌道列表 ──
-    tk.Label(root, text="軌", font=("Helvetica", 12), bg=BG, fg=DIM,
+    # -- track list --
+    tk.Label(root, text="Tracks", font=("Helvetica", 12), bg=BG, fg=DIM,
              anchor="w").pack(fill="x", padx=24, pady=(6, 2))
     tracks = tk.Frame(root, bg=PANEL)
     tracks.pack(fill="both", expand=True, padx=24)
 
-    # ── 按鈕 ──
-    big = tk.Button(root, text="錄 / 停　(空白鍵)", height=2,
+    # -- buttons --
+    big = tk.Button(root, text="Record / Stop  (space)", height=2,
                     highlightbackground=BG, command=lambda: press(" "))
     big.pack(fill="x", padx=24, pady=(10, 4))
     btns = tk.Frame(root, bg=BG)
     btns.pack(pady=(2, 6))
-    for text, key in (("撤銷 (u)", "u"), ("清空 (c)", "c"), ("靜音 (m)", "m")):
+    for text, key in (("Undo (u)", "u"), ("Clear (c)", "c"), ("Mute (m)", "m")):
         tk.Button(btns, text=text, width=9, highlightbackground=BG,
                   command=lambda k=key: press(k)).pack(side="left", padx=4)
 
-    # ── 輸出裝置（現場可換）──
-    # 聚合裝置的成員被拔掉之後還會留在清單上但沒有輸出通道，所以只列真的能
-    # 出聲的；BlackHole 直接排除（底床送回去＝自己錄自己）。
+    # -- output device, changeable during a performance --
+    # An aggregate device whose members were unplugged stays in the list with no
+    # output channels, so list only devices that can really sound. BlackHole is
+    # excluded outright: sending the bed back into it records itself.
     outs = [(i, d["name"]) for i, d in enumerate(sd.query_devices())
             if d["max_output_channels"] > 0
             and "blackhole" not in d["name"].lower()]
@@ -522,7 +537,7 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
 
     devrow = tk.Frame(root, bg=BG)
     devrow.pack(side="bottom", pady=(2, 6))
-    tk.Label(devrow, text=f"錄：{i_name}　→　播：", font=("Helvetica", 10),
+    tk.Label(devrow, text=f"in: {i_name}   out:", font=("Helvetica", 10),
              bg=BG, fg=DIM).pack(side="left")
     ovar = tk.StringVar(value=cur)
     om = tk.OptionMenu(devrow, ovar, *(olabels or [cur]),
@@ -533,7 +548,8 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
     stream = {"ps": ps, "label": cur}
 
     def switch_out(label):
-        """換喇叭：先停舊的再開新的。開不起來就把舊的接回去，不會變成沒聲音。"""
+        """Change speakers: stop the old stream, then open the new one. If the new
+        one will not open, the old one is restored, so there is never silence."""
         if label == stream["label"]:
             return
         idx = int(label.split("｜")[0])
@@ -553,7 +569,7 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
             except Exception:
                 pass
             ovar.set(stream["label"])
-            say(f"⛔ 換不過去（{e.__class__.__name__}），維持原來的")
+            say(f"could not switch ({e.__class__.__name__}); keeping the previous device")
             return
         try:
             old.close()
@@ -561,22 +577,23 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
             pass
         stream["ps"], stream["label"] = new, label
         nm = label.split("｜")[1]
-        if "bh" in nm.lower():                  # 名字裡有 bh＝底床會繞回 BlackHole
-            say(f"⚠ 「{nm}」會把底床送回 BlackHole＝下一軌會錄到自己")
+        if "bh" in nm.lower():                  # a name containing bh sends the bed back into BlackHole
+            say(f"! {nm} sends the bed back into BlackHole; the next track would record itself")
         else:
-            say(f"🔊 改從「{nm}」出聲")
+            say(f"now sounding through {nm}")
 
     msg = {"t": ""}
-    # 畫布寬度在剛開視窗時還是 1（版面還沒算完），所以格線和節拍燈都要記住
-    # 「上次是用多寬畫的」，寬度一變就重畫，不然會全部擠在最左邊看不到。
+    # The canvas width is still 1 when the window has just opened, before layout,
+    # so the grid and the beat lamps remember the width they were drawn at and
+    # redraw when it changes; otherwise everything is squeezed out of sight.
     ui = {"sig": None, "last_p": 0, "flash": 0, "gw": 0, "dw": 0}
 
     def say(t):
         msg["t"] = t
 
     def press(c):
-        """按鈕按下來的動作。一定執行，並把游標帶離拍數欄位——不然按完
-        按鈕，空白鍵還是會被那個欄位吃掉。"""
+        """A button press. Always acts, and takes focus off the beats field; without
+        that, space would still be swallowed by the field after a button press."""
         root.focus_set()
         r = _act(deck, c)
         if r == "QUIT":
@@ -585,8 +602,9 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
             say(r)
 
     def on_key(c):
-        """鍵盤按下來的動作。只有這條路要讓拍數欄位優先：游標在欄位裡時，
-        空白是打字不是錄音。滑鼠按鈕不走這裡，所以不受影響。"""
+        """A key press. Only this path yields to the beats field: while the caret is
+        in the field, space types rather than records. Mouse buttons do not come
+        through here and are unaffected."""
         if root.focus_get() in (ent, ent_bpm, ent_cin) \
                 and c in (" ", "u", "c", "m", "q"):
             return
@@ -602,7 +620,8 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
     root.protocol("WM_DELETE_WINDOW", close)
     for k in (" ", "u", "c", "m", "q"):
         root.bind(f"<KeyPress-{'space' if k == ' ' else k}>", lambda e, k=k: on_key(k))
-    # 在拍數欄位按 Enter＝填好了，游標交還出去，空白鍵立刻恢復錄音
+    # Enter in the beats field means it is filled in: focus is handed back and
+    # space records again at once
     for e_ in (ent, ent_bpm, ent_cin):
         e_.bind("<Return>", lambda e: root.focus_set())
         e_.bind("<Escape>", lambda e: root.focus_set())
@@ -611,7 +630,7 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
         for w in tracks.winfo_children():
             w.destroy()
         if not deck.layers:
-            tk.Label(tracks, text="還沒有軌", font=("Helvetica", 12),
+            tk.Label(tracks, text="no tracks yet", font=("Helvetica", 12),
                      bg=PANEL, fg=DIM).pack(pady=14)
             return
         for i in range(len(deck.layers)):
@@ -623,10 +642,10 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
             tk.Label(row, text=f"{deck.layers[i].shape[0] / deck.sr:.2f}s",
                      font=("Helvetica", 12), bg=PANEL,
                      fg=(FG if on else DIM)).pack(side="left", padx=(6, 0))
-            tk.Button(row, text="刪", width=3, highlightbackground=PANEL,
-                      command=lambda i=i: (deck.drop(i), say(f"刪掉第 {i + 1} 軌"))
+            tk.Button(row, text="del", width=3, highlightbackground=PANEL,
+                      command=lambda i=i: (deck.drop(i), say(f"deleted track {i + 1}"))
                       ).pack(side="right", padx=2)
-            tk.Button(row, text=("開" if on else "關"), width=3,
+            tk.Button(row, text=("on" if on else "off"), width=3,
                       highlightbackground=PANEL,
                       command=lambda i=i: (deck.toggle_layer(i), say(""))
                       ).pack(side="right", padx=2)
@@ -651,7 +670,7 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
             deck.cin_beats = max(0, min(16, int(cinv.get() or 0)))
         except ValueError:
             deck.cin_beats = 0
-        if not deck.layers:            # 已經有軌之後速度就鎖住，不然格子會亂掉
+        if not deck.layers:            # the tempo locks once a track exists, or the grid would break
             try:
                 deck.bpm = max(0.0, min(300.0, float(pv.get() or 0)))
             except ValueError:
@@ -662,49 +681,50 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
 
         if deck.cin > 0:
             bl = deck.beat_len() or 1
-            col, txt = MUTE, f"預備 {-(-deck.cin // bl)}"
+            col, txt = MUTE, f"count-in {-(-deck.cin // bl)}"
             done, total = (deck.cin_all - deck.cin) / sr, (deck.cin_all or 1) / sr
-            sub.configure(text="數完就開始錄　（再按一次不錄）")
+            sub.configure(text="recording starts when the count ends  (press again to cancel)")
         elif deck.armed:
-            col, txt = MUTE, "⏳ 等第 1 拍"
+            col, txt = MUTE, "waiting for beat 1"
             total = deck.L / sr if deck.L else 1
             done = (deck.clk % deck.L) / sr if deck.L else 0
-            sub.configure(text=f"下一圈開頭就開始錄　（再按一次不錄）")
+            sub.configure(text=f"recording starts at the top of the next lap  (press again to cancel)")
         elif deck.rec:
-            col, txt = REC, "● 錄音中"
+            col, txt = REC, "recording"
             if deck.first:
                 done, total = deck.pend_n / sr, a.max_loop_s
-                sub.configure(text=f"第一軌　{done:.1f}s　（再按空白停）")
+                sub.configure(text=f"first track  {done:.1f}s  (space to stop)")
             else:
                 done, total = deck.wdone / sr, deck.L / sr
-                lab = f"疊第 {len(deck.layers) + 1} 軌" if deck.layers else "錄第 1 軌"
-                sub.configure(text=f"{lab}　剩 {total - done:.1f}s")
+                lab = f"layer {len(deck.layers) + 1}" if deck.layers else "track 1"
+                sub.configure(text=f"{lab}  {total - done:.1f}s left")
         elif deck.muted:
-            col, txt = MUTE, "🔇 靜音"
+            col, txt = MUTE, "muted"
             done, total = (deck.p / sr, deck.L / sr) if deck.L else (0, 1)
-            sub.configure(text="底床暫時消失　再按 m 回來")
+            sub.configure(text="the bed is gone for now; press m to bring it back")
         elif deck.L:
-            col, txt = PLAY, "▶ 循環中"
+            col, txt = PLAY, "looping"
             done, total = deck.p / sr, deck.L / sr
             if deck.beats:
                 b = int(done / total * deck.beats) + 1
-                sub.configure(text=f"第 {b} / {deck.beats} 拍　·　{done:.1f} / {total:.1f}s")
+                sub.configure(text=f"beat {b} / {deck.beats}  -  {done:.1f} / {total:.1f}s")
             else:
                 sub.configure(text=f"{done:.1f} / {total:.1f}s")
         elif deck.bpm > 0 and deck.beats > 0:
-            # 還沒錄任何東西，但節拍器已經在跑＝跟著它唱，按錄就對得上
-            col, txt = IDLE, "♩ 節拍器"
+            # Nothing recorded yet but the metronome is running: sing along and a
+            # press to record will line up
+            col, txt = IDLE, "metronome"
             tl = deck.target_L() or 1
             done, total = (deck.clk % tl) / sr, tl / sr
-            sub.configure(text=f"{deck.bpm:.0f} BPM　一圈 {total:.2f}s　按錄跟著唱")
+            sub.configure(text=f"{deck.bpm:.0f} BPM  loop {total:.2f}s  press record and sing along")
         else:
-            col, txt = IDLE, "待命"
+            col, txt = IDLE, "idle"
             done, total = 0, 1
-            sub.configure(text="填速度＋拍數，或直接按空白自由錄")
+            sub.configure(text="set a tempo and beats, or just press space to record freely")
 
         lamp.configure(text=txt, fg=col)
 
-        # 繞回起點＝閃一下
+        # a wrap flashes
         if deck.L and deck.p < ui["last_p"]:
             ui["flash"] = 4
         ui["last_p"] = deck.p
@@ -728,7 +748,7 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
             ui["sig"] = sig
             rebuild_tracks()
 
-        # ── 節拍燈 ──
+        # -- beat lamps --
         n = deck.beats
         span = deck.L or deck.target_L()
         dw = max(dots.winfo_width(), 1)
@@ -757,19 +777,19 @@ def run_ui(deck, a, i_name, o_name, rs, ps):
 
         on_n = sum(1 for x in deck.layer_on if x)
         if deck.layers:
-            beatlbl.configure(text=f"{on_n}/{len(deck.layers)} 軌出聲　·　速度已鎖")
+            beatlbl.configure(text=f"{on_n}/{len(deck.layers)} tracks sounding  -  tempo locked")
         else:
-            beatlbl.configure(text="0＝自由長度")
+            beatlbl.configure(text="0 = free length")
 
         root.after(50, tick)
 
     rebuild_tracks()
     tick()
     root.mainloop()
-    print(f"[loop_deck] 收場（xruns {deck.xruns}）")
+    print(f"[loop_deck] finished (xruns {deck.xruns})")
 
 
-# ── 介面二：終端機按鍵（--no-ui）──────────────────────────────────────
+# -- interface 2: terminal keys (--no-ui) ------------------------------
 def run_keys(deck, a, rs, ps):
     import select
     fd = sys.stdin.fileno()
@@ -790,26 +810,26 @@ def run_keys(deck, a, rs, ps):
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         rs.stop(); rs.close()
         ps.stop(); ps.close()
-        print(f"\n[loop_deck] 收場（xruns {deck.xruns}）")
+        print(f"\n[loop_deck] finished (xruns {deck.xruns})")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--in-dev", default="BlackHole", help="錄音來源（預設 BlackHole）")
-    ap.add_argument("--out-dev", default=None, help="底床送去哪（預設系統輸出）")
+    ap.add_argument("--in-dev", default="BlackHole", help="input source (default BlackHole)")
+    ap.add_argument("--out-dev", default=None, help="where the bed is sent (default: the system output)")
     ap.add_argument("--sr", type=int, default=SR_DEFAULT)
     ap.add_argument("--ch", type=int, default=2)
     ap.add_argument("--block", type=int, default=256)
     ap.add_argument("--max-loop-s", type=float, default=MAX_LOOP_S)
     ap.add_argument("--lat-ms", type=float, default=0.0,
-                    help="輸入延遲補償；疊層聽起來慢半拍就往上加")
-    ap.add_argument("--gain", type=float, default=1.0, help="底床整體音量")
-    ap.add_argument("--list", action="store_true", help="只列裝置就離開")
+                    help="input latency compensation; raise it if layers sound late")
+    ap.add_argument("--gain", type=float, default=1.0, help="overall level of the bed")
+    ap.add_argument("--list", action="store_true", help="list the devices and exit")
     ap.add_argument("--bpm", type=float, default=0.0,
-                    help="速度；設了就有節拍器，第一軌長度也自動算（0＝自由長度）")
-    ap.add_argument("--beats", type=int, default=0, help="一圈幾拍")
-    ap.add_argument("--no-ui", action="store_true", help="不開視窗，用終端機按鍵")
-    ap.add_argument("--no-top", action="store_true", help="視窗不要一直蓋在最上面")
+                    help="tempo; setting it gives a metronome and computes the first track length (0 = free length)")
+    ap.add_argument("--beats", type=int, default=0, help="beats per loop")
+    ap.add_argument("--no-ui", action="store_true", help="no window; use terminal keys")
+    ap.add_argument("--no-top", action="store_true", help="do not keep the window on top")
     a = ap.parse_args()
 
     if a.list:
@@ -823,25 +843,26 @@ def main():
     o_name = sd.query_devices(o_dev)["name"]
 
     if "blackhole" in o_name.lower():
-        sys.exit(f"⛔ 輸出裝置是 {o_name}＝會自己錄自己。換一個輸出裝置。")
+        sys.exit(f"output device {o_name} would record itself. Choose another output device.")
 
-    # 終端機模式沒有鍵盤就沒有意義（視窗模式自己有鍵盤，不受影響）。
-    # 在背景／管線裡跑會在 tcgetattr 炸出 traceback，先擋下來講人話。
+    # Terminal mode is meaningless without a keyboard; window mode has its own
+    # and is unaffected. Running in the background or in a pipe raises a
+    # traceback from tcgetattr, so it is caught here and said plainly.
     if a.no_ui and not sys.stdin.isatty():
-        sys.exit("⛔ 沒有鍵盤可用（不是終端機視窗）。\n"
-                 "   請用「開啟疊層底床.command」開，或在終端機裡直接跑。")
+        sys.exit("no keyboard available (this is not a terminal window).\n"
+                 "   Open it with the loop_deck launcher, or run it in a terminal.")
 
     deck = LoopDeck(a.sr, a.ch, a.block, a.max_loop_s, a.lat_ms, a.gain)
     deck.bpm = max(0.0, a.bpm)
     deck.beats = max(0, a.beats)
 
-    print(f"[loop_deck] 錄： {i_name}")
-    print(f"[loop_deck] 播： {o_name}")
-    print(f"[loop_deck] {a.sr}Hz {a.ch}ch block={a.block} 延遲補償={a.lat_ms}ms 上限={a.max_loop_s:.0f}s")
+    print(f"[loop_deck] in:  {i_name}")
+    print(f"[loop_deck] out: {o_name}")
+    print(f"[loop_deck] {a.sr}Hz {a.ch}ch block={a.block} latency-comp={a.lat_ms}ms ceiling={a.max_loop_s:.0f}s")
     if deck.target_L():
-        print(f"[loop_deck] 節拍器 {deck.bpm:.0f} BPM × {deck.beats} 拍 "
-              f"＝ 一圈 {deck.target_L() / a.sr:.2f}s")
-    print("[loop_deck] 空白=錄／停　u=撤銷　c=清空　m=靜音　q=離開")
+        print(f"[loop_deck] metronome {deck.bpm:.0f} BPM x {deck.beats} beats "
+              f"= loop {deck.target_L() / a.sr:.2f}s")
+    print("[loop_deck] space=record/stop  u=undo  c=clear  m=mute  q=quit")
 
     rs = sd.InputStream(device=i_dev, channels=a.ch, samplerate=a.sr,
                         blocksize=a.block, dtype="float32", callback=deck.rec_cb)

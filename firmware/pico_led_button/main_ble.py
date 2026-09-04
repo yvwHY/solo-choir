@@ -1,15 +1,24 @@
-# firmware/pico_led_button/main_ble.py — 火流 v5.1 ＋ 實體鍵 **BLE 通知**（08-18）
+# firmware/pico_led_button/main_ble.py - fire flow v5.1 plus the physical button
+# over BLE notifications (2026-08-18)
 #
-# 08-18 Harry 裁「那就藍牙」。原計畫＝BLE HID 鍵盤，**死因：官方 rp2 韌體沒
-# 編入配對/bond（ble.config(bond=…) → ValueError: unknown config param），而
-# macOS 對 HID 強制加密配對** → 已入 GRAVEYARD。改走免配對路線：自訂 GATT
-# 服務＋通知——按下＝notify "TAP <seq>"，Mac 端由 respond_shell 內建的 bleak
-# 接收執行緒收下、走既有 tap 路徑（等同按 Space）。無線、Mac 不斷網、免配對。
-# 火流本體與參數逐行照抄 main.py（08-05 合併版）不動；USB serial 的 TAP/HB
-# 照印＝插線即備援（tap_listen 直接吃）。
+# Decided on 2026-08-18: use Bluetooth. The original plan was a BLE HID
+# keyboard, which died because the official rp2 firmware is built without
+# pairing or bonding (ble.config(bond=...) raises ValueError: unknown config
+# param) while macOS requires encrypted pairing for HID. That is in GRAVEYARD.
+# The route taken instead needs no pairing: a custom GATT service with
+# notifications, where a press notifies "TAP <seq>". On the Mac the bleak
+# receiver thread inside respond_shell takes it and follows the existing tap
+# path, which is the same as pressing space. Wireless, no loss of network on the
+# Mac, no pairing.
+# The fire flow itself and its parameters are copied line for line from main.py,
+# the merged version of 2026-08-05, unchanged. TAP and HB are still printed over
+# USB serial, so plugging a cable in is an instant fallback that tap_listen
+# reads directly.
 #
-# 板載 LED 語意：**恆亮＝BLE 已連上（app 在收）；慢閃(1Hz)＝在廣播等連線**；
-# 按下熄 0.2s 不變。回 USB serial 版：mpremote fs cp main.py :main.py
+# On-board LED: steady on means BLE is connected and the app is receiving; a
+# slow 1 Hz blink means it is advertising and waiting. The 0.2 s blink on a
+# press is unchanged. To go back to the USB serial version:
+# mpremote fs cp main.py :main.py
 import math
 import random
 import time
@@ -19,9 +28,10 @@ import micropython
 import neopixel
 from machine import ADC, Pin
 
-MODE = "live"        # "live"=ADC envelope 驅動（正式）/ "demo"=自跑火流
+MODE = "live"        # "live" = driven by the ADC envelope (the real one),
+                     # "demo" = self-running
 N = (122, 122)
-DATA_PINS = (1, 2)   # GP0 陣亡，勿用
+DATA_PINS = (1, 2)   # GP0 is dead; do not use
 ADC_CH = (0, 1)
 MAX_LEVEL = 0.30
 WARM = (255, 120, 30)
@@ -29,17 +39,19 @@ GAMMA = 1.5
 DECAY = 1.30
 SPEED_MIN, SPEED_MAX = 100.0, 170.0
 SPAWN_MIN, SPAWN_MAX = 0.15, 0.90
-NOISE_FLOOR = 2500   # 08-05 Harry 要更靈敏：3000→2500（實測雜訊爆發 ~2100
-                     # ＝仍有 400 餘裕；再低就會自燃，見 07-29 紀錄）
+NOISE_FLOOR = 2500   # made more sensitive on 2026-08-05, 3000 to 2500. Measured
+                     # noise bursts reach about 2100, leaving 400 of margin; any
+                     # lower and it self-ignites, see the 2026-07-29 notes.
 COUPLING = 4300
 DEBOUNCE_MS = 200
 HEARTBEAT_S = 2.0
 
-# ---------------- BLE 通知按鍵（IRQ 驅動，免配對，不佔主迴圈） ----------------
+# ---------- BLE notification button: IRQ driven, no pairing, off the main loop --
 _IRQ_CENTRAL_CONNECT = 1
 _IRQ_CENTRAL_DISCONNECT = 2
 
-# 自訂 128-bit UUID（"SOLOCH" 嵌在字串裡，Mac 端 respond_shell 以此掃描）
+# Custom 128-bit UUIDs, with "SOLOCH" embedded in the string; respond_shell on
+# the Mac scans for it.
 _SVC_UUID = bluetooth.UUID("0f9a0001-1e0e-4c7a-9a4e-534f4c4f4348")
 _TAP_UUID = bluetooth.UUID("0f9a0002-1e0e-4c7a-9a4e-534f4c4f4348")
 
@@ -56,8 +68,9 @@ class BleKey:
             ((_SVC_UUID, ((_TAP_UUID,
                            bluetooth.FLAG_READ | bluetooth.FLAG_NOTIFY),)),))
         b.gatts_write(self.h_tap, b"HB 0")
-        # 128-bit UUID 佔 18B ＋ flags 3B ＝ 廣播包放不下名字 → 名字放
-        # scan response（bleak 兩包都看得到）
+        # A 128-bit UUID takes 18 bytes and the flags 3, so the name does not
+        # fit in the advertising packet; it goes in the scan response, and bleak
+        # sees both.
         self._adv = b"\x02\x01\x06" + bytes((17, 0x07)) + bytes(_SVC_UUID)
         nm = name.encode()
         self._resp = bytes((len(nm) + 1, 0x09)) + nm
@@ -81,7 +94,8 @@ class BleKey:
             self._advertise()
 
     def send(self, line):
-        """按鍵/心跳走同一條：notify 一行文字（協定同 serial 的 TAP/HB）。"""
+        """Button and heartbeat share one path: notify a single line of text,
+        the same TAP/HB protocol as the serial version."""
         if self.conn is None:
             return False
         try:
@@ -92,7 +106,7 @@ class BleKey:
             return False
 
 
-# ---------------- 以下火流本體＝main.py 逐行照抄（勿動） ----------------
+# ---------- below: the fire flow itself, copied line for line from main.py ----
 _lutR = bytearray(256)
 _lutG = bytearray(256)
 _lutB = bytearray(256)
@@ -189,8 +203,9 @@ demo_t = 0.0
 
 seq, last = 0, 1
 t_hb = time.ticks_ms()
-t_tap = 0                                 # 非阻塞去彈跳：上次按下時刻
-led_off_at = 0                            # 板載燈按下熄 0.2s（非阻塞）
+t_tap = 0                                 # non-blocking debounce: time of the last press
+led_off_at = 0                            # the on-board LED goes out for 0.2 s on a press,
+                                          # without blocking
 t_blink = time.ticks_ms()
 blink_on = True
 
@@ -202,13 +217,14 @@ while True:
     v = button.value()
     if last == 1 and v == 0 and time.ticks_diff(now, t_tap) > DEBOUNCE_MS:
         seq += 1
-        print("TAP", seq)                 # USB 備援：插線＝serial 路照走
+        print("TAP", seq)                 # USB fallback: with a cable in, the serial path still runs
         ble_key.send(b"TAP %d" % seq)
         t_tap = now
         led.off()
         led_off_at = now
     last = v
-    # LED：恆亮＝BLE 已連上；慢閃(1Hz)＝在廣播等連線；按下熄 0.2s 優先
+    # LED: steady on when BLE is connected, a slow 1 Hz blink while advertising;
+    # the 0.2 s blink on a press takes priority
     if led_off_at:
         if time.ticks_diff(now, led_off_at) > DEBOUNCE_MS:
             led_off_at = 0

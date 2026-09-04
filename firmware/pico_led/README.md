@@ -1,26 +1,31 @@
-# pico_led — wire-light 韌體（兩 unit、各 2 條 WS2812B COB）
+# pico_led — wire-light firmware (two units, two WS2812B COB strips each)
 
-Plan：`docs/plans/2026-07-23-pico-led-wire-light.md` · Spec：`docs/specs/2026-07-19-wire-light-design.md`
+Plan: `docs/plans/2026-07-23-pico-led-wire-light.md` · Spec: `docs/specs/2026-07-19-wire-light-design.md`
 
-## 燒錄
-1. Pico W（**非 OLED 那顆**）+ MicroPython v1.28（同 260716_pico_oled；未刷的板：BOOTSEL 進 U 盤拖 uf2）。
-2. `mpremote cp main.py :main.py`（或 Thonny 存為 main.py）。
-3. 斷 USB、上外部電 → 開機自跑（demo 呼吸脈衝）。
+## Flashing
+1. A Pico W (**not the OLED one**) with MicroPython v1.28, the same build as
+   260716_pico_oled. On a blank board, hold BOOTSEL and drag the uf2 onto the
+   drive that appears.
+2. `mpremote cp main.py :main.py`, or save as main.py from Thonny.
+3. Unplug USB, apply external power, and it runs on boot (the demo breathing
+   pulse).
 
-## Bench 接線（Task 1 實測後定版）
+## Bench wiring (settled after task 1)
 ```
-5V 軌 ─┬─→ 1N4007 ──● 燈條 5V 節點（≈4.3V）※07-26 必裝，見門檻曲線
-       │   （銀環朝燈條）  ├─→ 燈條 A 5V
-       │                   ├─→ 燈條 B 5V
-       │                   └─→ 100µF 跨此節點/GND（大電解移到二極體之後）
-       └─→ Pico VSYS 經 1N4007（≈4.4V；防 USB 反灌）※與上面那顆各自獨立
-GP1 ──330Ω──→ 燈條 A DIN（箭頭進端）　※330Ω 必裝，防倒灌燒腳（GP0 就是這樣死的）
-GP2 ──330Ω──→ 燈條 B DIN
-GND 共地（Pico GND ↔ 電源負 ↔ 燈條 GND，缺一不可）
+5V rail --+--> 1N4007 --* strip 5V node (about 4.3V)   required since 2026-07-26, see the threshold curve
+          |   (banded end towards the strip)  +--> strip A 5V
+          |                                   +--> strip B 5V
+          |                                   +--> 100uF across this node and GND (the bulk electrolytic moves after the diode)
+          +--> Pico VSYS through a 1N4007 (about 4.4V; blocks back-feed from USB), a separate diode from the one above
+GP1 --330R--> strip A DIN (the arrow-in end)   the 330R is required; it prevents back-feed from killing the pin, which is how GP0 died
+GP2 --330R--> strip B DIN
+Common ground (Pico GND to supply negative to strip GND; all three are needed)
 ```
-**5V 軌本身維持 5.0V**（PAM8403 要吃完整 5V），只有燈條那一路降壓 —— 兩條燈共用一顆 1N4007 即可（額定 1A，兩條低亮度約 0.3A）。
+**The 5V rail itself stays at 5.0V**, because the PAM8403 needs a full 5V; only
+the strip branch is dropped. One 1N4007 serves both strips (rated 1A, and two
+strips at low brightness draw about 0.3A).
 
-## Walk test（量可定址像素密度，REPL 一次性；已完成＝160/m）
+## Walk test (measuring addressable pixel density; done, 160/m)
 ```python
 import neopixel, time
 from machine import Pin
@@ -28,80 +33,175 @@ np_ = neopixel.NeoPixel(Pin(1), 400)
 for i in range(400):
     np_.fill((0,0,0)); np_[i] = (80,40,10); np_.write(); time.sleep_ms(30)
 ```
-目視數「每公尺幾個亮點跳格」→ 換算填 `main.py` 的 `N`。
+Count by eye how many lit points step through per metre, then set `N` in
+`main.py` accordingly.
 
-## 實測記錄（2026-07-23 bench，TENMA 72-2690 供電）
-| 項目 | 值 | 備註 |
+## Measurements (bench, 2026-07-23, TENMA 72-2690 supply)
+| Item | Value | Note |
 |---|---|---|
-| 可定址 px/m | **160/m**（間距實測 ~60mm/10 顆，全卷 800 顆到尾） | 與 LED 密度 1:1 |
-| data 階梯停在 | ~~直連即通~~ → **1N4007 降燈條 VCC（第三階）必裝** | 07-26 翻案，見下方門檻曲線 |
-| 待機電流 | **0.417A / 5m ≈ 83mA/m**（不點燈） | 穿戴段預算的大宗！1m 段光待機 ~83mA |
-| 電流 @ MAX_LEVEL 0.2（火流 demo, 160px） | 總讀數 0.4x A ＝ 淨耗僅數十 mA | |
-| 電流 @ 0.45（v5.1 定稿亮度，火流 demo 160px） | 總 0.5–0.65A 擺動 ＝ 淨點燈 ~0.08–0.23A 隨火流起伏 | 含整卷 5m 待機 0.417A；剪短段後待機按 83mA/m 縮 |
-| 定案 MAX_LEVEL | 0.45（bench 目視定稿；穿戴電流複核後再議） | |
-| MT3608 壓降 | （unit 整合時量） | <0.1V 為過 |
+| Addressable px/m | **160/m** (spacing measured at about 60 mm per 10, and all 800 on the reel reach the end) | 1:1 with the LED density |
+| Data ladder stops at | ~~direct connection works~~ -> **a 1N4007 dropping the strip VCC (the third step) is required** | reversed on 2026-07-26, see the threshold curve below |
+| Standby current | **0.417 A / 5 m, about 83 mA/m** with nothing lit | the bulk of the wearable budget: a 1 m run costs about 83 mA on standby alone |
+| Current at MAX_LEVEL 0.2 (fire-flow demo, 160 px) | total reading 0.4x A, so a few tens of mA net | |
+| Current at 0.45 (the v5.1 brightness, fire-flow demo, 160 px) | total swings 0.5-0.65 A, so about 0.08-0.23 A net, rising and falling with the flow | includes 0.417 A standby for the whole 5 m reel; after cutting, standby scales at 83 mA/m |
+| Settled MAX_LEVEL | 0.45 (settled by eye on the bench; to be revisited after the wearable current is checked) | |
+| MT3608 drop | (measure at unit integration) | under 0.1 V passes |
 
-## 實測門檻曲線（2026-07-26 洞洞板，MT3608 供電，兩段各 122px＋JST 尾線）
+## Measured threshold curve (2026-07-26, perfboard, MT3608 supply, two runs of 122 px each with JST tails)
 
-| 燈條 VDD | 門檻 `0.7×VDD` | 結果 |
+| Strip VDD | Threshold `0.7 x VDD` | Result |
 |---|---|---|
-| 4.825V | 3.38V | 兩條都乾淨 |
-| **4.9V** | **3.43V** | **一條開始誤碼** |
-| 5.0V | 3.50V | 兩條都誤碼 |
-| **4.3V（1N4007 後）** | **3.01V** | **5.0V 軌壓下兩條都乾淨 ← 定案工作點** |
+| 4.825 V | 3.38 V | both clean |
+| **4.9 V** | **3.43 V** | **one starts corrupting** |
+| 5.0 V | 3.50 V | both corrupt |
+| **4.3 V (after the 1N4007)** | **3.01 V** | **both clean with the 5.0 V rail held; this is the working point** |
 
-## 燈條自我耦合（2026-07-27，unit1 洞洞板）
+## Strip self-coupling (2026-07-27, unit 1 perfboard)
 
-實測可重現，同一時刻黑→亮→黑：
+Reproducible, dark to lit to dark at the same moment:
 
-| 燈條狀態 | span (L) | span (R) |
+| Strip state | span (L) | span (R) |
 |---|---|---|
-| 全黑 | 1,004 | 928 |
-| **全亮** | **5,041** | **5,628** |
-| 全黑（再測） | 952 | 1,012 |
+| All dark | 1,004 | 928 |
+| **All lit** | **5,041** | **5,628** |
+| All dark again | 952 | 1,012 |
 
-燈條 PWM 電流脈衝經共地耦回 ADC。單一固定門檻會**自鎖**：燈亮→底噪破門檻→判定有聲→燈續亮，音停也不熄。麵包板 Task 2 沒發作，是因為當時 1 條燈、1 路分接、燈條直吃低阻抗軌；**07-26 為修資料誤碼加的 1N4007 在供電路徑上加了阻抗，脈衝才變成電壓波動**（修 A 問題引發 B 問題）。
+The strip's PWM current pulses couple back into the ADC through the shared
+ground. A single fixed threshold **latches**: the strip lights, the noise floor
+crosses the threshold, that reads as sound, the strip stays lit, and it does not
+go dark when the sound stops. It did not appear in breadboard task 2 because
+that had one strip, one tap and the strip drawing straight from a low-impedance
+rail; **the 1N4007 added on 2026-07-26 to fix data corruption put impedance in
+the supply path, which is what turned the pulses into voltage swings** — fixing
+A caused B.
 
-三個解法試過，採用第三個：
+Three solutions were tried; the third was adopted:
 
-| 解法 | 結果 |
+| Solution | Result |
 |---|---|
-| **消隱取樣**（每 N 幀熄燈 1ms 再量） | 底噪 3,203→729（有效），但 `write` 122 顆要 3.7ms、兩條 7.4ms → 實際黑 ~5ms、頻率 20Hz，**閃爍明顯可見，Harry 否決** |
-| **遲滯門檻**（暗 2000／亮 6000） | 自鎖解決，但訊號落在兩門檻之間（中等音量）時**振盪、反應變鈍** |
-| **耦合補償** ✅ | `span −= COUPLING × env`。耦合正比於亮度、`env` 就是亮度 → 燈暗不扣（全靈敏度）、燈全亮剛好抵消。**單一低門檻 2000，無遲滯、無振盪、與 Mac 音量無關** |
+| **Blanked sampling** (go dark for 1 ms every N frames, then measure) | the noise floor falls from 3,203 to 729, which works, but `write` takes 3.7 ms for 122 pixels and 7.4 ms for both, so the real dark period is about 5 ms at 20 Hz. The flicker is clearly visible and it was rejected |
+| **Hysteresis** (2000 dark, 6000 lit) | solves the latching, but oscillates and dulls the response when the signal sits between the two thresholds, at middling levels |
+| **Coupling compensation** (adopted) | `span -= COUPLING * env`. The coupling is proportional to brightness and `env` is the brightness, so nothing is subtracted while dark, keeping full sensitivity, and at full brightness it exactly cancels. **One low threshold at 2000, no hysteresis, no oscillation, and independent of the Mac's output level** |
 
-根治仍在硬體：大電解要在 1N4007 **之後**的燈條側，必要時加大到 470µF；改動後 `COUPLING` 要重量。
+The real cure is still hardware: the bulk electrolytic belongs **after** the
+1N4007, on the strip side, raised to 470 uF if necessary, and `COUPLING` must be
+measured again after any such change.
 
-## 血的教訓（2026-07-23 bench）
-- **排母 GND 那一格虛焊 —— 今晚最有欺騙性的一個（2026-07-27）**：症狀＝拔 USB 後 Pico 不執行（燈凍住），但量 VSYS 有漂亮的 4.56V。四重偽裝：① 沒有電流就沒有壓降，空載電壓完全正常；② **蜂鳴檔會叫**（門檻 50Ω），但幾十歐姆就足以讓 Pico 開不了機；③ USB 插著時地走 USB 回 Mac，一切正常，只有拔掉才發作；④ Pico W 沒有電源指示燈（板載 LED 接在 WiFi 晶片上），無法目視判斷。**診斷心法＝兩條杜邦線（VSYS＋GND）直接從電源接到 Pico、繞過整塊板子**，一次排除所有焊點，再逐條拆回來二分；比逐點量測快一個數量級。
-- **3.5mm 沒插到底 → 單聲道消失**：症狀是「一條燈完全不動、另一條正常」，很容易誤判成板子壞了。頻繁拔插時第一個要排除的。
-- **Mac 系統音量直接決定訊號強度**：同一支測試音，音量 44 時 span 只有 1,500–3,200，音量 65 時 9,000–10,000。工作點建議 65。（燈暗時的底噪 ~1,000 則**不隨音量變化** —— 它是干擾不是訊號。）
-- **`mpremote` 一連上就會打斷 `main.py`**：raw REPL 會停掉韌體且不會自動重跑，所以「連著讀 ADC」和「看燈的行為」不能同時做。要看燈就別連，要讀數就接受燈是死的。
-- **3.3V 資料驅動 5V 燈條，本來就在門檻底下（2026-07-26 翻案）**：WS2812 的高電平門檻是 `0.7×VDD`＝5.0V 時要 **3.5V**，而 Pico 只給得出 **3.3V**。07-23「直連即通」的 PASS 是踩在懸崖邊上（TENMA 面板設 5V、實際輸出略低，剛好落在崩潰點下緣）；換 MT3608（實測 5.044V）＋加 JST 尾線後當場翻車，症狀＝**隨機分散且會變化的彩色**（送靜態純紅也會看起來像在跑燈）。修法＝**燈條 5V 進線串 1N4007**（軌保持 5.0V 給 PAM），裕度從 −0.2V 變 +0.35V。診斷心法：靜態純色畫面下，誤碼看起來像動態效果——先送單一純色再判斷。
-- **GP0 陣亡，永久棄用**：燈條被限流垮壓（CC 2.76V）時，GP0 的 3.3V 倒灌進低壓 IC 輸入端，Pico 掉線、該腳打死。→ `DATA_PINS=(1,2)`，**每條 DATA 一律串 330Ω**（就是防這個）。
-- **這卷 COB 上電無有效資料時會隨機全亮**（3.8A/19W，捲著會發熱）→ 韌體必須開機即持續刷新（main.py 本來就是）；bench 手動單發時要「刷新迴圈先跑、燈條後上電」。
-- **燈條無記憶**：斷電/垮壓後畫面消失，須重送。
-- **效能是硬要求**：純 Python 浮點渲染只有 **5.5fps**（＝死板＋階梯感的真兇）；整數熱場＋LUT＋`@micropython.native`＋只推實際段長 → **60fps@160px**。低亮度另需 gamma 1.5（2.0 會把暗部壓到剩 2–3 個碼值）。
-- 整卷量測時 TENMA 限流要 ≥2A（待機 0.417A＋點燈；首日 0.5A 限流引發垮壓連鎖）。
+## Lessons paid for (bench, 2026-07-23 onwards)
+- **A dry joint on the GND pin of the header — the most deceptive fault of the
+  evening (2026-07-27)**: the symptom was that the Pico did not run once USB was
+  unplugged, the lights froze, and yet VSYS measured a healthy 4.56 V. Four
+  disguises: (1) with no current there is no drop, so the off-load voltage looks
+  perfect; (2) **the continuity buzzer sounds** at its 50 ohm threshold, while a
+  few tens of ohms is already enough to stop the Pico booting; (3) with USB
+  plugged in, ground returns through USB to the Mac and everything works, so it
+  only appears once unplugged; (4) the Pico W has no power LED, since the
+  on-board LED hangs off the WiFi chip, so there is nothing to see.
+  **The method: run two jumper wires, VSYS and GND, straight from the supply to
+  the Pico, bypassing the whole board.** That clears every joint at once; then
+  add them back and bisect. It is an order of magnitude faster than measuring
+  point by point.
+- **A 3.5 mm plug not fully seated kills one channel**: the symptom is "one
+  strip is completely dead, the other is fine", which reads as a broken board.
+  It is the first thing to rule out when plugging and unplugging often.
+- **The Mac's system volume sets the signal level directly**: with the same test
+  tone, span is only 1,500-3,200 at volume 44 and 9,000-10,000 at volume 65. Work
+  at 65. (The noise floor of about 1,000 with the strip dark **does not follow
+  the volume**, because it is interference and not signal.)
+- **`mpremote` interrupts `main.py` the moment it connects**: the raw REPL stops
+  the firmware and does not restart it, so reading the ADC over the link and
+  watching how the lights behave cannot be done at the same time. To watch the
+  lights, do not connect; to read numbers, accept that the lights are dead.
+- **Driving a 5 V strip from 3.3 V data was always under the threshold
+  (reversed 2026-07-26)**: the WS2812 high threshold is `0.7 x VDD`, which is
+  **3.5 V** at 5.0 V, and the Pico can only deliver **3.3 V**. The 2026-07-23
+  pass on a direct connection was standing on the edge of a cliff: the TENMA was
+  set to 5 V, delivered slightly less, and landed just under the failure point.
+  Switching to the MT3608, measured at 5.044 V, and adding JST tails failed on
+  the spot, with the symptom being **random, scattered, shifting colours**; even
+  a static pure red looks like a running animation. The fix is a **1N4007 in
+  series with the strip's 5 V feed**, keeping the rail at 5.0 V for the PAM,
+  which turns a margin of -0.2 V into +0.35 V. Diagnostic method: send a single
+  flat colour and judge from that, because under a static image data corruption
+  looks like a deliberate effect.
+- **GP0 is dead and abandoned for good**: when the strip's supply collapsed
+  under current limiting (CC at 2.76 V), GP0's 3.3 V back-fed into the input of
+  a now low-voltage IC, the Pico dropped off and the pin was destroyed. Hence
+  `DATA_PINS=(1,2)` and **330 ohms in series on every DATA line**, which is
+  exactly what that prevents.
+- **This COB reel lights up randomly at full brightness when powered with no
+  valid data** (3.8 A, 19 W, and it heats up while still coiled), so the firmware
+  must refresh continuously from boot, which main.py already does. For a manual
+  single shot on the bench, start the refresh loop first and power the strip
+  second.
+- **The strip has no memory**: the image is lost on a power cut or a collapse
+  and must be resent.
+- **Performance is a hard requirement**: rendering with plain Python floats
+  manages **5.5 fps**, which is the real cause of the stiff, stepped look. An
+  integer heat field, a LUT, `@micropython.native` and pushing only the real
+  strip length give **60 fps at 160 px**. Low brightness also needs a gamma of
+  1.5; at 2.0 the dark end is crushed to two or three code values.
+- When measuring the whole reel, set the TENMA current limit to 2 A or more
+  (0.417 A standby plus the lit current; a 0.5 A limit on the first day started
+  a collapse cascade).
 
-## Tier 2 ADC 分接（Task 2 起，每路）
+## Tier 2 ADC tap (from task 2, per channel)
 ```
-PAM 輸入 header（PAM 之前！絕不碰 BTL 輸出腳——07-13 鐵律）
-   └── C 100nF–1µF 串聯 ──●── GP26/GP27
-                          ├── R1 100k → 3V3
-                          └── R2 100k → GND    （R1=R2，47k–220k 等值對皆可）
+PAM input header (before the PAM; never touch the BTL output pins - the rule since 2026-07-13)
+   +-- C 100nF-1uF in series --*-- GP26/GP27
+                               +-- R1 100k -> 3V3
+                               +-- R2 100k -> GND    (R1 = R2; any matched pair from 47k to 220k works)
 ```
-**Task 2 bench 定案（2026-07-23/24 深夜）**：NOISE_FLOOR＝**500**（底噪 ~250／音樂 ~900–1400）；**min-of-3 連續窗最小值濾波必要**（燈條電流脈衝經共地耦回 ADC → 靜音時竄亮圈；min-of-2 不夠）；**燈條 5V 進線端大電解（100–470µF）必裝**（源頭吸脈衝；插拔要先斷電——帶電插湧浪會讓 Pico 重啟）；耦合電容 10µF 電解可用（負極朝音源側）。驗收：暫停全暗／播放即反應／低音量跟得到／靜音 2 分鐘無竄圈——全 PASS，開機自跑 live 模式驗證 OK。音染 A/B：留 Task 4（PAM 真正上線才測得到）。
-**Unit 1 洞洞板實測（2026-07-26）**：底噪 span **~1000**（麵包板 bench 是 ~250）／440Hz 測試音 **~17900**（兩路一致）→ **訊噪比 18×**，`NOISE_FLOOR` 由 500 提高到 **2000**；live 模式驗收 PASS（播放時亮、停播即暗）。
-- **已知缺陷（待換電容後修）**：分壓中點被拉到 **0.52V**（應為 1.65V）。電流平衡反推＝中點對地有一條 ~22kΩ 的漏電路徑，只在通電時出現 → 10µF 電解漏電（規格 <3µA，實測 ~23µA）。後果＝底噪偏高、訊號向下裕度只剩 0.52V（目前音量 0.90Vpp 恰好未削底）。
-- **診斷血訓**：① 中點電壓一量就知病灶——3.3V＝下臂開路、0V＝上臂開路、1.65V 才正常；② **蜂鳴檔量不出 100k**（>50Ω 一律 OL），量電阻一定要轉 Ω 檔，否則會把正常電路誤判成斷路；③ 虛焊常見於「看起來漂亮但沒吃錫」的冷焊，下臂 100k 就是這樣掉的。
+**Settled on the task 2 bench (late on 2026-07-23/24)**: NOISE_FLOOR = **500**
+(noise floor about 250, music about 900-1400); **the minimum-of-three
+consecutive windows filter is necessary**, because the strip's current pulses
+couple back into the ADC through the shared ground and produce flare-ups in
+silence, and a minimum of two is not enough; **a bulk electrolytic of 100-470 uF
+at the strip's 5 V feed is required**, absorbing the pulses at the source, and
+power must be off when connecting or disconnecting, since a live inrush restarts
+the Pico. A 10 uF electrolytic coupling capacitor works, negative towards the
+source. Acceptance: dark when paused, responds as soon as playback starts,
+follows quiet passages, and no flare-ups over two minutes of silence — all
+passed, and running live mode from boot verified. Colouration A/B is left to
+task 4, when the PAM is really in the path.
+**Unit 1 perfboard measurements (2026-07-26)**: noise floor span **about 1000**
+(the breadboard bench was about 250) and a 440 Hz test tone **about 17900**, the
+same on both channels, so a signal-to-noise ratio of 18x. `NOISE_FLOOR` rose
+from 500 to **2000**, and live mode passed acceptance: lit during playback, dark
+when it stops.
+- **Known defect (to be fixed with a new capacitor)**: the divider midpoint is
+  pulled to **0.52 V** where it should be 1.65 V. Working back from the current
+  balance, there is a leakage path of about 22 kohm from the midpoint to ground
+  that appears only when powered, which is leakage in the 10 uF electrolytic
+  (specified under 3 uA, measured at about 23 uA). The consequences are a raised
+  noise floor and only 0.52 V of downward headroom; at the present level of
+  0.90 Vpp it just avoids clipping.
+- **Diagnostic lessons**: (1) the midpoint voltage names the fault at once:
+  3.3 V means the lower leg is open, 0 V means the upper leg is open, and 1.65 V
+  is correct; (2) **the continuity buzzer cannot measure 100k**, since anything
+  over 50 ohms reads open, so use the resistance range or a healthy circuit will
+  be called broken; (3) dry joints are usually cold joints that look neat but
+  never took solder, which is how the lower 100k was lost.
 
-**Unit 供電（Task 4 施工圖）**：unit 5V 軌（TP4056→MT3608）→ 燈條×2 直上＋大電容；Pico VSYS 經 1N4007；表演中不吃 USB（07-12 接地規則）。餘裕不夠 → 降 MAX_LEVEL。
+**Unit power (task 4 build)**: the unit's 5 V rail (TP4056 to MT3608) feeds both
+strips directly along with the bulk capacitor; the Pico's VSYS goes through a
+1N4007; nothing draws from USB during a performance (the grounding rule of
+2026-07-12). If there is not enough headroom, lower MAX_LEVEL.
 
-## 驗收（plan 各 Task gate）
-- [x] T1 demo 點亮：暖白、彗星向離開 Pico 方向流、呼吸有生命感（Harry 目視，07-26 洞洞板 N=122）
-- [x] T2 live：**開口就反應／流動有生命感／靜音底光穩定 三項全過**（07-26，USB mic → Mac 3.5mm 直通實唱）；音染 A/B 待 PAM 上線後補
-  - 直通測試操作提示：先把 mic 收音調低再唱，否則會回授把 envelope 頂滿（峰值 1.000 飽和），火流速度固定在最大、看不出動態
-- [ ] T3 四段剪裁端接：4/4 walk test 過（長度表：unit A 兩段實測皆 **122px ≈ 763mm**（07-26 色帶尺法：每 100px 換色，數完整色段＋末段比例，比 walk test 快）／其餘兩段＿/＿ mm）
-- [ ] T4 Unit A（Mac-3.5mm 側）穿戴實唱，兩燈獨立
-- [ ] T5 兩 unit 整機穿戴亮（最終 gate）
+## Acceptance (the gate for each task in the plan)
+- [x] T1 demo lit: warm white, a comet travelling away from the Pico, breathing
+      that feels alive (judged by eye, perfboard, N=122, 2026-07-26)
+- [x] T2 live: **responds on opening the mouth, the movement feels alive, and
+      the resting glow is stable in silence — all three passed** (2026-07-26,
+      USB microphone into the Mac, 3.5 mm out, sung live). Colouration A/B waits
+      for the PAM.
+  - Note when testing through the direct path: turn the microphone input down
+    before singing, or feedback pins the envelope at its ceiling (peak 1.000),
+    the fire flow runs at maximum speed and no dynamics are visible.
+- [ ] T3 four cut runs terminated: 4/4 walk test passed (lengths: both runs of
+      unit A measured **122 px, about 763 mm**, using the tape method of
+      2026-07-26, changing colour every 100 px and counting whole colour blocks
+      plus the fraction at the end, which is faster than a walk test; the other
+      two runs are _ / _ mm)
+- [ ] T4 unit A (the Mac 3.5 mm side) worn and sung with, both strips independent
+- [ ] T5 both units worn and lit as a whole instrument (the final gate)

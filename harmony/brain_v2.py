@@ -45,25 +45,33 @@ class BrainV2:
 
     @torch.no_grad()
     def step_anticipate(self, voiced_hint=True):
-        """預感步（任務5，2026-07-26）：不聽這一 tick 他唱什麼，先用腦自己對
-        「他下一顆音」的預報當輸入，提前決定天使的音——天使與他同時落地，
-        而非慢一個 tick（187ms）。狀態不留：context 在回傳前復原，真實 token
-        隨後由 step() 正式寫入（預感錯了不污染記憶）。
+        """Anticipation step (task 5, 2026-07-26). Rather than listening to what
+        the singer sings on this tick, the model's own forecast of their next
+        note is fed in as the input, so the parts decide early and land together
+        with the singer instead of one tick, 187 ms, behind. No state is kept:
+        the context is restored before returning, and the real token is written
+        by step() afterwards, so a wrong anticipation does not pollute the
+        memory.
 
-        定價（peek_probe_v2 實測他的真嗓）：同樂句第二遍 pitch-masked top1
-        ≈40% / top3 ≈70%（G29 的 Bach 基線 11–16%＝亂猜）。G29 的 timing 半
-        仍差，故本法只提前決定「音高」，發聲時機仍由真實 onset 觸發。"""
+        The price, measured with peek_probe_v2 on this singer's own voice: on a
+        second pass through the same phrase, pitch-masked top-1 is about 40% and
+        top-3 about 70%, against the Bach baseline of 11-16% in G29, which is
+        guessing. The timing half of G29 is still poor, so this method decides
+        only the pitch early; the moment of sounding is still triggered by a real
+        onset."""
         if not self.ctx:
             return None
         n0 = len(self.ctx)
-        # 只預測「音高」，不預測「有沒有在唱」：發聲狀態用他當下的真實狀態
-        # （voiced_hint，live 也拿得到，零預測風險）。不遮 REST/HOLD 的話腦
-        # 會一路押 HOLD（G29），天使發聲率從 92% 掉到 42%＝直接閉嘴。
+        # Predict pitch only, never whether the singer is sounding. The
+        # sounding state comes from their real current state (voiced_hint, which
+        # live has too, at no predictive risk). Without masking REST and HOLD
+        # the model bets on HOLD throughout (G29) and the parts' sounding rate
+        # falls from 92% to 42%, which is silence.
         lg = self.logits_next().clone()
         if voiced_hint:
             lg[REST] = float("-inf")
             lg[HOLD] = float("-inf")
-        fore = int(torch.argmax(lg))                      # 他下一顆音的預報
+        fore = int(torch.argmax(lg))                      # the forecast of the singer's next note
         phase = self.tick % 16
         self.ctx.append(fore)
         self.phases.append(phase)

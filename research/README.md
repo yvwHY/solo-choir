@@ -13,4 +13,4 @@ kept because it is the evidence behind the decisions in `docs/`.
 
 These files are deliberately **not** kept working against `config.py`. They ran
 once, against the machine they were written on, and the numbers they produced are
-recorded in `docs/FINDINGS.md` and `docs/worklogs/`.
+recorded in `docs/FINDINGS.md` and `docs/PROCESS.md`.

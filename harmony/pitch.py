@@ -83,7 +83,7 @@ class PitchTracker:
             if len(voiced) >= (self.median + 1) // 2:
                 m = int(round(hz_to_midi(float(np.median(voiced)))))
                 # near-exact octave jump from the last voiced note is almost
-                # always a sub/超harmonic tracking error, not a real leap
+                # always a sub- or super-harmonic tracking error, not a real leap
                 if self.last_voiced is not None:
                     d = m - self.last_voiced
                     if 11 <= abs(d) <= 13:

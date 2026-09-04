@@ -58,7 +58,7 @@ server/        Beatrice wrapper, the 5-part neural engine, the diatonic harmonis
 ui/            The four interface pages (plain HTML/JS/three.js)
 firmware/      MicroPython for the Raspberry Pi Pico: the BLE phrase-end button
 hardware/      Fusion 360 scripts for the wearable mask frame
-docs/          Technical documentation, findings, dead ends, runbook, worklogs
+docs/          Technical documentation, process, findings, dead ends, runbook
 research/      Work that is not part of the performing instrument:
                evaluation scripts, the offline arrange studio, experiment scripts,
                the score-roll web prototype, and the 3D-print batches
@@ -90,7 +90,7 @@ export SOLO_CHOIR_PY_APP=$PWD/.venv-app/bin/python
 $SOLO_CHOIR_PY_APP app/respond_shell.py
 ```
 
-On the machine the piece was built on, `app/開啟應答app.command` is
+On the machine the piece was built on, `app/start-respond-app.command` is
 double-clicked instead. It is a `.command` and not a `.app` deliberately: the
 terminal window has to stay open, because Ctrl-C is the recovery path during a
 performance and the start-up self-check prints there, and because macOS
@@ -122,17 +122,19 @@ they contain no voice data.
 |---|---|
 | [`docs/SOLO_CHOIR_TECH_DOC.md`](docs/SOLO_CHOIR_TECH_DOC.md) | Architecture, data flow, design decisions, the AI-assisted process |
 | [`docs/SOLO_CHOIR_RESEARCH_VISION.md`](docs/SOLO_CHOIR_RESEARCH_VISION.md) | The research framing: the body as an interface |
-| [`docs/VIVA_RUNBOOK.md`](docs/VIVA_RUNBOOK.md) | The frozen performance configuration and pre-show check (Chinese) |
+| [`docs/PROCESS.md`](docs/PROCESS.md) | How it was built, June to August 2026, in eight phases |
+| [`docs/VIVA_RUNBOOK.md`](docs/VIVA_RUNBOOK.md) | The frozen performance configuration, flag by flag, and the pre-show check |
 | [`docs/FINDINGS.md`](docs/FINDINGS.md) | Measured numbers: latency, glide, decorrelation, RTF |
 | [`docs/GRAVEYARD.md`](docs/GRAVEYARD.md) | Approaches that were tried and died, with root causes |
 | [`docs/DEBUG_PLAYBOOK.md`](docs/DEBUG_PLAYBOOK.md) | Diagnosed live-audio symptoms |
 | [`docs/TRAINING_NOTES.md`](docs/TRAINING_NOTES.md) | Voice-model training: data, steps, experiments |
 | [`docs/HARDWARE_ROADMAP.md`](docs/HARDWARE_ROADMAP.md) | The wearable: bone conduction, haptics, components |
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | How audio-path changes were proved not to change the sound |
-| [`docs/worklogs/`](docs/worklogs) | 53 dated development logs, June–August 2026 |
+| [`docs/UI_BUILD_SPEC.md`](docs/UI_BUILD_SPEC.md) | The interface build spec of June 2026, and what shipped instead |
 
-Some documents are in Chinese; they were written as working notes. The technical
-documentation, research framing, findings and dead-end registry are in English.
+The development was logged daily in Chinese working notes; those 53 logs and the
+rolling status file are condensed into [`docs/PROCESS.md`](docs/PROCESS.md) and
+kept in the development repository rather than here.
 
 ## Attribution and licence
 

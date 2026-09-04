@@ -1,23 +1,35 @@
-# main.py — Solo Choir 實體鍵（應答式「換你」鍵）韌體
+# main.py - Solo Choir physical button ("your turn" key for the answering mode)
 #
-# 角色：身上一顆 momentary 按鈕 → UDP 廣播給 Mac。控制平面，不碰音訊。
+# Role: one momentary button on the body, broadcast to the Mac over UDP. This is
+# the control plane and never touches audio.
 #
-# 為什麼要它（08-01）：應答式 v2 的句尾偵測是純能量判斷，兩個弱點——
-#   ① 必須等滿 0.35s 靜默才知道你停了（延遲的下限）
-#   ② 天使聲音經身體/空氣回到麥克風，實測 p90 0.016 已逼近 gate 0.02（只剩
-#      2dB 餘裕）；展場音量再大就會誤判成「他還在唱」，回應永遠不觸發
-# 實體鍵對兩者免疫，且延遲 ~6ms（OLED 線實測 ping）。能量偵測留作 fallback。
+# Why it exists (2026-08-01): phrase-end detection in the answering mode v2 is
+# energy-only, which has two weaknesses.
+#   1. It has to wait a full 0.35 s of silence to know the singer has stopped,
+#      which is a floor on the latency.
+#   2. The choir returns to the microphone through the body and the air; the
+#      measured p90 of 0.016 is already close to the gate at 0.02, leaving about
+#      2 dB of margin. Any louder in the room and it reads as "still singing",
+#      so the response never triggers.
+# A physical button is immune to both, at about 6 ms of latency (pinged on the
+# OLED line). Energy detection stays as the fallback.
 #
-# 硬體：按鈕一腳 GP15、另一腳 GND（內部上拉，按下＝0）。無需其他零件。
-#   （沿用 firmware/pico_w/pico_w_solo_choir.py 的接法；該檔是 HTTP 版骨架，
-#    本檔改 UDP＝免 TCP 握手、不阻塞，並實作 STATE 掛著的「雙模開機」待辦。）
+# Hardware: one leg of the button to GP15, the other to GND, with the internal
+# pull-up, so pressed reads 0. No other parts are needed.
+#   (Same wiring as firmware/pico_w/pico_w_solo_choir.py, which is the HTTP
+#    skeleton. This file uses UDP instead: no TCP handshake, non-blocking, and it
+#    implements the dual-mode boot left open in STATE.)
 #
-# 網路：先試 STA（器材室 Slate AX 之類的路由器），連不上就自建 AP
-#   `SoloChoir` 192.168.4.1（＝ OLED 線 07-17 驗過的組態，Mac 加入該 AP）。
-#   兩種模式都走 UDP 廣播 → Mac 端不必知道對方 IP、換場地免改設定。
+# Network: try STA first, against a router such as the Slate AX in the
+#   equipment room; if that fails, raise an access point `SoloChoir` at
+#   192.168.4.1, the configuration verified on the OLED line on 2026-07-17, and
+#   the Mac joins it. Both modes broadcast over UDP, so the Mac never needs the
+#   other side's IP and a change of venue needs no reconfiguration.
 #
-# 可靠度：UDP 會掉包 → 每次按下連送 3 封（間隔 10ms）帶遞增序號，Mac 端以
-#   序號去重。另每 2s 送一次 heartbeat＝Mac 端可顯示連線狀態（上台前確認）。
+# Reliability: UDP drops packets, so each press sends three datagrams 10 ms
+#   apart carrying a rising sequence number, which the Mac de-duplicates. A
+#   heartbeat every 2 s lets the Mac show the connection state, which is checked
+#   before going on stage.
 
 import network
 import socket
@@ -25,23 +37,24 @@ import time
 
 from machine import Pin
 
-STA_SSID, STA_PASS = "", ""          # 填了才會試 STA；留空＝直接開 AP
-AP_SSID, AP_PASS = "SoloChoir", "solochoir"   # AP 模式（Mac 加入這個網路）
+STA_SSID, STA_PASS = "", ""          # STA is tried only when filled in; empty means go straight to AP
+AP_SSID, AP_PASS = "SoloChoir", "solochoir"   # AP mode: the Mac joins this network
 PORT = 8766
 DEBOUNCE_MS = 200
 HEARTBEAT_S = 2.0
 
-button = Pin(15, Pin.IN, Pin.PULL_UP)   # 按下＝接地＝0
+button = Pin(15, Pin.IN, Pin.PULL_UP)   # pressed = grounded = 0
 led = Pin("LED", Pin.OUT)
 
 
 def net_up():
-    """雙模：STA 連得上就用，否則自建 AP。回傳廣播位址。"""
+    """Dual mode: use STA if it connects, otherwise raise an AP. Returns the
+    broadcast address."""
     if STA_SSID:
         w = network.WLAN(network.STA_IF)
         w.active(True)
         w.connect(STA_SSID, STA_PASS)
-        for _ in range(60):             # 最多等 6s
+        for _ in range(60):             # wait at most 6 s
             if w.isconnected():
                 ip, _, _, _ = w.ifconfig()
                 print("STA ok:", ip)
@@ -50,13 +63,13 @@ def net_up():
             led.toggle()
             time.sleep(0.1)
         w.active(False)
-        print("STA 失敗 → 退回 AP")
+        print("STA failed, falling back to AP")
     ap = network.WLAN(network.AP_IF)
     ap.config(essid=AP_SSID, password=AP_PASS)
     ap.active(True)
     while not ap.active():
         time.sleep(0.1)
-    print("AP ok:", ap.ifconfig()[0], "(Mac 請加入", AP_SSID, ")")
+    print("AP ok:", ap.ifconfig()[0], "(join", AP_SSID, "on the Mac)")
     led.on()
     return "192.168.4.255"
 
@@ -68,9 +81,9 @@ def main():
     seq, last, t_hb = 0, 1, time.ticks_ms()
     while True:
         v = button.value()
-        if last == 1 and v == 0:                  # 按下緣（active-low）
+        if last == 1 and v == 0:                  # falling edge, active low
             seq += 1
-            for _ in range(3):                    # 冗餘送 3 封抗掉包
+            for _ in range(3):                    # three redundant datagrams against packet loss
                 s.sendto(b"TAP %d" % seq, (bcast, PORT))
                 time.sleep_ms(10)
             led.off()

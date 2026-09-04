@@ -1,11 +1,16 @@
-# firmware/pico_led_button/main.py — 火流 v5.1 ＋ 實體鍵 USB serial（08-05 合併）
+# firmware/pico_led_button/main.py - fire flow v5.1 plus the physical button over
+# USB serial, merged 2026-08-05
 #
-# 08-04 按鈕韌體（pico_button/main_usb.py）寫入時蓋掉了火流（pico_led/main.py）
-# ＝unit 燈條全黑。腳位本就不衝突（燈條 GP1/GP2＋ADC26/27；按鈕 GP15），
-# 合併成一份：同一顆 Pico 供按鈕（TAP/HB 協定不變，tap_listen.py 直接吃）
-# ＋兩條 wire-light。按鈕去彈跳改**非阻塞**（原版 sleep_ms(200) 會凍住火流）。
-# 火流本體與參數逐行照抄 pico_led/main.py v5.1（07-23 bench 定稿）——改的只有
-# 迴圈裡插的按鈕/心跳兩段。
+# Flashing the button firmware (pico_button/main_usb.py) on 2026-08-04
+# overwrote the fire flow (pico_led/main.py), which left the unit's strips dark.
+# The pins never clashed (strips on GP1/GP2 with ADC26/27, button on GP15), so
+# the two are merged into one file: the same Pico serves the button, with the
+# TAP/HB protocol unchanged so tap_listen.py reads it directly, and both
+# wire-lights. Button debouncing is now non-blocking; the original
+# sleep_ms(200) froze the fire flow.
+# The fire flow itself and its parameters are copied line for line from
+# pico_led/main.py v5.1, settled on the 2026-07-23 bench. The only changes are
+# the button and heartbeat sections inserted into the loop.
 import math
 import random
 import time
@@ -14,9 +19,10 @@ import micropython
 import neopixel
 from machine import ADC, Pin
 
-MODE = "live"        # "live"=ADC envelope 驅動（正式）/ "demo"=自跑火流
+MODE = "live"        # "live" = driven by the ADC envelope (the real one),
+                     # "demo" = self-running
 N = (122, 122)
-DATA_PINS = (1, 2)   # GP0 陣亡，勿用
+DATA_PINS = (1, 2)   # GP0 is dead; do not use
 ADC_CH = (0, 1)
 MAX_LEVEL = 0.30
 WARM = (255, 120, 30)
@@ -24,8 +30,9 @@ GAMMA = 1.5
 DECAY = 1.30
 SPEED_MIN, SPEED_MAX = 100.0, 170.0
 SPAWN_MIN, SPAWN_MAX = 0.15, 0.90
-NOISE_FLOOR = 2500   # 08-05 Harry 要更靈敏：3000→2500（實測雜訊爆發 ~2100
-                     # ＝仍有 400 餘裕；再低就會自燃，見 07-29 紀錄）
+NOISE_FLOOR = 2500   # made more sensitive on 2026-08-05, 3000 to 2500. Measured
+                     # noise bursts reach about 2100, leaving 400 of margin; any
+                     # lower and it self-ignites, see the 2026-07-29 notes.
 COUPLING = 4300
 
 DEBOUNCE_MS = 200
@@ -117,7 +124,7 @@ class Strip:
 
 button = Pin(15, Pin.IN, Pin.PULL_UP)
 led = Pin("LED", Pin.OUT)
-led.on()                                  # 上電恆亮＝活著
+led.on()                                  # steady on from power-up means alive
 
 strips = [Strip(p, n) for p, n in zip(DATA_PINS, N)]
 envs = [Envelope(c) for c in ADC_CH]
@@ -127,8 +134,9 @@ demo_t = 0.0
 
 seq, last = 0, 1
 t_hb = time.ticks_ms()
-t_tap = 0                                 # 非阻塞去彈跳：上次按下時刻
-led_off_at = 0                            # 板載燈按下熄 0.2s（非阻塞）
+t_tap = 0                                 # non-blocking debounce: time of the last press
+led_off_at = 0                            # the on-board LED goes out for 0.2 s on a press,
+                                          # without blocking
 
 while True:
     now = time.ticks_ms()

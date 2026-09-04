@@ -1,12 +1,18 @@
-# firmware/pico_led/main.py — wire-light v5.1「火流」: 能量從盒端流向發聲體
-# Pico W / MicroPython v1.28。開機自跑。
-# 效果＝火焰式推進（隨機濺入→定向推進→衰減），2026-07-23 bench 定稿。
-# 效能結構是硬要求（Pico 純 Python 浮點只有 5.5fps）：整數熱場 bytearray
-# ＋ gamma LUT ＋ @micropython.native ＋ 只推實際段長的緩衝 → 60fps@160px。
+# firmware/pico_led/main.py - wire-light v5.1, "fire flow": energy travels from
+# the box towards the sounding body
+# Pico W / MicroPython v1.28. Runs on boot.
+# The effect is a flame-like advance: random spawn, directed advance, decay.
+# Settled on the bench, 2026-07-23.
+# The performance structure is a hard requirement: plain Python floats on the
+# Pico manage only 5.5 fps. An integer heat field in a bytearray, a gamma LUT,
+# @micropython.native and a buffer only as long as the real strip give
+# 60 fps at 160 px.
 #
-# Strip A: DATA=GP1, env=ADC0(GP26)=PAM-in L 分接
-# Strip B: DATA=GP2, env=ADC1(GP27)=PAM-in R 分接
-# GP0 於 07-23 bench 被燈條垮壓倒灌打死——永久棄用；DATA 一律串 330Ω 保護。
+# Strip A: DATA=GP1, env=ADC0(GP26), tapped from PAM-in L
+# Strip B: DATA=GP2, env=ADC1(GP27), tapped from PAM-in R
+# GP0 was killed on the 2026-07-23 bench by a back-feed when the strip's supply
+# collapsed; it is abandoned for good. Every DATA line carries a 330 ohm series
+# resistor.
 import math
 import random
 import time
@@ -15,29 +21,51 @@ import micropython
 import neopixel
 from machine import ADC, Pin
 
-MODE = "live"        # "live"=ADC envelope 驅動（正式）/ "demo"=自跑火流（bring-up／拍攝 fallback）
-N = (122, 122)       # 每條可定址像素數（實測 160/m；07-26 色帶尺實測兩段皆 122px ≈ 76cm）
-DATA_PINS = (1, 2)   # GP0 陣亡，勿用
+MODE = "live"        # "live" = driven by the ADC envelope (the real one),
+                     # "demo" = self-running, for bring-up and as a filming fallback
+N = (122, 122)       # addressable pixels per strip; measured 160/m, and on
+                     # 2026-07-26 both runs measured 122 px, about 76 cm
+DATA_PINS = (1, 2)   # GP0 is dead; do not use
 ADC_CH = (0, 1)      # ADC0=GP26, ADC1=GP27
-MAX_LEVEL = 0.30     # 亮度上限（07-29 unit2 實測目判：0.45 太亮收斂到 0.30）
-WARM = (255, 120, 30)   # 暖白
+MAX_LEVEL = 0.30     # brightness ceiling; judged by eye on unit 2, 2026-07-29,
+                     # where 0.45 was too bright and it settled at 0.30
+WARM = (255, 120, 30)   # warm white
 GAMMA = 1.5
-DECAY = 1.30         # 熱場衰減率 /s（07-27：0.55 收聲要 8s 才暗，太拖）
-SPEED_MIN, SPEED_MAX = 100.0, 170.0  # 推進速度 px/s（07-29：60 時連音的火包停在頭段像每顆音重跑，抬到 100 低 env 也持續行進）
-SPAWN_MIN, SPAWN_MAX = 0.15, 0.90    # 濺入機率 /frame（env 0→1）
-NOISE_FLOOR = 3000   # ADC 峰對峰低於此視為靜音（07-29 unit2：邊緣爆發 ~2100 擦 2000 舊門檻，抬到 3000；真唱歌 span 19k+ 餘裕大）
-COUPLING = 4300      # 燈全亮時自己灌進 ADC 的雜訊量，依 env 等比扣除
-# ── 燈條自我耦合的補償（2026-07-27）──────────────────────────────
-# 實測可重現：燈全黑底噪 ~1000、燈全亮 ~5300（黑→亮→黑回到原值）。燈條 PWM 電流
-# 脈衝經共地耦回 ADC。單一固定門檻會自鎖（燈亮→底噪破門檻→判定有聲→燈續亮，
-# 音停也不熄）；改用高低兩段遲滯則會在中等音量振盪、反應變鈍（Harry 07-27 耳判）。
-# 這裡改成「扣掉」而不是「躲開」：耦合量正比於燈亮度，而 env 就是亮度，所以
-#   真實訊號 = span − COUPLING × env
-# 燈暗不扣（全靈敏度），燈全亮剛好抵消它自己造的雜訊 → 門檻可維持在低點 2000，
-# 不需遲滯、沒有振盪、任何 Mac 音量下都成立。
-# （麵包板 Task 2 沒發作＝當時 1 條燈、1 路分接、燈條直吃低阻抗軌；07-26 為修資料
-#  誤碼加的 1N4007 在供電路徑上加了阻抗，脈衝才變成電壓波動。根治仍在硬體：
-#  大電解要在 1N4007 之後的燈條側，必要時加大到 470µF，屆時 COUPLING 要重量。）
+DECAY = 1.30         # heat-field decay per second; at 0.55 on 2026-07-27 it took
+                     # 8 s to go dark after the sound stopped, which dragged
+SPEED_MIN, SPEED_MAX = 100.0, 170.0  # advance speed in px/s; at 60 on 2026-07-29 the flame
+                     # packets of a legato line stalled near the start and looked
+                     # restarted on every note, so 100 keeps them moving even at
+                     # a low envelope
+SPAWN_MIN, SPAWN_MAX = 0.15, 0.90    # spawn probability per frame, for envelope 0 to 1
+NOISE_FLOOR = 3000   # peak-to-peak ADC below this counts as silence; on unit 2,
+                     # 2026-07-29, edge bursts of about 2100 grazed the old 2000
+                     # threshold, so it rose to 3000. Real singing spans 19k and
+                     # more, with plenty of margin
+COUPLING = 4300      # the noise the strip injects into the ADC at full
+                     # brightness, subtracted in proportion to the envelope
+# -- compensating the strip's self-coupling (2026-07-27) ----------------------
+# Reproducible measurement: the noise floor is about 1000 with the strip dark
+# and about 5300 with it fully lit, and returns to the first value when it goes
+# dark again. The strip's PWM current pulses couple back into the ADC through
+# the shared ground. A single fixed threshold latches: the strip lights, the
+# floor crosses the threshold, that reads as sound, the strip stays lit, and it
+# does not go dark when the sound stops. Two-level hysteresis instead
+# oscillates at middling levels and dulls the response, judged by ear on
+# 2026-07-27.
+# This subtracts the coupling rather than avoiding it. The coupled amount is
+# proportional to the brightness, and the envelope is the brightness, so
+#   real signal = span - COUPLING * envelope
+# Nothing is subtracted while the strip is dark, which keeps full sensitivity,
+# and at full brightness it exactly cancels the noise the strip makes, so the
+# threshold can stay low at 2000, with no hysteresis, no oscillation, and it
+# holds at any Mac output level.
+# (It did not appear in breadboard task 2, which had one strip, one tap and the
+#  strip drawing straight from a low-impedance rail. The 1N4007 added on
+#  2026-07-26 to fix data corruption put impedance in the supply path, which is
+#  what turned the pulses into voltage swings. The real cure is still hardware:
+#  the bulk electrolytic belongs on the strip side of the 1N4007, raised to
+#  470 uF if necessary, and COUPLING must then be measured again.)
 
 _lutR = bytearray(256)
 _lutG = bytearray(256)
@@ -51,7 +79,8 @@ for _h in range(256):
 
 @micropython.native
 def _step(heat, buf, decay_k, shifts, n, lutR, lutG, lutB):
-    """衰減 → 推進 → 熱場經 LUT 寫入 neopixel 緩衝（GRB 傳輸序）。"""
+    """Decay, advance, then write the heat field through the LUT into the
+    neopixel buffer, in GRB transmission order."""
     for i in range(n):
         heat[i] = (heat[i] * decay_k) >> 8
     for _ in range(shifts):
@@ -68,9 +97,12 @@ def _step(heat, buf, decay_k, shifts, n, lutR, lutG, lutB):
 
 
 class Envelope:
-    """峰對峰＋自適應峰值正規化；量 (max-min) → 對偏壓中點誤差免疫。快攻慢放。
-    min-of-3 連續窗最小值＝尖峰濾波（07-23 bench：燈條電流脈衝經共地耦回 ADC，
-    單發＋兩窗寬的爆發都擋掉；攻擊延遲 +2 幀無感）。"""
+    """Peak-to-peak with adaptive peak normalisation. Measuring (max - min) is
+    immune to bias-point error. Fast attack, slow release.
+    The minimum of three consecutive windows is a spike filter: on the
+    2026-07-23 bench the strip's current pulses coupled back into the ADC
+    through the shared ground, and this rejects both single events and bursts
+    two windows wide. The two extra frames of attack delay are imperceptible."""
 
     def __init__(self, ch):
         self.adc = ADC(ch)
@@ -96,7 +128,7 @@ class Envelope:
             span = self.s2
         self.s2 = self.s1
         self.s1 = s0
-        span -= int(COUPLING * self.env)   # 扣掉燈條自己灌進來的雜訊
+        span -= int(COUPLING * self.env)   # subtract the noise the strip injects into itself
         if span < NOISE_FLOOR:
             span = 0
         self.peak = max(span, self.peak * 0.9995, 2000.0)
@@ -107,7 +139,9 @@ class Envelope:
 
 class Strip:
     def __init__(self, pin, n):
-        # 上電先把可能殘留亂態的整卷/長段刷黑，再換實際段長的短緩衝（write 時間省一半以上）
+        # Clear the whole reel, or a long run, at power-up in case it holds a
+        # random state, then switch to a buffer the length of the real strip,
+        # which more than halves the write time.
         full = neopixel.NeoPixel(Pin(pin), 800)
         full.fill((0, 0, 0))
         full.write()
@@ -144,7 +178,7 @@ while True:
     for k, s in enumerate(strips):
         if MODE == "live":
             e = envs[k].read()
-        else:  # 兩層不成整數比的正弦假 envelope，相位錯開
+        else:  # a fake envelope from two sines in a non-integer ratio, out of phase
             e = 0.35 + 0.35 * math.sin(demo_t * 0.9 + k * 1.7) \
                 + 0.25 * math.sin(demo_t * 2.7 + 1.3 + k * 0.8)
             e = min(1.0, max(0.0, e))

@@ -4,7 +4,7 @@ A real-time instrument that turns one singer into a choir: live voice → neural
 
 ## Reference docs — read on demand (not loaded by default)
 When a task touches one of these areas, read the matching doc FIRST:
-- **Where is the project now / what's next → `docs/STATE.md`** (single source of truth; this file carries no state)
+- **How the project got here → `docs/PROCESS.md`** (the rolling state file was a working note and stayed in the development repository)
 - **About to run the show / need the frozen launch config, the pre-show self-check, or the gate fallback → `docs/VIVA_RUNBOOK.md`** (the one page that goes on stage; on conflict it and `git log` beat STATE)
 - **About to try a new approach (streaming/pitch/ensemble/timbre/transcription/hardware) → `docs/GRAVEYARD.md`** (dead ends with root causes — never re-run them)
 - **Validated numbers & recipes (glide, latency, decorrelation, RTF, wiring) → `docs/FINDINGS.md`**
@@ -24,7 +24,7 @@ When a task touches one of these areas, read the matching doc FIRST:
 4. **Small steps, human review, commit checkpoints.** Do one bounded step, then stop for the human to verify by ear/eye. Commit working states before starting the next step so anything is reversible.
 
 ## Architecture (one paragraph)
-Three layers with the audio path separated from control/telemetry. The **engine** runs as a subprocess and owns all live audio (mic → Beatrice conversion → diatonic harmony → output). The **bridge** (pywebview js_api) carries only telemetry (engine stdout → UI) and control (UI → engine stdin) — **audio never goes through the bridge**. The **UI** is a native macOS window via a pywebview shell. There are now **three apps** sharing this pattern (launch commands + status in `docs/STATE.md`): the original live app (`app/shell.py`), the current 5-part live app **solo_min** (`app/solo_shell.py`), and the offline arrange **studio** (`studio/shell.py`).
+Three layers with the audio path separated from control/telemetry. The **engine** runs as a subprocess and owns all live audio (mic → Beatrice conversion → diatonic harmony → output). The **bridge** (pywebview js_api) carries only telemetry (engine stdout → UI) and control (UI → engine stdin) — **audio never goes through the bridge**. The **UI** is a native macOS window via a pywebview shell. There are now **three apps** sharing this pattern (launch commands in `docs/VIVA_RUNBOOK.md`): the original live app (`app/shell.py`), the current 5-part live app **solo_min** (`app/solo_shell.py`), and the offline arrange **studio** (`studio/shell.py`).
 
 ## Key paths
 - Live engines: `server/beatrice_solo_choir_live.py` (original harness; has `--render`) · `server/solo_min.py` (current 5-part live)
@@ -44,7 +44,7 @@ Three layers with the audio path separated from control/telemetry. The **engine*
 - Control (UI→engine): `convert, key, scale, intervals, harmonize, pitch, gain, gate, you`
 
 ## Current state & next steps
-**This file deliberately carries no state — it rots.** Read `docs/STATE.md` (single source of truth: the three apps, status per track, priority order, standing user preferences). Keep it fresh via the `sync-state` skill after every commit checkpoint. If STATE.md and `git log` disagree, trust `git log` and fix STATE.md.
+**This file deliberately carries no state — it rots.** Read `docs/PROCESS.md` (how the project got here, phase by phase: the three apps, what was tried, standing user preferences). Keep it fresh via the `sync-state` skill after every commit checkpoint. If STATE.md and `git log` disagree, trust `git log` and fix STATE.md.
 
 Two standing display-honesty rules (behaviour, not state): the pitch slider shows the *applied* offset (0 means 0; never fake it), and per-voice octave/interval offsets are shown truthfully — the tenor's low character is the model's natural range, not an applied shift.
 
@@ -65,7 +65,7 @@ Project-discipline skills (thin triggers; the knowledge bodies live in `docs/` s
 - `graveyard` — BEFORE trying a new approach: check the dead-ends registry; AFTER an approach dies: register it.
 - `audio-verify` — editing audio-path code: declare Regime A/B/C and prove it (`VERIFICATION.md`).
 - `live-audio-debug` — any live-audio symptom: look up the diagnosed table first (`DEBUG_PLAYBOOK.md`).
-- `sync-state` — after commit checkpoints / session end: update `STATE.md` + worklog.
+- `sync-state` — after commit checkpoints / session end: update the state file and the worklog (both kept in the development repository).
 
 General workflow skills:
 - `/grill-me` (→ `grilling`) — relentless one-question-at-a-time interview to stress-test a plan before building.

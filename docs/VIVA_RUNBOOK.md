@@ -1,86 +1,129 @@
-# VIVA RUNBOOK — 帶上台的那張紙
+# RUNBOOK — the page taken to the performance
 
-**viva 2026-08-26。** 這份是操作文件，不是紀錄：每個數字都從碼或實測來，來源標在括號裡。與 STATE 衝突時**以本檔與 `git log` 為準**（STATE 的舊 Last-updated 段已有兩處過時，見文末「已知過時」）。
+Written for the viva of 2026-08-26. This is an operating document, not a record.
+Every number in it comes from the code or from a measurement, and the source is
+named in brackets. Where it disagrees with any other document, this file and
+`git log` win.
 
 ---
 
-## 0. 一句話
+## 0. In one line
 
-**上台開 app，不跑 CLI。**
+**Open the application on stage. Do not run the command line.**
 
-**開法一（08-21 起的預設）：桌面上的 `開啟應答app` 點兩下。** 本尊是
-`app/開啟應答app.command`（桌面放替身）。它自己 `cd` 到 repo、用 vcclient-dev 的直譯器開 app，
-並**先做第 1 節的清場**（列出殘留 → 按 Enter 送 `kill -INT` → 驗到 `pgrep` 為空才開新的；
-關不掉就印現成的 `kill -9 <pid>`）。開起來的終端機視窗**不要關**——第 3 節必看的啟動訊息印在那裡，
-救場的 Ctrl-C 也按在那裡。
-> **不要把它改成 .app 圖示。** 沒有終端機視窗＝Ctrl-C 救場按不到、`[gate] sing model loaded` 看不到；
-> 而且麥克風／攝影機權限是跟著 Terminal.app 走的，新做的 .app 會被 macOS 當陌生程式，展場當天跳權限視窗。
+**Normal launch:** double-click `app/start-respond-app.command` (an alias sits on
+the desktop). It changes directory to the repository, opens the application with
+the right interpreter, and **runs the clear-down of section 1 first**: it lists
+anything left running, waits for Enter, sends `kill -INT`, and only opens a new
+instance once `pgrep` comes back empty; if something will not close it prints a
+ready-made `kill -9 <pid>`.
 
-**開法二（等價，啟動器壞了才用）：**
+**Leave the terminal window open.** The start-up lines of section 3 are printed
+there, and the rescue Ctrl-C is pressed there.
+
+> **Do not turn it into a `.app` icon.** With no terminal window there is nowhere
+> to press Ctrl-C and no way to see `[gate] sing model loaded`; and the
+> microphone and camera permissions belong to Terminal.app, so a freshly built
+> `.app` is an unknown program to macOS and will raise a permission dialogue on
+> the day.
+
+**Equivalent launch, only if the launcher is broken:**
 
 ```
-cd /Users/liaoyu-ting/Documents/GS/CA_Term2/FinalProject/SoloChoirCode/260615/voice-changer
-python app/respond_shell.py          # conda env vcclient-dev
+cd <repo>
+python app/respond_shell.py          # the vcclient-dev environment
 ```
 
-app 的 `_spawn_bank` / `_spawn_solo` 裡寫死的就是凍結配置（`34e137ed` 已證明 app 送的 argv 餵離線台架與排練 CLI **max-abs-diff 0.0**＝排練與上台是同一台機器）。第 2 節的 CLI 指令**只在 app 起不來時用**。
+The frozen configuration is written into the application's `_spawn_bank` and
+`_spawn_solo`. Commit `34e137ed` showed that the argv the application sends,
+fed to the offline bench, matches the rehearsal command line with a max
+absolute difference of 0.0, that is, rehearsing and performing are the same
+instrument. The command lines in section 2 are for when the application will not
+start.
 
 ---
 
-## 1. 開場自檢八步（上台前 5 分鐘；第 7 步布展時先做一次）
+## 1. Eight-step check before performing
 
-| # | 做什麼 | 過關標準 |
+Allow five minutes. Step 7 is also done once while installing.
+
+| # | Do | Pass condition |
 |---|---|---|
-| 1 | **清場**　`pgrep -fl "bank_live\|solo_min\|respond_shell"` | **輸出為空**。有殘留就 `kill -INT <pid>`，等它寫完 dump 再確認一次為空 |
-| 2 | **開 app、按 Start，盯啟動訊息** | 第 3 節那幾行**全部**出現，尤其 `[gate] sing model loaded` |
-| 3 | **門控活著**（08-25 改寫：鏡頭那條 08-18 就退役了，舊寫法照著做會找不到畫面）：Start 之後看畫面**右上角的讀數列**，**出聲三秒、再安靜三秒** | 讀數列長這樣：`pitch … · gate open · xrun 0`。**出聲時 `gate` 是 `open`，安靜三秒後變 `closed`**。⚠ 08-18 起門的依據是**麥克風**、不是鏡頭（凍結配置帶 `--mouth 0`＝鏡頭整條退役，連 mediapipe 執行緒都不起）——所以**這一步不要對鏡頭做嘴型，要真的發出聲音**。舊版那個唇圈綠框／紅框的畫面**已經不存在**，CLI 的 `--view 1` 也救不回來（`--mouth 0` 之下沒有鏡頭可看）。引擎的狀態列欄名仍叫 `mouth`，app 畫面照實改叫 `gate`，同一件事 |
-| 4 | **PA 音量閉嘴 15 秒** | 合唱團要**安靜下來**。持續有聲＝回授或門控誤觸，當場把 PA 音量壓下去（見第 5 節備案） |
-| 5 | **練一次 20 秒重開救場** | Ctrl-C → 等它印完收場 → 重新 Start → 再次確認第 3 節那幾行。**計時**，知道救場要多久 |
-| 6 | **分聲道欄位填滿**（要把聲部分到 unit1／unit2 才需要）：在**當前模式**的 map 欄把格子全部選定 —— bank 模式＝`B·T·A·S` 四格；solo／respond 模式＝`D·U·L(·S)` | **沒選滿＝安靜退回原本的左右分配**：程式判斷欄位為空就整個不帶 `--out-map`，**不報錯、不印警告行、狀態列也不掛任何提示**（`app/respond_shell.py:427-432` bank／`:537-542` solo／`:597-598` respond）。所以這一步只能用眼睛確認欄位有值，沒有別的驗證管道。填好後**要重按 Start 或切換模式才生效**（引擎只在啟動時讀） |
-| 7 | **展場螢幕三件事**（08-20 新增）。①**禁休眠**〔布展時一次〕：系統設定 → 鎖定畫面 → 「不活動時啟動螢幕保護程式」與「使用電源轉接器時…關閉顯示器」兩項都設 **永不**。②**app 全螢幕**〔每次開 app 都要〕：Start 之後按 **⌃⌘F**（視窗預設只有 760×640，`app/respond_shell.py:933-935`）。③**螢幕朝向觀眾**〔布展時一次〕：筆電轉到觀眾站的那一側 | 畫面上只有 app，看不到桌面和選單列；**離開 10 分鐘回來畫面還亮著**。⚠ 這一步是螢幕的功能定位決定的：**筆電畫面就是模式指示器**（觀眾靠說明卡的 1–4 換模式，靠這塊畫面確認自己現在在哪個模式），所以它不能睡、不能被桌面蓋掉。08-20 布展照片裡它正在跑風景照＋時鐘＝已經睡著，展場開四小時一定會再發生 |
-| 8 | **實體鍵連上**（08-25 新增；**只有 Respond 模式要**）：選 Respond、按 Start，看畫面**下方那顆膠囊** | 膠囊寫 **`BUTTON · end phrase`** ＝鍵連上了。寫 `SPACE` ＝**藍牙鍵沒連上**——那顆鍵是藍牙的，會**安靜地**連不上（不報錯、不警告）。沒連上的後果：觀眾按鍵沒反應，每句只能等 1.2 秒靜音自動斷句，看起來像 app 當了。處理：確認鍵有電、Mac 藍牙開著，重開 app 等它連（訊息區會印 `connected (BLE key)`）。⚠ 別拿引擎那句 `listening on UDP (app space key)` 當「沒有實體鍵」——藍牙鍵**本來就走那條路**，那句講的是引擎在聽哪個埠 |
+| 1 | **Clear down.** `pgrep -fl "bank_live\|solo_min\|respond_shell"` | **Empty output.** If anything is left, `kill -INT <pid>`, let it finish writing its dump, and check again |
+| 2 | **Open the application, press Start, watch the start-up lines** | **All** the lines of section 3 appear, above all `[gate] sing model loaded` |
+| 3 | **The gate is alive.** After Start, watch the readings along the top right of the window: **make sound for three seconds, then be silent for three** | The row reads `pitch … · gate open · xrun 0`. **`gate` is `open` while sounding and turns `closed` after three seconds of silence.** Since 2026-08-18 the gate is driven by **the microphone, not the camera** (the frozen configuration carries `--mouth 0`, so the camera is retired entirely and the mediapipe thread never starts) — so **do not mime at the camera, actually sing**. The old lip-ring view no longer exists and `--view 1` cannot bring it back. The engine's status column is still called `mouth` and the window calls it `gate`; they are the same thing |
+| 4 | **PA level, fifteen seconds of silence** | The choir must **fall silent**. Continued sound means feedback or a false gate open: pull the PA level down on the spot (section 5) |
+| 5 | **Rehearse a twenty-second restart.** Ctrl-C, wait for it to finish printing, Start again, confirm the lines of section 3 | **Time it**, so the recovery time is known |
+| 6 | **Fill in the routing fields** (only needed to send parts to separate units): in the map row of **the current mode**, set every cell — four cells `B·T·A·S` in bank mode, `D·U·L(·S)` in solo and respond modes | **An incomplete row silently falls back to the ordinary left-right split**: the code treats an empty field as "no `--out-map` at all", with **no error, no warning line and no indicator** (`app/respond_shell.py:427-432` bank, `:537-542` solo, `:597-598` respond). This step can only be confirmed by eye. After filling it in, **press Start again or switch mode**, since the engine reads the map only at start-up |
+| 7 | **Three things about the screen.** (a) **No sleep** [once, at install]: System Settings, Lock Screen, set both the screen saver and the display-off timer to **Never**. (b) **Full screen** [every launch]: after Start press **Ctrl-Cmd-F**; the window defaults to 760x640 (`app/respond_shell.py:933-935`). (c) **Turn the screen towards the audience** [once, at install] | Only the application is visible, no desktop and no menu bar; **still lit after ten minutes away**. The laptop screen is the mode indicator: the audience changes mode from the caption card and confirms on this screen which mode they are in, so it must not sleep or be covered |
+| 8 | **The physical key is connected** (Respond mode only): choose Respond, press Start, look at the capsule at the bottom of the window | The capsule reads **`BUTTON · end phrase`**. If it reads `SPACE` the **Bluetooth key has not connected** — and it fails **silently**, with no error or warning. The consequence: the audience presses and nothing happens, every phrase has to wait for the 1.2 s silence to end it, and the application looks frozen. Check the key has charge and Bluetooth is on, reopen and wait for `connected (BLE key)`. Do not read the engine's `listening on UDP (app space key)` as "no physical key": the Bluetooth key uses that path by design, and that line only says which port the engine listens on |
 
-> **⚠ 全螢幕會把終端機推到另一個桌面。** 第 5 步的救場（Ctrl-C 重開）按在終端機上，全螢幕之後得先 ⌘⇥ 切回去，多一兩秒——第 5 步計時要把這段算進去。不想冒這個險就改成**放大但不全螢幕**（按住 ⌥ 點綠燈），畫面一樣滿，終端機留在同一個桌面。
-> **不加第二塊螢幕（08-20 裁決）。** 大螢幕／iPad 都不接。理由：①iPad 跑不了引擎（macOS 上的 Python＋子程式，iPad 沒有）；②iPad 當第二螢幕不吃手指觸控，觀眾點了沒反應，模式還是得回鍵盤；③任何第二螢幕都要 Mac 持續壓縮影像，跟旗標表 `--frame-b64` 那格記的 08-17 事故同機制（背景串流影片分頁把 drop 推到 14，關掉後歸零）。第二螢幕的實際 CPU 代價**未量過**，要量就是開著它跑 §2A 指令盯 `dropped` 三分鐘。
+> **Full screen pushes the terminal to another desktop.** The rescue of step 5 is
+> pressed in the terminal, so full screen costs a Cmd-Tab and a second or two;
+> include that in the timing. To avoid it, zoom instead of going full screen
+> (Option-click the green button): the window still fills the display and the
+> terminal stays on the same desktop.
 
-> **⚠ 這一則已被 08-18 蓋過（08-25 標註）：鏡頭整條退役（`--mouth 0`），`--view` 與 `--frame-b64` 都成了死旗標，下面這段只留作歷史。自檢照第 3 步做。**
-> **⚠ 08-16：這裡原本寫「app 走 `--frame-b64 5` 所以不必開 `--view 1`」，那句是錯的。** `--frame-b64` 跟 `--view` 走**同一個迴圈**、同樣把 sleep 從 2s 縮到 0.1s（`bank_live.py:2049`），還多做每秒 5 次 JPEG 編碼。凍結配置因此改成 **`--view 0` ＋ `--frame-b64 0`，兩條影像通道全關**，自檢畫面只能在 CLI 用 `--view 1` 看、看完關掉再開 app。
-> ⚠ 但要說清楚：**`--frame-b64` 不是那天雜音的元兇**（真兇是 `--mem-real`，見旗標表）。當時判它有罪是因為那次 CLI 試唱剛好沒唱到會觸發的音——**單次「聽起來沒有」不足以定罪偶發現象**。
+> **No second screen** (decided 2026-08-20). Neither a large display nor an iPad.
+> An iPad cannot run the engine, which is Python and subprocesses on macOS; as a
+> second display it does not take touch, so the audience taps and nothing
+> happens and the mode still has to come from the keyboard; and any second
+> screen makes the Mac compress video continuously, the same mechanism as the
+> incident of 2026-08-17 where a streaming video tab in the background pushed
+> `dropped` to 14 and closing it returned it to zero. The actual CPU cost of a
+> second screen has **not been measured**.
 
 ---
 
-## 1.5 輸出裝置（08-24 定案，這節是新的）
+## 1.5 Output devices
 
-**兩支 app 各有自己的輸出下拉，都不看系統預設。**
+**Each application has its own output menu and neither follows the system
+default.**
 
-| 什麼時候 | 應答 app 的 `out` | 疊層底床的「播」 |
+| When | Respond app `out` | Loop deck playback |
 |---|---|---|
-| **你表演的那一段** | `viva-out` | `speakers4` |
-| **其他時段（觀眾自己玩）** | `mulit-set`（四路分聲部） | 不開 |
+| **While the performer plays** | `viva-out` | `speakers4` |
+| **Otherwise, audience playing on their own** | `mulit-set` (four parts routed) | off |
 
-三個裝置的組成（在「音訊 MIDI 設定」建好的，**布展時確認三個都還在**）：
+The three devices are built in Audio MIDI Setup; **confirm all three still exist
+when installing**:
 
-- `viva-out`　　**多重輸出** ＝ 外接耳機＋RØDE AI-Micro＋BlackHole 2ch。**不含筆電內建喇叭**（回授來源）
-- `speakers4`　**多重輸出** ＝ 外接耳機＋RØDE AI-Micro
-- `mulit-set`　**聚集** ＝ 外接耳機＋RØDE，四個出口是**串接**的（1、2＝RØDE，3、4＝外接耳機）
+- `viva-out` — **multi-output**: external headphones, RØDE AI-Micro and BlackHole
+  2ch. **The built-in laptop speakers are excluded**, being the feedback source
+- `speakers4` — **multi-output**: external headphones and RØDE AI-Micro
+- `mulit-set` — **aggregate**: external headphones and RØDE, whose four outputs
+  are **concatenated** (1 and 2 the RØDE, 3 and 4 the headphones)
 
-**為什麼疊層底床不能選 `viva-out`**：疊層底床的錄音來源寫死 BlackHole（`app/loop_deck.py:798`
-的 `--in-dev` 預設，啟動器沒覆蓋）。輸出也含 BlackHole ＝ 底床繞回自己的錄音來源＝越疊越糊。
-程式只擋得掉裝置名叫 BlackHole 的（`:513-518`），名字裡有 bh 的組合裝置**只跳警告不阻止**（`:562-566`）。
+**Why the loop deck must not use `viva-out`:** its recording source is hard-wired
+to BlackHole (the `--in-dev` default at `app/loop_deck.py:798`, not overridden by
+the launcher). An output that also contains BlackHole feeds the bed back into its
+own recording source and it smears with every pass. The code only blocks a device
+literally named BlackHole (`:513-518`); a combined device with "bh" in its name
+**warns but is not blocked** (`:562-566`).
 
-**為什麼疊層底床不能選 `mulit-set`**：聚集裝置的出口是串接的，送兩聲道進去只餵得到出口 1、2
-＝**只有兩顆喇叭響**。症狀是「錄到了、循環也正常，但很小聲」。多重輸出裝置才會把同一份聲音
-複製給每一顆。（08-24 實測踩到。）
+**Why the loop deck must not use `mulit-set`:** an aggregate device concatenates
+its outputs, so two channels reach only outputs 1 and 2 and **only two speakers
+sound**. The symptom is "it records and loops correctly, but very quietly". Only
+a multi-output device copies the same audio to every unit. (Found by measurement
+on 2026-08-24.)
 
-**本場放棄的東西**：`viva-out` 是多重輸出＝**只有 2 聲道**（實跑 `loop_deck.py --list` 讀到 out 2）。
-所以**你表演那一段，四聲部是混成左右兩聲道的**，四路分聲部只有其他時段（`mulit-set`）才有。
-兩者不能兼得——前者要 4 聲道聚集裝置，後者要會複製訊號的多重輸出裝置。
+**What is given up in this room:** `viva-out` is a multi-output device and
+therefore **has only 2 channels** (`loop_deck.py --list` reads out 2). So **while
+the performer plays, the four parts are mixed to left and right**; four-way
+routing exists only in the other periods, through `mulit-set`. The two cannot be
+had at once: one needs a four-channel aggregate, the other needs a multi-output
+that duplicates the signal.
 
-**疊層底床沒有直通**（`play_cb` 只播已錄完的層，`:153-215`）：唱的當下它不出聲，要錄滿一圈才
-開始循環播。**第一圈觀眾聽到的全是應答 app 那一路**，所以應答 app 一定要有一路直接到喇叭。
+**The loop deck has no pass-through** (`play_cb` plays only completed layers,
+`:153-215`): it makes no sound while being sung into and starts looping once a
+full round is recorded. **Everything the audience hears on the first round comes
+from the respond app**, so the respond app must always have a path straight to
+the speakers.
 
-**開法**：`app/開啟疊層底床.command`（同樣留終端機視窗）。⚠ 08-24 出現過一次**「速度」欄打不進去**
-（後來自己恢復，原因未查明）。復發不要在畫面上耗，改帶參數開：
+**To launch:** `app/start-loop-deck.command`, which also leaves a terminal
+window. On 2026-08-24 the tempo field once **would not accept input** and
+recovered by itself; the cause was not found. If it recurs, do not fight the
+interface, launch with arguments instead:
 
 ```
 $PY app/loop_deck.py --out-dev speakers4 --bpm 90 --beats 8
@@ -88,144 +131,249 @@ $PY app/loop_deck.py --out-dev speakers4 --bpm 90 --beats 8
 
 ---
 
-## 2. 兩套凍結配置（逐字）
+## 2. The two frozen configurations, verbatim
 
-共用：工作目錄 `harmony/`（bank）或 `server/`（solo），直譯器都是 **6x venv**，不是 conda：
-
-```
-PY=/Users/liaoyu-ting/Documents/GS/CA_Term2/FinalProject/SoloChoirCode/260724_ddsp_svc_6x/venv/bin/python
-```
-
-### A. bank_live 四聲部（app 模式 `bank`）
+Shared: the working directory is `harmony/` for bank and `server/` for solo, and
+the interpreter is the 6x venv, not conda:
 
 ```
-cd .../260615/voice-changer/harmony
+PY=<repo>/260724_ddsp_svc_6x/venv/bin/python
+```
+
+### A. bank_live, four parts (application mode `bank`)
+
+```
+cd .../voice-changer/harmony
 $PY bank_live.py --tenor 1 --vl 2 --trim bass=+7,tenor=+6 --vib 25 \
   --deadzone 0.35 --maxlag 2 --sing-gate 1 --min-level -50 --attack 0.06 \
   --per-part 4 --mem-real 0 --pad 0 --view 0 --frame-b64 5 \
   --dump scratchpad/app_bank_$(date +%m%d_%H%M%S)
 ```
 
-每個旗標的來歷（預設值全部是「關」，所以少帶一個就是退回 v26 之前的行為）：
+Where each flag comes from. Every default is "off", so a missing flag means
+falling back to the behaviour from before v26.
 
-| 旗標 | 為什麼 |
+| Flag | Why |
 |---|---|
-| `--sing-gate 1` | 預設 0＝門控整個不啟用 |
-| `--vl 2` | 預設 1＝上三部 79–100% 唱同一顆音（四聲部其實是三份齊唱）。改 2 後齊唱 0%、完整三和弦 43–50%，並把各聲部拉出模型破音區 |
-| `--tenor 1` | 同一顆 bass 嘴多開一個聲部（v31） |
-| `--trim bass=+7,tenor=+6` | 08-16 定案（原 tenor=+3）。Harry「bass tenor 可以再大聲一些」。**必須用 A 加權量**：bass 降八度後 A 加權比平坦 rms 低 **13.3dB**，用 rms 會判成「夠大聲」而耳朵聽不到（那正是 `--balance` 判死的原因）。等響值是 bass+5/tenor+4，他要更突出 → 各加 2dB |
-| `--vib 25` | 預設 0＝完全沒有顫音，「修過音」最強的指紋。3–8Hz 佔比 11.6%→19.9%（Harry 本人 22.7%） |
-| `--min-level -50` | 預設 −100＝音量門關閉。閉嘴 −54dBFS 仍有 43% 幀報音高 |
-| `--deadzone 0.35` | 預設 0＝來回跳 32%。0.35：來回 19%、漏真音 0/41 |
-| `--maxlag 2` | 輸出延遲棘輪上限（預設 3） |
-| `--attack 0.06` | 起音 |
-| `--view 0` | F25（imshow 在主執行緒吃 RT，實測 +12 xrun/分）——**--view 維持 0**，被定罪的是它 |
-| `--frame-b64 5` | **08-17 開回來**。08-16 曾因雜音誤判關成 0（真兇＝`--mem-real`，冤案已翻）；F25 定罪的是 imshow，frame-b64 從未被單獨量過。08-17 live 實測：開著畫面唱，drop 一度爬到 14——**隔離後兇手是背景的串流影片分頁**，關掉分頁後一分鐘零 drop＝畫面本身免費。教訓：**上台的機器不要開別的重負載程式**（瀏覽器影片、下載、Spotlight 索引） |
-| `--mem-real 0` | **08-16：「一下一下的雜音」的元兇。** 預設 1＝團員可借別顆模型的真人歌手。兩份不同錄音的同一個音疊加＝必然有微小音高差，聽得到但**五支儀器全照不到**（dropped/xrun/高頻能量/非諧波/roughness）。音樂上零損失（同日耳裁：真人音色與失諧複製分不出來） |
-| `--pad 0` | 預設 1.5＝慢層和弦墊開著，它會自己走出一條沒人唱的底層旋律。08-16 Harry 在四聲部隔離裡聽到並裁「先關掉」，當天稍晚再確認**「`--pad-hold` 保持關閉」＝定案不是暫時**。量測：他唱時 pad 只貢獻 +0.8dB、不唱時 +5.2dB。⚠ 連帶效果：`--pad-hold` 那題等於不存在了（沒有慢層就沒有慢層釋放） |
-| **`--vowels` 不帶** | 08-13 下午最終耳裁「改回都是啊、多母音不上 viva」。要翻案得改 `_spawn_bank` 並在 STATE 記一筆 |
+| `--sing-gate 1` | the default 0 disables the gate entirely |
+| `--vl 2` | at the default 1 the upper three parts sing the same note 79-100% of the time, so four parts are really three in unison. At 2, unison falls to 0% and a full triad occupies 43-50%, and each part is pulled out of the model's distortion region |
+| `--tenor 1` | one more part from the same bass voice (v31) |
+| `--trim bass=+7,tenor=+6` | settled 2026-08-16 (tenor was +3), after the verdict that bass and tenor could be louder. **It must be measured A-weighted**: an octave down, the bass reads **13.3 dB** lower A-weighted than on flat RMS, so RMS judges it loud enough while the ear cannot hear it — which is exactly why `--balance` was abandoned. Equal loudness is bass +5 and tenor +4; 2 dB was added to each to bring them forward |
+| `--vib 25` | the default 0 means no vibrato at all, the strongest fingerprint of a corrected sound. The 3-8 Hz share rises from 11.6% to 19.9% (the singer's own is 22.7%) |
+| `--min-level -50` | the default -100 disables the level gate. With the mouth closed at -54 dBFS, 43% of frames still report a pitch |
+| `--deadzone 0.35` | the default 0 flickers between notes 32% of the time. At 0.35: 19% flicker, and 0 of 41 real notes missed |
+| `--maxlag 2` | the ratchet limit on output latency (default 3) |
+| `--attack 0.06` | onset |
+| `--view 0` | F25: imshow consumes real-time budget on the main thread, measured at +12 xrun per minute. **Keep `--view` at 0**; this is the flag that was convicted |
+| `--frame-b64 5` | **turned back on 2026-08-17.** It was set to 0 on 08-16 over a noise it did not cause (the culprit was `--mem-real`); F25 convicted imshow, and frame-b64 was never measured on its own. Live on 08-17, singing with the view on, `dropped` climbed to 14 — isolated, the culprit was a streaming video tab in the background, and with the tab closed there were zero drops in a minute, so the view itself is free. The lesson: **run no other heavy program on the performing machine** (browser video, downloads, Spotlight indexing) |
+| `--mem-real 0` | **the cause of the intermittent noise of 2026-08-16.** At the default 1, a part may borrow a real singer from another model. The same note from two different recordings laid on top of each other always differs slightly in pitch: audible, and **invisible to all five instruments** (dropped, xrun, high-frequency energy, inharmonicity, roughness). Musically it costs nothing: in blind listening the same day, real timbres and detuned copies could not be told apart |
+| `--pad 0` | the default 1.5 leaves the slow chord pad on, and it walks out a bass line nobody sang. Heard in a four-part isolation on 08-16 and ruled off, confirmed later the same day as permanent rather than temporary. Measured: the pad contributes +0.8 dB while singing and +5.2 dB while not. Consequently the `--pad-hold` question no longer exists, since with no slow layer there is no slow release |
+| **no `--vowels`** | final verdict of 08-13: back to a single vowel, multiple vowels do not go on stage. Reversing this means editing `_spawn_bank` |
 
-**音域重配（08-16 定案）：`VOICES` = bass `-8`、tenor `+6`，tenor 領唱嘴換成 `reflow-male8 spk7`。** bass `-8`（中位 C3/131Hz）是 Harry 在雜音清掉、音量定案後的乾淨條件下 live 判的（比較對象 `-5` = D#3/155Hz），也正好是掃描算出的最適值（核心內 86.4%）。中途曾退到 `-5` 避開團員音庫壞音，但 `--mem-real 0` 之後團員不再載入 `male8 spk2`，那些壞音碰不到。
+**Ranges (settled 2026-08-16): `VOICES` has bass at `-8` and tenor at `+6`, and
+the tenor lead voice is `reflow-male8 spk7`.** Bass `-8` (median C3, 131 Hz) was
+judged live under clean conditions once the noise was gone and the levels were
+settled, against `-5` (D#3, 155 Hz), and it is also the optimum from the scan
+(86.4% inside the core). It had been backed off to `-5` at one point to avoid bad
+notes in a borrowed bank, but with `--mem-real 0` that bank is never loaded.
 
-各值的來歷：bass `0 → -8 → -5`、tenor `+7 → +6`。原因：08-15 dump 實測 bass 中位 **G#3 ＝ 跟 Harry 自己完全同音**（207.7Hz），tenor 只高 2 個半音，兩部男聲擠在中音區、男低音的共鳴音域沒有人 ⇒ 他說的「男生的共鳴感沒出來」。掃描全部移調值後 **-8 是最適解**（bass 核心內 86.4%、掉出音庫 0.4%）；先試的 -12 雖然他也判「有了」，但只有 54.8% 在核心、**8.9% 掉出音庫被折八度**，而低頻能量兩者幾乎相同（13.2% vs 13.8%）。alto/sop 不動（100% 落在核心）。
+How the values moved: bass `0 → -8 → -5`, tenor `+7 → +6`. A dump on 08-15
+measured the bass median at **G#3, exactly the singer's own pitch** (207.7 Hz),
+with the tenor only two semitones above, so two male parts sat together in the
+middle with nobody in the bass resonance region — which is what "the male
+resonance is not coming through" meant. Scanning every transposition, **-8 is the
+optimum** (86.4% inside the core, 0.4% outside the bank). `-12`, tried first, also
+passed by ear but put only 54.8% inside the core with **8.9% outside the bank and
+folded by an octave**, while low-frequency energy was nearly identical (13.2%
+against 13.8%). Alto and soprano are unchanged, both 100% inside the core.
 
-**`--per-part 4` 08-16 定案**：Harry 三段盲聽（A=4 條線／B=16 人失諧複製／C=16 人含真人音色，各 25s 等響）裁**「B、C 分不太出來，也比較像一群人」** ⇒ 16 人要、真人音色不加分。C 沒贏是結構性的：`MEM_SPK` 每聲部只有 1 位存活歌手（12 位耳裁只活 4 位），所以 `--per-part 4` 的組成是**領唱＋1 位真人＋2 個失諧複製**，16 個聲音裡只有 4 個是真人。CPU 零風險（F25 離線台架 median 2.7ms／35ms 預算、零超支）。
+**`--per-part 4`, settled 2026-08-16:** three cells were compared blind at equal
+loudness for 25 s each — A four voices, B sixteen with detuned copies, C sixteen
+including real timbres — and the verdict was that **B and C could not really be
+told apart, and both sounded more like a group of people**. So sixteen voices
+yes, real timbres no gain. C could not win structurally: `MEM_SPK` has only one
+surviving singer per part (of twelve auditioned, four survived), so `--per-part 4`
+is a lead plus one real singer plus two detuned copies, and only 4 of the 16
+voices are real. There is no CPU risk (F25: median 2.7 ms against a 35 ms budget
+on the offline bench, zero overruns).
 
-### B. solo_min 神經即時（app 模式 `Live · neural`）
+### B. solo_min, neural real time (application mode `Live · neural`)
 
 ```
-cd .../260615/voice-changer/server
+cd .../voice-changer/server
 $PY solo_min.py \
-  --model .../SoloChoirCode/260811_bt/sop_out_8k/paraphernalia_data_00003000 \
+  --model .../sop_out_8k/paraphernalia_data_00003000 \
   --mode fixed --interval 12 --interval2 12 \
-  --model3 .../FinalProject/model/VC/dist/model_dir/1/model/paraphernalia_data_new25_2k --interval3 -12 \
-  --model4 .../FinalProject/model/VC/dist/model_dir/1/model/paraphernalia_data_new25_2k --interval4 -12 \
+  --model3 .../model/paraphernalia_data_new25_2k --interval3 -12 \
+  --model4 .../model/paraphernalia_data_new25_2k --interval4 -12 \
   --choir-gain 0.5 --gate-floor 0.01 --blocksize 960 --cushion-ms 20 \
   --mouth-gate 1 --gate-fail open --dry-delay-ms 0 --you-gain 0.6
 ```
 
-| 旗標 | 為什麼 |
+| Flag | Why |
 |---|---|
-| `--blocksize 960` (20ms) | 兩顆**不同**模型同跑會 cache thrash。耳判 480=滋滋波波、**960=乾淨**、1920=乾淨但延遲被嫌。門檻只有一個旗標寬 |
-| sop `+12` | +24 是花栗鼠不是女高音 |
-| bass `−12`（**不是 0**） | `new25_2k` 就是 Harry 自己的嗓，0 半音＝跟他的乾聲完全重疊、聽不出是一個聲部 |
-| `--choir-gain 0.5` | 兩組各 2 顆同設定＝各自 2 倍，0.5 拉回單顆。**模式 3（duo）他實測「neural 比 live 大太多」→ 用 UI 調，別寫死** |
-| `--dry-delay-ms 0` | 40ms 是為了對齊轉換後的和聲，前提是戴耳機。**用喇叭時他本人就在現場**，直通該對齊他的真實聲音，否則是 slap-back |
-| `--you-gain 0.6` | 直通要留著——拿掉之後「聽不出來和聲，只剩兩個乾聲」。戴耳機／PA 分軌才改 `--no-dry` |
+| `--blocksize 960` (20 ms) | two **different** models running at once thrash the cache. By ear: 480 crackles, **960 is clean**, 1920 is clean but the latency was rejected. The window is one flag step wide |
+| soprano `+12` | +24 is a chipmunk, not a soprano |
+| bass `-12`, **not 0** | `new25_2k` is the singer's own voice, so 0 semitones overlaps his dry signal exactly and cannot be heard as a separate part |
+| `--choir-gain 0.5` | two groups of two identical settings each double themselves; 0.5 brings it back to one. **In duo mode the verdict was that the neural voice is much louder than the sampled one — adjust in the interface, do not hard-code it** |
+| `--dry-delay-ms 0` | the 40 ms alignment exists to line the dry signal up with the converted harmony, which assumes headphones. **Over speakers the singer is in the room**, so the pass-through should align with their real voice, otherwise it is a slap-back echo |
+| `--you-gain 0.6` | the pass-through has to stay: without it "you cannot hear the harmony, only two dry voices". Use `--no-dry` only with headphones or a split PA feed |
 
 ---
 
-## 3. 啟動必看的行
+## 3. The start-up lines to watch for
 
-**這行沒出現就是沒有門控**（引擎不會停，會照唱）：
+**If this line does not appear there is no gate** — the engine does not stop, it
+sings on:
 
 ```
 [gate] sing model loaded (N params, mouth/jaw only, <same-session|leave-one-session-out> acc 0.XXX) ← sing_gate_model*.npz
 ```
 
-看到下面任何一條＝**門控沒真的載進去**：
+Any of these means **the gate did not really load**:
 
 ```
-⚠ [gate] 無 sing_gate_model.npz＝門控退回 blendshape 幾何門檻
-⚠ [gate] 唱歌模型不合格＝退回幾何門控
+⚠ [gate] no sing_gate_model.npz, falling back to a blendshape geometry threshold
+⚠ [gate] the singing model failed its check, falling back to the geometry gate
 ⚠ [mouth] GATE DEAD (...) = running ungated
 ```
 
-`GATE DEAD` 在 bank_live 是**硬編裸奔**（`_mouth_worker` 的 except 把 `M["ok"]=True`，沒有旗標可以改成保險靜音）；solo_min 才有 `--gate-fail`，`open`＝裸奔、`close`＝保險靜音。裸奔是無聲的失敗——08-14 被咬過一次（合格檢查寫成 `idx.shape != W.size`＝tuple 比 int＝恆真），就是靠那行警告才看見。**狀態列行尾會持續掛 `⚠GATE DEAD`**，那是唯一的長期提示。
-> **08-17 起兩處補強**：①**鏡頭心跳斷**（USB 相機 stall＝最可能的故障）原本只印小字靜默裸奔，現在同樣印 `⚠ [mouth] GATE DEAD (camera heartbeat lost)`＋狀態列掛尾；心跳回來自動解除。②新增 `⚠WORKER DEAD` 狀態列掛尾＋警告行＝產音執行緒死掉（全場靜音而儀表全綠的那種死法）現在看得到；出現＝Ctrl-C 重開，沒有別的解。app 的警告條對這三種都會亮。
+In bank_live, `GATE DEAD` is **hard-coded to run on**: the `except` in
+`_mouth_worker` sets `M["ok"]=True` and no flag can make it fail to silence.
+Only solo_min has `--gate-fail`, where `open` runs on and `close` mutes. Running
+ungated is a silent failure; it bit once on 2026-08-14, when the qualification
+check was written as `idx.shape != W.size`, comparing a tuple to an int and
+therefore always true, and only that warning line revealed it. **The status line
+carries `⚠GATE DEAD` at its end for as long as it lasts**, which is the only
+persistent indicator.
 
-其他該出現的：`[mouth] camera index N (brightness ...)`、每個聲部一行 `[bank] ... cache hit (N notes)`、一行 `[mix]`。
-> **08-17 起 `[mem-norm]` 不再出現**：`--mem-real 0` 現在連團員音庫都不渲不載（原本白載 ~28MB 永遠播不出來的東西），`[mem-norm]` 這行跟著消失——**它不見是對的，別當成啟動失敗**。
-> **冷 cache（改過 VOICES 的模型/音域/gain、或換機器）**：`cache hit` 會變成 `rendering k/N` 進度行＋`rendered`，全部渲完要幾分鐘。app 的切換看門狗 08-17 起改「30s 無輸出才算卡死」＝冷 cache 切換不再被誤殺，但**上台前還是先用 §2A 指令跑一次暖 cache**。強制重渲＝`--rebuild`。壞快取（啟動時印 `⚠ [bank] ... cache unreadable/incomplete → re-rendering`）會自動重渲，不必手動清。
+> **Two reinforcements from 2026-08-17.** (1) A **lost camera heartbeat**, the
+> most likely hardware failure, used to print small text and run ungated in
+> silence; it now prints `⚠ [mouth] GATE DEAD (camera heartbeat lost)` and hangs
+> off the status line, clearing itself when the heartbeat returns. (2) A new
+> `⚠WORKER DEAD` warning and status-line marker makes a dead audio thread
+> visible — the failure where the room goes silent while every indicator stays
+> green. If it appears, Ctrl-C and restart; there is no other remedy. The
+> application's warning bar lights for all three.
 
-**狀態列**（每 2 秒一行）長這樣，第 3 步自檢就是盯它：
+Also expected: `[mouth] camera index N (brightness ...)`, one `[bank] ... cache
+hit (N notes)` per part, and one `[mix]` line.
+
+> **`[mem-norm]` no longer appears, since 2026-08-17**: with `--mem-real 0` the
+> borrowed banks are neither rendered nor loaded (previously about 28 MB was
+> loaded and never played), and that line disappeared with them. **Its absence is
+> correct and is not a start-up failure.**
+
+> **A cold cache** (after changing a model, range or gain in `VOICES`, or moving
+> to another machine): `cache hit` becomes `rendering k/N` progress lines and
+> then `rendered`, and rendering everything takes several minutes. Since
+> 2026-08-17 the application's switch watchdog only calls it stuck after 30 s
+> with no output, so a cold-cache switch is no longer killed by mistake — but
+> **warm the cache with the command of section 2A before performing anyway**.
+> Force a re-render with `--rebuild`. A bad cache (printing `⚠ [bank] ... cache
+> unreadable/incomplete → re-rendering` at start-up) re-renders itself and needs
+> no manual clearing.
+
+**The status line**, one every two seconds, is what step 3 of the check watches:
 
 ```
 note 62  cents +2.3  mouth open  xrun 0  backlog 0  sp 0.87 mo 0.0031
 ```
 
-`sp`＝模型算的在唱機率、`mo`＝下巴運動量（否決票）。`dropped N` 只在 >0 時才出現——F25 稱它是「唯一照得到掉音訊的儀器」，`xrun` 和 `--dump` 在架構上都看不到。
+`sp` is the model's probability that the singer is singing and `mo` is the jaw
+movement, which holds a veto. `dropped N` appears **only when it is above zero**;
+F25 calls it the only instrument that can see dropped audio at all, since neither
+`xrun` nor `--dump` can see it structurally.
 
-> **⚠ 08-16 補充：五支儀器全部照不到那個雜音。** `dropped`、`xrun`、高頻能量、非諧波能量、自製 roughness ——有雜音與沒雜音的兩次量測全部回報乾淨（`dropped` 都是 0）。原因是它**不是多出來的成分**：兩份不同錄音的同一個音疊加，頻譜上只是幾根靠近的線，耳朵卻聽得到干涉。**上台時不要用「儀器是乾淨的」說服自己——耳朵聽到就是有。**
-
----
-
-## 4. 三條長跑警告
-
-1. **dump 會吃硬碟：實測 16 MB/分**（`--dump` 寫 mono mic + stereo out 的 PCM_16＝3ch × 44100 × 2 bytes = 265 KB/s；用 08-15 那份 226.6 秒 60.6 MB 對過）。一小時約 **960 MB**。app 每次 Start 都會寫（路徑寫死在 `_spawn_bank`）。**演出前清 `harmony/scratchpad/app_bank_*`。**
-   > STATE 舊記的「28 MB/分」是按 float32 算的，實際寫檔是 PCM_16。以 16 MB/分 為準。
-   > **08-17 起 dump 只錄前 30 分鐘**（`--dump-max-min`，記憶體常駐 ~32MB/分的上限保護）；滿了印一行 `⚠ dump buffer full`，演出照常。
-2. **KeyTracker 不衰減 → 久了調性鎖死。** `harmony/bank_live.py` 的 `KeyTracker.h` 直方圖只累加、從不衰減，`MIN=120` 過了就一直用整場的統計定調。**每首之間重開引擎**，別讓它連跑超過約 15 分鐘。
-3. **收場（08-17 改過）：Ctrl-C 之後 dump 先落檔、然後才關流**——寫檔搬進了 stream context 的 finally（respond2 08-04 同款）。所以：關流掛死被 shell 的 8s SIGKILL 收掉時 **dump 已經安全**；長跑後 Ctrl-C 到 dump 行印出的那幾秒**不是當掉**。⚠ `kill -9` 在收場**之前**下手仍會讓整份 dump 陪葬（它根本沒機會寫）。
-
----
-
-## 5. 門控現況與備案（08-16 更新，這節是新的）
-
-**現況：門控不可靠，但仍然開著（`--sing-gate 1`）。** 理由是「不完美的門」比「沒有門」好——關掉＝他不唱時合唱團照唱＝回授。
-
-兩條路今天都量過，都不足以支撐「他有沒有在發聲」這個二元判斷：
-
-- **鏡頭路（判死，08-15）**：引擎印的 `cross-session acc 0.934` 是誤標（磁碟上那顆存的是同場次時間分塊 CV），真正的跨場次是 **0.673**。現行模型在今天條件下**閉嘴誤觸 20–35%**，掃遍 `sing-open × bs-frames` 整張表都救不了；病根是場次飄移（同一人同一動作 jawOpen 靜止值 08-13=0.031／08-15=0.017）。**講話擋不掉**（任何場次任何門檻 63–97%）。**手遮嘴時 `sp` 會飽和到 1.00**（線性模型在訓練分布外極有自信地外推）。
-- **包絡路（判別力不足，08-16，FINDINGS F26）**：回授路徑確實存在且可量（延遲峰 **279ms**，中位分離 6.76×），但**殘差 ≠ 他在發聲**——用標定過的耦合算，他不出聲時 mic 仍比預測回授高 **+2.7 dB 中位**，麥克風裡有跟回授同量級的呼吸／氣音／動作聲。最佳門檻誤把回授當發聲 **35–37%**，不比鏡頭路好。
-
-### 台上的備案（依代價排序）
-
-1. **PA 音量是主控。** 第 4 步自檢就是在量這件事。門控誤觸的後果與回授的後果都隨 PA 音量放大——**壓 PA 比動任何旗標快，而且不用碰鍵盤。**
-2. **手不要遮嘴。** `sp` 會飽和到 1.00＝門大開。這是操作可以完全避免的失效。
-3. **對觀眾講話時預期它會誤觸**（講話擋不掉，63–97%）。要嘛講話前把 PA 壓掉，要嘛接受合唱團跟著講——**這件事講在前面就不是意外，是設計邊界**。
-4. **`⚠GATE DEAD` 出現＝門控已經死了，正在裸奔。** 這時只有 PA 音量能救，引擎不會自己停。
-5. **最後手段：Ctrl-C 重開**（第 5 步自檢練過，知道要多久）。
-
-### 論文/口頭怎麼說
-
-這是**誠實的負面結果，不是缺陷**：兩種完全不同的感測維度（視覺嘴型、聲學能量）分別量到 20–35% 與 35–37% 的誤觸，而且死因不同——鏡頭死於場次飄移與分布外外推，包絡死於「殘差裝的是一切非回授的聲音」。共同結論是**「他有沒有在發聲」這個問題，用旁觀式感測（不接觸身體）回答不了**；要答它得換維度——接觸式的（喉部接觸麥、EGG、骨傳導）才直接量發聲本身。這正好接回論文的 body-as-interface 主張。
+> **All five instruments were blind to that noise (2026-08-16).** `dropped`,
+> `xrun`, high-frequency energy, inharmonic energy and a purpose-built roughness
+> measure all reported clean on both the noisy and the clean take, `dropped` zero
+> in both. The reason is that it **is not an added component**: the same note from
+> two recordings laid together is only a few close lines in the spectrum, and the
+> ear hears the interference. **On stage, do not talk yourself out of it because
+> the instruments are clean — if the ear hears it, it is there.**
 
 ---
 
-## 6. 已知過時（STATE 裡別再照抄的兩處）
+## 4. Three warnings for long runs
 
-- STATE `Last updated: 2026-08-14 下午` 那段寫 solo_min 凍結配置是 `--interval3 0 --interval4 0`——**碼裡是 `-12`**（08-14 當天就修了，理由見第 2 節 B 表）。
-- STATE `Last updated: 2026-08-13 夜` 那段的「現行 live 指令」含 `--vowels 1 --layers 2,3,4 --vw-tau 0.2`——**那是未定案的耳裁項，凍結配置不帶**。
+1. **Dumps consume disk at a measured 16 MB per minute.** `--dump` writes mono
+   mic plus stereo out as PCM_16, that is 3 channels x 44100 x 2 bytes =
+   265 KB/s, checked against a 226.6 s file of 60.6 MB. About **960 MB an hour**.
+   The application writes one on every Start, with the path hard-coded in
+   `_spawn_bank`. **Clear `harmony/scratchpad/app_bank_*` before performing.**
+   > Since 2026-08-17 the dump records **only the first 30 minutes**
+   > (`--dump-max-min`, protecting a resident memory cost of about 32 MB per
+   > minute); when full it prints `⚠ dump buffer full` and the performance
+   > continues.
+2. **KeyTracker does not decay, so the key locks after a long run.** The
+   histogram `KeyTracker.h` in `harmony/bank_live.py` only accumulates; once past
+   `MIN=120` it sets the key from the statistics of the entire session.
+   **Restart the engine between pieces** and do not let it run much beyond
+   fifteen minutes.
+3. **Shutdown, changed 2026-08-17: after Ctrl-C the dump is written first and the
+   stream closed afterwards**, the write having moved into the stream context's
+   `finally`. So if closing the stream hangs and the shell's 8-second SIGKILL
+   takes it, **the dump is already safe**, and the few seconds between Ctrl-C and
+   the dump line after a long run **are not a hang**. A `kill -9` *before*
+   shutdown still loses the whole dump, which never gets the chance to be
+   written.
 
-順修（08-16）：`bank_live.py --help` 原本會直接 traceback（五處 help 字串裡的 `%` 沒跳脫，argparse 拿 `%` 當格式符）。已修，現在 `--help` 可以正常查旗標。
+---
+
+## 5. The gate as it stands, and the fallbacks
+
+**As it stands: the gate is unreliable and is left on** (`--sing-gate 1`), on the
+grounds that an imperfect gate beats none — off means the choir sings while the
+performer does not, which is feedback.
+
+Both routes were measured and neither supports a binary decision about whether
+the singer is sounding:
+
+- **The camera route (condemned 2026-08-15).** The `cross-session acc 0.934` the
+  engine printed was mislabelled; the model on disk was cross-validated on time
+  blocks within one session, and the true cross-session figure is **0.673**. In
+  the conditions of that day the model **triggered falsely on a closed mouth
+  20-35%** of the time, and no cell of the `sing-open` by `bs-frames` table
+  rescued it. The root cause is session drift: the same person in the same
+  posture had a resting jawOpen of 0.031 on 08-13 and 0.017 on 08-15. **It cannot
+  exclude speech** (63-97% across every session and threshold). And **with a hand
+  over the mouth `sp` saturates at 1.00**, a linear model extrapolating with great
+  confidence outside its training distribution.
+- **The envelope route (insufficient discrimination, 2026-08-16, FINDINGS F26).**
+  The feedback path exists and is measurable (a delay peak at **279 ms**, median
+  separation 6.76x), but **a residual is not the singer sounding**: with the
+  coupling calibrated, the microphone with the singer silent still sits **+2.7 dB
+  median** above the predicted feedback, because it holds breath, breathy
+  consonants and movement at the same order as the feedback. At the best
+  threshold it mistakes feedback for singing **35-37%** of the time, no better
+  than the camera.
+
+### Fallbacks on stage, in order of cost
+
+1. **The PA level is the master control.** Step 4 of the check measures exactly
+   this. Both a false gate open and feedback scale with the PA level, and
+   **pulling the PA down is faster than changing any flag and needs no
+   keyboard.**
+2. **Do not cover the mouth with a hand.** `sp` saturates at 1.00 and the gate
+   opens wide. This failure is entirely avoidable by operation.
+3. **Expect a false open while speaking to the audience** (speech cannot be
+   excluded, 63-97%). Either pull the PA down before speaking or accept that the
+   choir speaks along — **said in advance, this is a design boundary rather than
+   an accident**.
+4. **`⚠GATE DEAD` means the gate is already dead and the system is running
+   ungated.** Only the PA level helps; the engine will not stop itself.
+5. **Last resort: Ctrl-C and restart** (rehearsed in step 5, so the time it takes
+   is known).
+
+### How to say it in the thesis or aloud
+
+This is **an honest negative result, not a defect**: two entirely different
+sensing dimensions, visual mouth shape and acoustic energy, measured 20-35% and
+35-37% false opens respectively, and they fail for different reasons — the camera
+on session drift and out-of-distribution extrapolation, the envelope because the
+residual contains every sound that is not feedback. The shared conclusion is that
+**the question "is this person sounding" cannot be answered by observing from
+outside the body**; answering it needs a different dimension, a contact one — a
+throat microphone, EGG, bone conduction — that measures phonation itself. Which
+returns directly to the body-as-interface argument of the thesis.
