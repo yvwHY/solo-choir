@@ -1,19 +1,25 @@
-"""loopback_lab.py — 自我迴環三格梯：讓管線把 Harry 自己的旋律唱回來。
+"""loopback_lab.py - a three-cell self-loop ladder: make the pipeline sing the singer's own melody back.
 
-動機（2026-07-30 盲聽 blind_retrain_0730 判「差不多」）：2.7× 資料重訓後
-autotune 感沒變 → **嘴（DDSP 轉換器）無罪釋放**，嫌疑移到「縫」＝腦的音符線
-被渲染成 f0 曲線那一層（量化平直目標＋規則 porta＋人工 vibrato）。
+Motivation: after retraining on 2.7 times the data, blind listening judged the
+result "much the same" and the auto-tuned quality had not moved, which ACQUITS the
+voice, the DDSP converter. Suspicion moved to the seam - the layer where the
+model's note line is rendered into an f0 curve, with its flat quantised target,
+rule-based portamento and artificial vibrato.
 
-三格梯把「腦選什麼音」這個變因整個拿掉——三格唱的都是**他自己的旋律**：
-  格1 = 原聲（take 的一段，什麼都沒過）
-  格2 = 直驅嘴 + 他自己的真實 f0 原樣注入（shift 模式、位移恆 0）＝只測轉換
-  格3 = 直驅嘴 + 同一條旋律的量化音符線經 porta/vibrato 規則畫成 f0＝縫＋嘴
-同段、同 ckpt、同位準。判讀：2≈1 而 3 autotune → 縫定罪；2 已 autotune → 共犯。
+The ladder removes the variable "which note the model chose" entirely: all three
+cells sing HIS OWN melody.
+  cell 1 = the original take, untouched
+  cell 2 = the direct-drive voice with his own real f0 injected verbatim (shift
+           mode, offset always 0) - conversion alone
+  cell 3 = the direct-drive voice with the same melody quantised to notes and
+           drawn into f0 by the portamento and vibrato rules - seam plus voice
+Same passage, same checkpoint, same level. Reading it: if 2 sounds like 1 and 3
+is auto-tuned, the seam is convicted; if 2 is already auto-tuned, it is complicit.
 
-用法（vcclient-dev env，於 harmony/ 下）：
-  python loopback_lab.py prep   # 切段 + 寫 seg_notes.json（notes=heard=他的線）
-  # ...中間跑兩次 direct_mouth.py（指令由 prep 印出）...
-  python loopback_lab.py pack   # 位準對齊 → stim_1..3.wav + key.json + 統計
+Usage (vcclient-dev environment, from harmony/):
+  python loopback_lab.py prep   # cut the passage, write seg_notes.json (notes = heard = his line)
+  # ...run direct_mouth.py twice in between; prep prints the commands...
+  python loopback_lab.py pack   # level-match, then stim_1..3.wav + key.json + statistics
 """
 import json
 import os
@@ -27,7 +33,7 @@ OUT = os.path.join(HERE, "out", "loopback_0730")
 TAKE = os.path.join(HERE, "..", "..", "..", "260722_harmony_brain", "data", "take.wav")
 NOTES = os.path.join(HERE, "out", "angel_v2_world4keyed_notes.json")
 SR, HOP = 44100, 512
-T0, T1 = 131, 270          # tick 區間：起於休止後的 onset、止於下一個休止（26.1s）
+T0, T1 = 131, 270          # tick range: starts on an onset after a rest, ends at the next rest (26.1 s)
 DDSP = ("/Users/liaoyu-ting/Documents/GS/CA_Term2/FinalProject/SoloChoirCode/"
         "260724_ddsp_svc")
 CKPT = f"{DDSP}/exp/combsub-harry/model_30000.pt"
@@ -44,8 +50,9 @@ def prep():
     assert sr == SR, sr
     seg = np.ascontiguousarray(x[a:b])
     sf.write(os.path.join(OUT, "seg_take.wav"), seg, SR, subtype="PCM_16")
-    # notes = heard = 他的 lead notes（管線既有轉譜）：shift 模式位移恆 0，
-    # target 模式則把同一條線量化渲染 → 兩格的旋律內容完全同源。
+    # notes = heard = his own lead notes, through the pipeline's existing
+    # transcription. Shift mode holds the offset at 0, and target mode quantises
+    # and renders the same line, so both cells have identical melodic content.
     line = heard[T0:T1]
     json.dump({"bpm": d["bpm"], "sr": SR, "step_samps": ss,
                "notes": line, "heard": line},
@@ -69,15 +76,15 @@ def _load(p):
 
 
 def _stats(y):
-    """voiced hop 的音準統計：對最近半音的偏差（cents）＋顫音深度。"""
+    """Intonation statistics over voiced hops: deviation from the nearest semitone in cents, and vibrato depth."""
     import pyworld
     f0, _ = pyworld.harvest(y, SR, frame_period=1000.0 * HOP / SR)
     v = f0 > 0
     midi = 69 + 12 * np.log2(np.maximum(f0, 1) / 440.0)
     dev = (midi - np.round(midi)) * 100.0
     dm = np.abs(np.diff(midi, prepend=midi[:1]))
-    sus = v & (dm < 0.35)                      # 持續段（排除換音過渡）
-    # 顫音深度＝持續段 cents 對 5-hop 移動平均的擺動（去掉慢漂）
+    sus = v & (dm < 0.35)                      # sustained stretches, excluding transitions between notes
+    # vibrato depth: how far the sustained cents swing about a 5-hop moving average, with the slow drift removed
     ma = np.convolve(dev, np.ones(5) / 5, mode="same")
     rip = (dev - ma)[sus]
     return dict(voiced=float(v.mean()),
@@ -88,19 +95,19 @@ def _stats(y):
 
 def pack():
     cells = [("1_take_raw", os.path.join(OUT, "seg_take.wav"),
-              "原聲：他自己唱的，未經任何轉換"),
+              "the original: sung by him, with no conversion at all"),
              ("2_ownf0", os.path.join(OUT, "lb2_ownf0_angel.wav"),
-              "直驅嘴＋他的真實 f0 原樣注入（shift 模式位移恆 0）＝只測轉換"),
+              "the direct-drive voice with his real f0 injected verbatim (shift mode, offset always 0) - conversion alone"),
              ("3_rulef0", os.path.join(OUT, "lb3_rulef0_angel.wav"),
-              "直驅嘴＋同旋律量化音符線經 porta 33ms/leap-snap 4/vib 5Hz 0.12st "
-              "渲染的 f0＝縫＋嘴")]
+              "the direct-drive voice with the same melody quantised to notes and rendered into f0 by "
+              "33 ms portamento, leap-snap 4 and 5 Hz 0.12 st vibrato - seam plus voice")]
     ys = [_load(p) for _, p, _ in cells]
     n = min(len(y) for y in ys)
     ys = [y[:n] for y in ys]
     rms = [float(np.sqrt((y ** 2).mean())) for y in ys]
     tgt = float(np.median(rms))
     ys = [y * (tgt / r) for y, r in zip(ys, rms)]
-    g = 0.9 / max(float(np.abs(y).max()) for y in ys)   # 全體同一增益，保住相對位準
+    g = 0.9 / max(float(np.abs(y).max()) for y in ys)   # one gain for all of them, so the relative levels survive
     key = {}
     for i, ((name, src, desc), y) in enumerate(zip(cells, ys), 1):
         y = y * g
@@ -120,7 +127,7 @@ def pack():
 
 
 def _take_uv():
-    """take 段的 unvoiced 幀（吸氣/擦音）遮罩＝評分的參考真值。"""
+    """Mask of the take's unvoiced frames (breaths, fricatives), the reference truth for scoring."""
     import pyworld
     y = _load(os.path.join(OUT, "seg_take.wav"))
     f0, _ = pyworld.harvest(y, SR, frame_period=1000.0 * HOP / SR)
@@ -128,11 +135,14 @@ def _take_uv():
 
 
 def _cpp(y, hops, n=2048):
-    """指定幀的倒頻譜峰突出度（CPP）＝諧波柱強度；越低越噪音狀。
+    """Cepstral peak prominence of the given frames, that is, the strength of the harmonic column; lower is more noise-like.
 
-    先試過頻譜平坦度，但它被頻譜傾斜汙染（gate 後噪音支路的學習包絡本身很有
-    色彩，平坦度反而下降）＝會給出反向的錯誤結論。CPP 只看週期性造成的倒頻譜
-    峰，對包絡傾斜免疫，才是「有沒有諧波柱」的直答。真靜音幀排除（無意義）。
+    Spectral flatness was tried first, but it is contaminated by spectral tilt (the
+    learned envelope of the noise branch after the gate is itself quite coloured, so
+    flatness FALLS), which gives the opposite conclusion. CPP looks only at the
+    cepstral peak caused by periodicity and is immune to envelope tilt, which makes
+    it the direct answer to "is there a harmonic column". Truly silent frames are
+    excluded as meaningless.
     """
     q0, q1 = int(SR / 800), int(SR / 65)
     w = np.hanning(n)
@@ -154,7 +164,7 @@ def _cpp(y, hops, n=2048):
 
 
 def _score(y, ref_v):
-    """gate 驗收三數：整體 voiced%、吸氣段被唱出來的比率、voiced 段音準迴歸。"""
+    """Three numbers for the gate: overall voiced percentage, the share of breaths sung out loud, and intonation regression over voiced frames."""
     import pyworld
     f0, _ = pyworld.harvest(y, SR, frame_period=1000.0 * HOP / SR)
     v = f0 > 0
@@ -163,7 +173,7 @@ def _score(y, ref_v):
     midi = 69 + 12 * np.log2(np.maximum(f0[:n], 1) / 440.0)
     dev = (midi - np.round(midi)) * 100.0
     dm = np.abs(np.diff(midi, prepend=midi[:1]))
-    sus = v & r & (dm < 0.35)                       # 只看 take 也 voiced 的持續段
+    sus = v & r & (dm < 0.35)                       # only sustained stretches where the take is voiced too
     return dict(voiced=round(float(v.mean()), 3),
                 breath_voiced=round(float(v[~r].mean()), 3),
                 cents_sd=round(float(np.std(dev[sus])), 2) if sus.any() else 0.0,
@@ -172,7 +182,7 @@ def _score(y, ref_v):
 
 
 def packg():
-    """gate 前後對照：沿用 stim_1 的 rms 當共同位準，stim_1..3 不動。"""
+    """Before and after the gate: reuse stim_1's RMS as the common level; stim_1..3 are untouched."""
     ref_v = _take_uv()
     tgt = float(np.sqrt((_load(os.path.join(OUT, "stim_1.wav")) ** 2).mean()))
     rows = [("1_take_raw", "stim_1.wav", None),
@@ -195,8 +205,8 @@ def packg():
         if dst:
             key[dst.replace(".wav", "")] = dict(
                 cell=name, source=src,
-                desc="同 " + name[0] + " 格，唯一差異＝--respect-unvoiced 開"
-                     "（他的無聲幀注入 f0=0）",
+                desc="the same as cell " + name[0] + ", the only difference being "
+                     "--respect-unvoiced, which injects f0=0 on his unvoiced frames",
                 dur_s=round(len(y) / SR, 3),
                 rms=round(float(np.sqrt((y ** 2).mean())), 5),
                 peak=round(float(np.abs(y).max()), 3), **st)
@@ -206,13 +216,16 @@ def packg():
 
 
 def packh():
-    """native-uv + 合議 + 遲滯版（2h/3h）：只寫 2h/3h，既有 stim 全不覆寫。
+    """Native unvoiced plus consensus plus hysteresis (2h/3h): writes 2h and 3h only, overwriting no existing stimulus.
 
-    多兩個診斷欄：
-      interior_v%   距離最近 take-voiced 幀 ≥2 hop 的吸氣幀被唱比率——排除
-                    邊界，harvest 在輸出上的分析窗（>23ms）本來就會把相鄰
-                    voiced 抹過來，那部分不是「呼吸被唱」而是量測滲透
-      cut_on_v%     gate 誤切到 take-voiced 幀的比率（存疑判無聲的代價上限）
+    Two extra diagnostic columns:
+      interior_v%   the share of breath frames at least 2 hops from the nearest
+                    take-voiced frame that get sung. Excluding the boundary matters:
+                    harvest's analysis window on the output is over 23 ms and smears
+                    adjacent voiced frames in anyway, and that part is measurement
+                    bleed rather than breath being sung
+      cut_on_v%     the share of take-voiced frames the gate cuts by mistake, the
+                    upper bound on the cost of calling a doubtful frame unvoiced
     """
     import direct_mouth as dm
     ref_v = _take_uv()
@@ -251,8 +264,8 @@ def packh():
         if dst:
             key[dst.replace(".wav", "")] = dict(
                 cell=name, source=src,
-                desc="native-uv 注入（抽取即 (f0,uv) 成對）＋多特徵合議 uv"
-                     "＋信心遲滯邊界",
+                desc="native unvoiced injection (extraction gives (f0, uv) as a pair), "
+                     "multi-feature consensus on uv, and confidence hysteresis at the boundary",
                 dur_s=round(len(y) / SR, 3),
                 rms=round(float(np.sqrt((y ** 2).mean())), 5),
                 peak=round(float(np.abs(y).max()), 3),
@@ -263,7 +276,7 @@ def packh():
 
 
 def _lsd(y, ref, hops, n=2048):
-    """吸氣段對原聲的對數頻譜距離（dB）；透傳應趨近 0。"""
+    """Log-spectral distance from the original over the breath stretches, in dB; a pass-through should approach 0."""
     w = np.hanning(n)
     vals = []
     for k in hops:
@@ -277,7 +290,7 @@ def _lsd(y, ref, hops, n=2048):
 
 
 def packp():
-    """源透傳版（2p/3p）：uv 段走原聲，只寫 2p/3p，既有 stim 全不覆寫。"""
+    """Source pass-through (2p/3p): unvoiced stretches take the original. Writes 2p and 3p only."""
     ref_v = _take_uv()
     take = _load(os.path.join(OUT, "seg_take.wav"))
     tgt = float(np.sqrt((_load(os.path.join(OUT, "stim_1.wav")) ** 2).mean()))
@@ -299,7 +312,7 @@ def packp():
             assert np.abs(y).max() < 1.0, (dst, np.abs(y).max())
             sf.write(os.path.join(OUT, dst), y, SR, subtype="PCM_16")
         st = _score(y, ref_v)
-        # LSD 要在同位準下比：把原聲縮到與本格 voiced rms 相同
+        # log-spectral distance has to be compared at matched level: scale the original to this cell's voiced RMS
         m = min(len(y), len(take))
         vm_s = np.repeat(ref_v.astype(float), HOP)[:m] > 0.5
         sc = (np.sqrt((y[:m][vm_s] ** 2).mean())
@@ -312,8 +325,8 @@ def packp():
         if dst:
             key[dst.replace(".wav", "")] = dict(
                 cell=name, source=src,
-                desc="uv 段＝他的原聲透傳（15ms 升餘弦交叉淡化、位準對齊到轉換"
-                     "輸出），voiced 段＝轉換結果",
+                desc="unvoiced stretches pass his original through (15 ms raised-cosine "
+                     "crossfade, level matched to the converted output); voiced stretches are converted",
                 dur_s=round(len(y) / SR, 3),
                 rms=round(float(np.sqrt((y ** 2).mean())), 5),
                 peak=round(float(np.abs(y).max()), 3),
@@ -324,7 +337,7 @@ def packp():
 
 
 def packq():
-    """錨定版（2q/3q）：修掉「12 秒後吸不了氣」的樂句中間開洞。只寫 2q/3q。"""
+    """Anchored (2q/3q): fixes the gate opening a hole in the middle of a phrase, the "cannot breathe after 12 seconds" problem. Writes 2q and 3q only."""
     ref_v = _take_uv()
     take = _load(os.path.join(OUT, "seg_take.wav"))
     tgt = float(np.sqrt((_load(os.path.join(OUT, "stim_1.wav")) ** 2).mean()))
@@ -356,8 +369,9 @@ def packq():
         if dst:
             key[dst.replace(".wav", "")] = dict(
                 cell=name, source=src,
-                desc="源透傳＋gate 錨定於 harvest 無聲處±25ms（不在樂句中間開洞）"
-                     "＋分窗透傳增益＋局部自適應合議門檻",
+                desc="source pass-through, the gate anchored within 25 ms of a silence "
+                     "harvest agrees on so it never opens a hole mid-phrase, per-window "
+                     "pass-through gain, and a locally adaptive consensus threshold",
                 dur_s=round(len(y) / SR, 3),
                 rms=round(float(np.sqrt((y ** 2).mean())), 5),
                 peak=round(float(np.abs(y).max()), 3),
@@ -368,7 +382,7 @@ def packq():
 
 
 def packr():
-    """輸入 AGC 版（2r/3r）：轉換前把位準拉到訓練參考、轉換後還原。只寫 2r/3r。"""
+    """Input AGC (2r/3r): pull the level to the training reference before conversion and restore it after. Writes 2r and 3r only."""
     ref_v = _take_uv()
     take = _load(os.path.join(OUT, "seg_take.wav"))
     tgt = float(np.sqrt((_load(os.path.join(OUT, "stim_1.wav")) ** 2).mean()))
@@ -400,8 +414,9 @@ def packr():
         if dst:
             key[dst.replace(".wav", "")] = dict(
                 cell=name, source=src,
-                desc="q 版設定＋轉換前輸入 AGC 拉到訓練參考 rms 0.0566、"
-                     "轉換後乘回 1/gain 還原位準結構",
+                desc="the q settings plus an input AGC to the training reference RMS of "
+                     "0.0566 before conversion, multiplied back by 1/gain afterwards so the "
+                     "level structure is restored",
                 dur_s=round(len(y) / SR, 3),
                 rms=round(float(np.sqrt((y ** 2).mean())), 5),
                 peak=round(float(np.abs(y).max()), 3),
@@ -412,8 +427,10 @@ def packr():
 
 
 def packe():
-    """表現層版（3e）：r 版設定＋f0-mode express（規則合成微偏置/漂移/不規則
-    顫音/進音彎，參數抄真人統計）。只寫 3e——② 不需要表現層（f0 已是真人）。"""
+    """Expression layer (3e): the r settings plus f0-mode express, a rule-based
+    per-note offset, drift, irregular vibrato and scoop, with parameters taken from
+    measurements of real singing. Writes 3e only - cell 2 needs no expression layer,
+    since its f0 is already a real singer's."""
     ref_v = _take_uv()
     take = _load(os.path.join(OUT, "seg_take.wav"))
     tgt = float(np.sqrt((_load(os.path.join(OUT, "stim_1.wav")) ** 2).mean()))
@@ -444,9 +461,10 @@ def packe():
         if dst:
             key[dst.replace(".wav", "")] = dict(
                 cell=name, source=src,
-                desc="r 版設定＋f0-mode express：target 骨架＋規則表現層"
-                     "（每音偏置/慢漂移/快抖/不規則顫音/進音彎，參數抄真人統計，"
-                     "seed 20260731）",
+                desc="the r settings plus f0-mode express: a target skeleton with a "
+                     "rule-based expression layer (per-note offset, slow drift, fast tremor, "
+                     "irregular vibrato and a scoop, with parameters taken from measurements "
+                     "of real singing, seed 20260731)",
                 dur_s=round(len(y) / SR, 3),
                 rms=round(float(np.sqrt((y ** 2).mean())), 5),
                 peak=round(float(np.abs(y).max()), 3),

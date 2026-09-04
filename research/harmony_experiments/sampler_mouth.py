@@ -1,26 +1,34 @@
-"""sampler_mouth.py — 選項⓪ 取樣嘴（unit-sampling mouth）
+"""sampler_mouth.py - option 0, a unit-sampling voice.
 
-長音不合成：天使的每顆音直接播放真實錄音的 sustain 單元。
-v1（--plain）：靜態單元＋等功率硬接 → Harry 耳判「像鋼琴，沒有唱的過程」。
-v2（預設）：歌唱手勢層——全部仍是她的真實錄音，只用時變 varispeed 彎音：
-  - 起音 scoop：樂句頭從 -60c 滑入
-  - legato 彎音過渡：換音時上一顆單元先滑進新音高（≤4 st），
-    過渡完才在穩定段內交叉淡接到新單元（接縫藏在音事件之後）
-  - 句尾音高微降＋自然收音
-  - 呼吸跟隨：天使增益包絡跟隨 take 的 RMS（跟他一起做樂句）
+Sustained notes are not synthesised: every note a part sings plays a sustain unit
+from a real recording.
 
-管線：
-  build   母音錄音 → 穩定長音單元庫（index JSON，只存 offset）
-  render  notes.json（world_mouth）或 .targets.json（solo_host）
-          → {tag}_angel.wav ＋ {tag}_mix.wav（0.5*take + 0.8*stem 同 world_mouth 配方）
+v1 (--plain): static units with an equal-power butt joint. Judged by ear as
+"like a piano, with none of the process of singing".
+v2 (the default): a layer of singing gesture. Everything is still her real
+recording; only time-varying varispeed bends it.
+  - a scoop into the attack: the head of a phrase slides in from -60 cents
+  - legato bending across a change: the previous unit slides to the new pitch
+    first (up to 4 semitones), and only then does a crossfade to the new unit
+    happen inside the stable part, so the splice hides behind the note event
+  - a slight fall in pitch at the end of a phrase, and a natural release
+  - breath following: the parts' gain envelope follows the take's RMS, so they
+    phrase with the singer
 
-用法（vcclient-dev env，於 harmony/ 下執行）：
+Pipeline:
+  build   vowel recordings to a library of stable sustain units (a JSON index
+          holding only offsets)
+  render  notes.json (world_mouth) or .targets.json (solo_host) to
+          {tag}_angel.wav and {tag}_mix.wav (0.5 take + 0.8 stem, the world_mouth recipe)
+
+Usage (vcclient-dev environment, run from harmony/):
   python sampler_mouth.py build --wavs A.wav B.wav --out out/units_girl.json
   python sampler_mouth.py render --units out/units_girl.json \
       --notes out/angel_v2_world2_notes.json --take ../../260722_harmony_brain/data/take.wav \
       --transpose 12 --tag sampler_girl_v2
 
-server/ 零改動；單元選取固定 seed 輪替（跨聲部抽不同 take＝天然去相關）。
+Nothing in server/ changes. Unit selection rotates on a fixed seed, so different
+parts draw different takes, which decorrelates them for free.
 """
 import argparse, json, math, os
 import numpy as np
@@ -32,19 +40,19 @@ from pitch import yin_f0
 SR = 44100
 HOP = 512
 FRAME = 2048
-XF = int(0.030 * SR)          # v1 事件接縫
+XF = int(0.030 * SR)          # v1 event splice
 MIN_UNIT_SEC = 0.35
 STAB_ST = 0.5
 RMS_GATE = 0.01
 
-# v2 手勢參數
-XF2 = int(0.120 * SR)         # legato 換單元交叉淡接（藏在穩定段內）
-POST_MAX = int(0.180 * SR)    # 過渡後舊單元多唱多久才換人
-SCOOP_C = -60.0               # 起音滑入起點（cents）
+# v2 gesture parameters
+XF2 = int(0.120 * SR)         # legato crossfade between units, hidden inside the stable part
+POST_MAX = int(0.180 * SR)    # how long the old unit sings on after the transition before handing over
+SCOOP_C = -60.0               # where the attack slides in from, in cents
 SCOOP_TAU = 0.040
-GLIDE_TAU = 0.050             # legato 彎音時間常數
-BEND_MAX_ST = 4               # 超過此音程改重新起音（真人大跳也會重出聲）
-CUT_XF = int(0.040 * SR)      # 大跳時的短接縫
+GLIDE_TAU = 0.050             # time constant of the legato bend
+BEND_MAX_ST = 4               # beyond this interval, re-attack instead; a real singer re-articulates a large leap too
+CUT_XF = int(0.040 * SR)      # the short splice used on a large leap
 END_DROOP_C = -30.0
 END_FADE = int(0.160 * SR)
 
@@ -68,7 +76,7 @@ def eq_pow_fades(n):
 
 
 def exp_toward(n, c0, target, tau):
-    """指數趨近曲線（解析式 one-pole）：c(t)=target+(c0-target)e^(-t/tau)"""
+    """Exponential approach, the analytic one-pole: c(t) = target + (c0 - target) e^(-t/tau)"""
     t = np.arange(n) / SR
     return target + (c0 - target) * np.exp(-t / tau)
 
@@ -124,7 +132,7 @@ def build(args):
                     "dur": round((s1 - s0) / SR, 3),
                 })
             i = j
-        # 換氣單元（任務3）：無聲、高於底噪、0.12–0.8s、緊鄰有聲段
+        # breath units: silent, above the noise floor, 0.12 to 0.8 s, adjacent to a voiced stretch
         voiced_fr = ~np.isnan(midi)
         floor = float(np.percentile(rmsv, 20))
         cand = (~voiced_fr) & (rmsv > max(2 * floor, 0.0025)) & (rmsv < RMS_GATE * 1.5)
@@ -155,20 +163,22 @@ def build(args):
     print(f"breaths={len(breaths)}")
 
 
-# ---------------------------------------------------------------- render 共用
+# ---------------------------------------------------------------- shared by render
 
 def parse_notes(path):
     d = json.load(open(path))
-    if "notes" in d:                       # world_mouth 格式
+    if "notes" in d:                       # world_mouth format
         return d["notes"], int(d["step_samps"])
-    return d["targets"], int(round(d["tick_sec"] * SR))  # solo_host 格式
+    return d["targets"], int(round(d["tick_sec"] * SR))  # solo_host format
 
 
 def pick_unit(lib_by_note, target, rng, last_id, need_len=None, cluster=None):
-    """最近音單元選取。v5 消融加兩個約束（量測歸因 worklog 07-26 §B）：
-    cluster＝樂句內音色一致（girl 版主犯：相鄰單元音色跳動 0.125）；
-    need_len＝偏好不用循環的夠長單元（harry 版主犯：55% 事件需循環）。
-    約束都是軟的——池子空了就逐層退讓。"""
+    """Nearest-pitch unit selection. The v5 ablation added two constraints, both
+    attributed by measurement: cluster keeps the timbre consistent within a phrase
+    (the main offender in the girl version, where adjacent units jumped 0.125 in
+    timbre), and need_len prefers units long enough not to loop (the main offender
+    in the other version, where 55% of events needed looping). Both constraints are
+    soft and give way layer by layer once the pool empties."""
     best_d, cands = None, []
     for note, us in lib_by_note.items():
         d = abs(note - target)
@@ -188,7 +198,7 @@ def pick_unit(lib_by_note, target, rng, last_id, need_len=None, cluster=None):
 
 
 def timbre_clusters(lib, srcs, k=5):
-    """MFCC 均值向量 → k-means 音色分群（母音無標註的代理）。"""
+    """Mean MFCC vector to a k-means timbre cluster, a proxy for the unlabelled vowel."""
     import librosa
     from scipy.cluster.vq import kmeans2
     feats = []
@@ -204,7 +214,7 @@ def timbre_clusters(lib, srcs, k=5):
 
 
 def fit_duration(y, n_out):
-    """單元音訊貼合 n_out 樣本：不足→中段循環（等功率接縫），過長→截尾。"""
+    """Fit a unit's audio to n_out samples: loop the middle if it is short, with an equal-power splice; truncate if it is long."""
     if len(y) >= n_out:
         return y[:n_out].copy()
     a, b = min(int(0.05 * SR), len(y) // 4), len(y) - min(int(0.05 * SR), len(y) // 4)
@@ -235,7 +245,7 @@ def make_events(notes, tick):
 
 
 def smooth_env(x, hop, win_s):
-    """零相位 RMS 包絡（對稱窗，離線不需因果）。回傳 hop 網格上的包絡。"""
+    """Zero-phase RMS envelope with a symmetric window; offline needs no causality. Returns the envelope on the hop grid."""
     m = len(x) // hop
     rms = np.sqrt(np.mean(x[:m * hop].reshape(m, hop) ** 2, axis=1))
     w = np.hanning(max(3, int(win_s * SR / hop) | 1))
@@ -243,11 +253,12 @@ def smooth_env(x, hop, win_s):
 
 
 def take_gain(take, n, floor=0.12, win_s=0.020):
-    """咬字蓋印：take 的零相位快包絡（20ms 窗）→ 天使增益曲線。
+    """Articulation stamp: a zero-phase fast envelope of the take (20 ms window) becomes the parts' gain curve.
 
-    保留音節瞬態與子音斷點——她的母音跟著他的字走；零相位＝無滯後
-    （v3 的因果追隨器有 +23ms 群延遲，音節帶相關被相位差吃掉）。
-    floor 讓天使在他換氣時仍以低音量延音。"""
+    This keeps the syllable transients and the consonant breaks, so her vowels
+    follow his words. Zero phase means no lag: the causal follower of v3 had 23 ms
+    of group delay, and the phase difference ate the syllable-band correlation.
+    The floor lets the parts sustain quietly while he breathes."""
     hop = 256
     e = smooth_env(take, hop, win_s)
     env = np.interp(np.arange(n), np.arange(len(e)) * hop, e,
@@ -257,9 +268,11 @@ def take_gain(take, n, floor=0.12, win_s=0.020):
 
 
 def flatten_texture(y, strength=1.0, win_s=0.050):
-    """熨平載體：單元除以自身包絡（50ms 零相位）的 strength 次方。
-    strength=1 全熨（v4：蓋印相關最高但被耳判「音色皮」——表情全死）；
-    0.35 部分熨＝保留載體自然生命，讓出部分頭寸給咬字蓋印。"""
+    """Flatten the carrier: divide a unit by its own envelope (50 ms, zero phase)
+    raised to the power `strength`. At 1 it is fully flattened (v4: the highest
+    stamp correlation, but judged by ear to be "a skin of timbre", with all
+    expression gone); 0.35 flattens it partly, keeping the carrier's natural life
+    and giving some of the budget back to the articulation stamp."""
     if strength <= 0:
         return y
     hop = 256
@@ -297,7 +310,7 @@ def render_plain(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng):
 # ---------------------------------------------------------------- render v2
 
 def render_gesture(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=None):
-    """歌唱手勢層：scoop 起音、legato 彎音過渡、句尾收音。全 varispeed，零合成。"""
+    """The layer of singing gesture: a scoop into the attack, legato bending across changes, and a release. All varispeed, nothing synthesised."""
     opts = opts or {}
     stem = np.zeros(n_ticks * tick + XF2 + POST_MAX)
     shifts, used, last_id = [], set(), -1
@@ -313,7 +326,7 @@ def render_gesture(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=
         phrases.append(cur)
 
     for ph in phrases:
-        # 每顆音的進場點：bend 過渡時新單元晚 POST 進場（接縫藏在音事件後的穩定段）
+        # where each note enters: on a bend the new unit enters late, so the splice hides in the stable part after the note event
         entries, bend_ok = [ph[0]["t0"]], [False]
         for i in range(1, len(ph)):
             iv = ph[i]["midi"] - ph[i - 1]["midi"]
@@ -335,32 +348,35 @@ def render_gesture(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=
             base = midi_to_hz(ev["midi"]) / midi_to_hz(u["midi"])
             shifts.append(1200 * math.log2(base))
 
-            # 本段時間範圍（含頭部交叉淡接）
+            # the time range of this segment, including the crossfade at its head
             xfc = 0 if i == 0 else (XF2 if bend_ok[i] else CUT_XF)
             xfc = min(xfc, entries[i] - (entries[i - 1] if i else 0)) if i else 0
             seg_s = entries[i] - xfc
             seg_e = (entries[i + 1] if i + 1 < len(ph) else end)
             if i + 1 < len(ph):
-                seg_e += 0  # 尾部延伸由下一顆的 xfc 覆蓋：本段唱到對方進場點
+                seg_e += 0  # the tail extension is covered by the next note's crossfade: this one sings to the other's entry
                 seg_e = entries[i + 1]
             L = seg_e - seg_s
             if L <= 0:
                 continue
 
-            # cents 曲線
+            # the cents curve
             c = np.zeros(L)
             if i == 0:
                 c += exp_toward(L, SCOOP_C, 0.0, SCOOP_TAU)
             elif bend_ok[i]:
-                # 接棒曲線：舊單元滑到入場點時還差 iv*exp(-POST/tau) 沒滑完，
-                # 新單元從同一位置出發同 tau 收斂 → 疊影期兩層音高一致。
-                # （量測：過渡區 std 33c vs 穩定區 7c——「偏不穩」住在這裡）
+                # handover curve: when the old unit reaches the entry point it still
+                # has iv * exp(-POST/tau) left to slide, and the new unit starts from
+                # the same place with the same tau, so both layers agree in pitch
+                # while they overlap. Measured: 33 cents of deviation across a
+                # transition against 7 in a stable stretch, which is where the
+                # unsteadiness lived.
                 iv_c = (ev["midi"] - ph[i - 1]["midi"]) * 100.0
                 post = entries[i] - ev["t0"]
                 c0 = -iv_c * math.exp(-post / SR / GLIDE_TAU)
                 c += exp_toward(L, c0, 0.0, GLIDE_TAU)
             if i + 1 < len(ph) and bend_ok[i + 1]:
-                b = ph[i + 1]["t0"] - seg_s          # 過渡開始（本段座標）
+                b = ph[i + 1]["t0"] - seg_s          # where the transition starts, in this segment's coordinates
                 if 0 < b < L:
                     iv_c = (ph[i + 1]["midi"] - ev["midi"]) * 100.0
                     c[b:] = c[b:] - c[b] + exp_toward(L - b, c[b], iv_c, GLIDE_TAU)
@@ -371,7 +387,7 @@ def render_gesture(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=
                 d = min(END_FADE, L)
                 c[L - d:] += exp_toward(d, 0.0, END_DROOP_C, END_FADE / SR / 3)
 
-            # 時變 varispeed 讀取（真實錄音，只彎不合成）
+            # time-varying varispeed read: a real recording, bent but never synthesised
             ratio = base * 2 ** (c / 1200.0)
             pos = np.cumsum(ratio)
             need = int(pos[-1]) + FRAME
@@ -381,7 +397,7 @@ def render_gesture(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=
             y = flatten_texture(y, opts.get("flatten", 1.0))
             y *= med_rms / (np.sqrt(np.mean(y ** 2)) + 1e-12)
 
-            # 振幅窗
+            # amplitude window
             if i == 0:
                 a = min(int(0.060 * SR), L)
                 y[:a] *= np.sin(np.linspace(0, np.pi / 2, a)) ** 2
@@ -402,15 +418,17 @@ def render_gesture(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=
 
 
 def render_runs(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=None):
-    """v7 run 制：同一顆單元一路彎到底（真 legato、零接縫），只在大跳或
-    彎太遠（>3 st）時才換單元。動機（worklog 07-26 §B 續）：v6 逐項排除後
-    剩餘的客觀差距＝接縫數量本身——每音換單元＝34 個交叉淡接擾動；
-    參照（DDSP）是單一連續源。她的單元中位 4.4s，多數樂句一顆就夠。"""
+    """v7 runs: one unit is bent all the way through - real legato with no splices -
+    and only replaced on a large leap or a bend of more than 3 semitones. After v6
+    ruled out everything else, the remaining objective gap was the NUMBER of splices
+    itself: changing unit per note means 34 crossfade disturbances, where the
+    reference carrier is one continuous source. Her units have a median length of
+    4.4 s, so one is usually enough for a whole phrase."""
     opts = opts or {}
     stem = np.zeros(n_ticks * tick + XF2 + POST_MAX)
     shifts, used, last_id = [], set(), -1
     n_bend = n_seam = 0
-    MAX_OFF_ST = 3          # 同單元最遠可彎（半音）
+    MAX_OFF_ST = 3          # the furthest one unit is bent, in semitones
 
     phrases, cur = [], []
     for ev in events:
@@ -421,13 +439,13 @@ def render_runs(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=Non
     if cur:
         phrases.append(cur)
 
-    phrase_bounds, _pe = [], 0   # (樂句起點, 前句終點)——換氣插入用
+    phrase_bounds, _pe = [], 0   # (phrase start, previous phrase end), for inserting breaths
     for ph in phrases:
         phrase_bounds.append((ph[0]["t0"], _pe))
         _pe = ph[-1]["t0"] + ph[-1]["n"]
 
     for ph in phrases:
-        # 切 runs：可用同一顆單元連續彎的音串
+        # cut into runs: strings of notes one unit can bend through continuously
         runs, cur_r = [], [ph[0]]
         for k in range(1, len(ph)):
             iv = abs(ph[k]["midi"] - ph[k - 1]["midi"])
@@ -474,7 +492,7 @@ def render_runs(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=Non
             if L <= 0:
                 continue
 
-            # cents 曲線（相對 root）：逐音 one-pole 級進；末端彎向下一 run
+            # the cents curve relative to the root: a one-pole step per note, bending towards the next run at the end
             offs = [(ev["midi"] - root) * 100.0 for ev in run]
             if r == 0:
                 val = offs[0] + SCOOP_C
@@ -496,7 +514,7 @@ def render_runs(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=Non
                     c[pos_c:b_next] = exp_toward(b_next - pos_c, val, offs[k], GLIDE_TAU)
                     val = c[b_next - 1]
                     pos_c = b_next
-            if tail_b < L:  # 彎向下一 run 的接棒橋
+            if tail_b < L:  # the handover bridge into the next run
                 nxt = (runs[r + 1][0]["midi"] - root) * 100.0
                 c[tail_b:] = exp_toward(L - tail_b, val, nxt, GLIDE_TAU)
             elif pos_c < L:
@@ -533,8 +551,9 @@ def render_runs(events, lib_by_note, srcs, med_rms, tick, n_ticks, rng, opts=Non
 
 
 def add_breaths(stem, breaths, srcs, phrase_bounds, med_rms, rng):
-    """樂句開頭前插入真實換氣聲。必須在咬字蓋印之後呼叫——take 在句間是
-    靜音，蓋印的 floor 會把先插的換氣壓死。"""
+    """Insert a real breath before the start of a phrase. This has to be called
+    AFTER the articulation stamp: the take is silent between phrases, and the
+    stamp's floor would crush a breath inserted first."""
     GAP_MIN = int(0.06 * SR)
     n_ins = 0
     for start, prev_end in phrase_bounds:
@@ -556,7 +575,7 @@ def add_breaths(stem, breaths, srcs, phrase_bounds, med_rms, rng):
     return stem, n_ins
 
 
-# ---------------------------------------------------------------- render 入口
+# ---------------------------------------------------------------- render entry point
 
 def render(args):
     lib = json.load(open(args.units))
@@ -589,7 +608,7 @@ def render(args):
 
     take = load_mono(args.take)
     if not args.no_follow and not args.plain:
-        stem *= take_gain(take, len(stem))       # 咬字蓋印
+        stem *= take_gain(take, len(stem))       # the articulation stamp
     if not args.plain and not args.no_breath and lib.get("breaths"):
         stem, nb = add_breaths(stem, lib["breaths"], srcs,
                                st.get("phrase_bounds", []), med_rms,
@@ -603,7 +622,7 @@ def render(args):
     sf.write(os.path.join(out_dir, f"{args.tag}_angel.wav"), stem, SR)
 
     n = min(len(take), len(stem))
-    mix = 0.5 * take[:n] + 0.8 * stem[:n]        # 同 world_mouth 配方
+    mix = 0.5 * take[:n] + 0.8 * stem[:n]        # the world_mouth recipe
     mix = mix / (np.max(np.abs(mix)) + 1e-12) * 0.9
     sf.write(os.path.join(out_dir, f"{args.tag}_mix.wav"), mix, SR)
 
@@ -628,14 +647,14 @@ def main():
     r.add_argument("--tag", required=True)
     r.add_argument("--transpose", type=int, default=0)
     r.add_argument("--seed", type=int, default=0)
-    r.add_argument("--plain", action="store_true", help="v1 行為（無手勢層）")
-    r.add_argument("--no-follow", action="store_true", help="關閉咬字蓋印")
+    r.add_argument("--plain", action="store_true", help="v1 behaviour, no gesture layer")
+    r.add_argument("--no-follow", action="store_true", help="turn the articulation stamp off")
     r.add_argument("--flatten", type=float, default=0.35,
-                   help="載體熨平強度 0–1（1=v4 全熨/音色皮；0=保留全部原始表情）")
-    r.add_argument("--no-same-timbre", action="store_true", help="關閉樂句內音色一致約束")
-    r.add_argument("--no-prefer-long", action="store_true", help="關閉夠長單元偏好")
-    r.add_argument("--per-note", action="store_true", help="v5/v6 行為（每音換單元），A/B 用")
-    r.add_argument("--no-breath", action="store_true", help="關閉換氣單元插入")
+                   help="carrier flattening strength 0 to 1 (1 = v4, fully flattened, a skin of timbre; 0 keeps all the original expression)")
+    r.add_argument("--no-same-timbre", action="store_true", help="drop the within-phrase timbre constraint")
+    r.add_argument("--no-prefer-long", action="store_true", help="drop the preference for units long enough not to loop")
+    r.add_argument("--per-note", action="store_true", help="v5/v6 behaviour, a new unit per note, for A/B")
+    r.add_argument("--no-breath", action="store_true", help="do not insert breath units")
     args = ap.parse_args()
     {"build": build, "render": render}[args.cmd](args)
 
