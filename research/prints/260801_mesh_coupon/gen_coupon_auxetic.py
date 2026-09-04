@@ -1,54 +1,58 @@
-# mesh coupon v2 — auxetic 切縫片（rotating-squares slit sheet）×剛性板
-# 印時＝近實面＋0.6mm 細縫（閉合態，零重疊問題）；拉開時方塊繞角鉸旋轉 → 蕾絲感浮現
-# 漸變＝鉸鏈長度：板附近 2.4（硬）→ 外緣 0.8（軟）→ 拉伸時外緣先開、板區不動
-# 產出：mesh_coupon_v2_auxetic.stl + preview_auxetic.png
+# Mesh coupon v2: an auxetic rotating-squares slit sheet with a rigid plate.
+# It prints nearly solid, with 0.6 mm slits, closed and with nothing overlapping;
+# pulled, the squares rotate about their corner hinges and the lace appears.
+# The gradient is hinge length: 2.4 mm near the plate, stiff, tapering to 0.8 mm
+# at the edge, soft, so the outside opens first and the plate area does not move.
+# Writes mesh_coupon_v2_auxetic.stl and preview_auxetic.png.
 import numpy as np
 from shapely.geometry import LineString, Point, box
 from shapely.ops import unary_union
 import trimesh
 
-# ---- 參數（mm）----
+# ---- parameters (mm) ----
 SIZE = 150.0
 CX = CY = SIZE / 2
-R_PLATE = 27.5          # 實心板半徑（⌀55）
-PITCH = 8.0             # 方塊格距
-SLIT_W = 0.6            # 縫寬（0.4 噴嘴可printable 的最小可靠空隙）
-HINGE_NEAR, HINGE_FAR = 2.4, 0.8   # 鉸鏈長漸變（近板→外緣）
-R_TAPER1 = 70.0         # 此半徑外鉸鏈最細
-SHEET_T = 0.8           # 片厚（4 層 @0.2）
-PLATE_T = 1.6           # 板總厚
+R_PLATE = 27.5          # radius of the solid plate (55 mm across)
+PITCH = 8.0             # square cell pitch
+SLIT_W = 0.6            # slit width; the smallest gap a 0.4 nozzle reliably leaves
+HINGE_NEAR, HINGE_FAR = 2.4, 0.8   # hinge length, near the plate to the outer edge
+R_TAPER1 = 70.0         # hinges are at their shortest beyond this radius
+SHEET_T = 0.8           # sheet thickness, four layers at 0.2
+PLATE_T = 1.6           # total plate thickness
 
 def hinge_len(r):
     t = np.clip((r - R_PLATE) / (R_TAPER1 - R_PLATE), 0, 1)
     return HINGE_NEAR + t * (HINGE_FAR - HINGE_NEAR)
 
-# 方塊 (i,j) 旋轉方向 σ=+1 if (i+j) even（決定每條縫的鉸鏈留哪一端）
-# 水平相鄰對：σ1=+1 → 鉸在下端；垂直相鄰對：σ1=+1 → 鉸在右端
+# Square (i,j) rotates in direction sigma = +1 when (i+j) is even, which decides
+# which end of each slit keeps its hinge.
+# For a horizontal pair, sigma = +1 puts the hinge at the bottom; for a vertical
+# pair, sigma = +1 puts it at the right.
 N = int(round(SIZE / PITCH))
 slits = []
 for i in range(N):
     for j in range(N):
         sigma = 1 if (i + j) % 2 == 0 else -1
-        # 與右鄰的共邊（x = (i+1)*PITCH，y 從 j*P 到 (j+1)*P）
+        # the edge shared with the neighbour to the right
         if i + 1 < N:
             x = (i + 1) * PITCH
             y0, y1 = j * PITCH, (j + 1) * PITCH
             mid = np.array([x, (y0 + y1) / 2])
             hl = hinge_len(np.hypot(mid[0] - CX, mid[1] - CY))
-            if sigma > 0:   # 鉸在下端 → 縫從上端往下留 hl
+            if sigma > 0:   # hinge at the bottom, so the slit runs down from the top
                 seg = LineString([(x, y1), (x, y0 + hl)])
-            else:           # 鉸在上端
+            else:           # hinge at the top
                 seg = LineString([(x, y0), (x, y1 - hl)])
             slits.append(seg.buffer(SLIT_W / 2, cap_style=2))
-        # 與上鄰的共邊（y = (j+1)*PITCH，x 從 i*P 到 (i+1)*P）
+        # the edge shared with the neighbour above
         if j + 1 < N:
             y = (j + 1) * PITCH
             x0, x1 = i * PITCH, (i + 1) * PITCH
             mid = np.array([(x0 + x1) / 2, y])
             hl = hinge_len(np.hypot(mid[0] - CX, mid[1] - CY))
-            if sigma > 0:   # 鉸在右端 → 縫從左端往右留 hl
+            if sigma > 0:   # hinge at the right, so the slit runs right from the left
                 seg = LineString([(x0, y), (x1 - hl, y)])
-            else:           # 鉸在左端
+            else:           # hinge at the left
                 seg = LineString([(x0 + hl, y), (x1, y)])
             slits.append(seg.buffer(SLIT_W / 2, cap_style=2))
 
@@ -76,7 +80,7 @@ vol = combined.volume / 1000.0
 print(f"STL out: mesh_coupon_v2_auxetic.stl  triangles={len(combined.faces)}")
 print(f"volume={vol:.1f} cm³  PLA≈{vol*1.24:.0f} g  bbox={combined.bounds[1]-combined.bounds[0]}")
 
-# ---- 預覽 ----
+# ---- preview ----
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

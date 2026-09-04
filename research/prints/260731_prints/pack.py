@@ -34,7 +34,8 @@ def flip_x(tris):
         for k in range(3):
             nt[4+k*3] = -t[4+k*3]
             nt[5+k*3] = -t[5+k*3]
-        # 翻面後三角形繞向反轉,交換頂點 1/2 保持法向一致
+        # Mirroring reverses triangle winding; swap vertices 1 and 2 to keep the
+        # normals consistent.
         v1 = nt[3:6][:]; v2 = nt[6:9][:]
         nt[3:6], nt[6:9] = v2, v1
         out.append(nt)
