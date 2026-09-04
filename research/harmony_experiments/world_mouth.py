@@ -50,14 +50,16 @@ def main():
         raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16) / 32768.0
     mic = (raw.reshape(-1, nch)[:, 0] if nch > 1 else raw).astype(np.float64)
 
-    # key 歸一化（任務6，2026-07-26）：腦只懂 C 大調音級；take 實測是 A 大調
-    # （音階覆蓋 84% vs C 的 65%）＝此前所有 render 腦都在非母語環境工作。
-    # "auto"＝keydet 音階隸屬度偵測 → 輸入 f0 移進 C 框架、腦輸出移回真實調。
+    # Key normalisation: the model only understands C major scale degrees, and the
+    # take measures as A major (84% scale membership against C's 65%), which means
+    # every render before this had the model working in a foreign language.
+    # "auto" detects the key by scale membership, shifts the input f0 into the C
+    # frame, and shifts the model's output back into the real key.
     if key_arg == "auto":
         from keydet import KeyDetector
         from pitch import yin_f0
         kd = KeyDetector()
-        for ts in range(0, len(mic) - 2048, 1024):   # 與 keydet 驗證同路徑
+        for ts in range(0, len(mic) - 2048, 1024):   # the same path the key detection was validated on
             f = yin_f0(mic[ts:ts + 2048].astype(np.float32), SR)
             kd.push(float(f) if f else None)
         k = kd.key()
@@ -74,14 +76,16 @@ def main():
     step_samps = int((60.0 / bpm) * 0.25 * SR)
     notes, heard, prev = [], [], None
     legato = {"gap": 0, "note": None}
-    n_ant = n_agree = 0            # 預感命中統計（任務5）
+    n_ant = n_agree = 0            # anticipation hit statistics
     for tick_start in range(0, len(mic) - 1024, step_samps):
         tracker.push(mic[tick_start : tick_start + step_samps])
-        f_in = tracker.latest                 # rounded MIDI（非 Hz）
+        f_in = tracker.latest                 # rounded MIDI, not Hz
         if f_in is not None and k_shift:
-            f_in = int(f_in) + k_shift        # 進腦前移到 C 框架（MIDI 域＝整數加法）
-        # 預感模式：先用腦對「他下一顆音」的預報決定天使的音（與他同時落地），
-        # 真實 token 隨後照常餵進去；預報與反應式選擇一致率一併統計。
+            f_in = int(f_in) + k_shift        # shift into the C frame before the model; in the MIDI domain this is integer addition
+        # Anticipation mode: the parts' note comes from the model's forecast of his
+        # NEXT note, so they land at the same time as he does. The real token is
+        # still fed in afterwards, and the agreement between forecast and reactive
+        # choice is recorded.
         ant = brain.step_anticipate(f_in is not None) if anticipate else None
         s = v2t.token(f_in)
         h = v2t.prev  # his sounding note (brain space), for the shift-mode interval

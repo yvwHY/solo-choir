@@ -1,8 +1,9 @@
-"""rehearse_bench.py — 12 對雙 take 的譜追蹤器跑分（07-30 §C 材料）
+"""rehearse_bench.py - score-tracker scoring over 12 pairs of double takes.
 
-07-30 三輪跑分的 driver 沒留檔（agent 臨時跑的），本輪起固化：同一份
-harness（--key 0 --shared-octave 口徑，已對 pair01 復現 v2=41.5%/r̂1.04/×3）
-一次跑完 12 對 × N 個 tracker，出對照表。
+The driver for the three earlier scoring rounds was ad hoc and never kept, so it is
+written down from here on: one harness (--key 0 --shared-octave, which has already
+reproduced v2 at 41.5% with an r-hat of 1.04 on the first pair) runs all 12 pairs
+against N trackers in one go and prints the comparison table.
 
 Run（DDSP venv）:
   .../260724_ddsp_svc/venv/bin/python rehearse_bench.py [--trackers v2,v3]
@@ -17,7 +18,7 @@ from rehearse_ab import lead_stream, run_A, sounding  # noqa: E402
 
 PAIRS = HERE / "../../../260730_recording/pairs"
 
-# 天花板與信度：oracle_table.txt（07-30 第二輪，DTW ground-truth 上界）的凍結值
+# The ceiling and the reliability come from oracle_table.txt, the frozen DTW ground-truth upper bound
 CEIL = {  # pair: (conf, oracle_voiced%, tick_ratio)
     "pair01": ("high", 81.1, 1.04), "pair02": ("high", 65.3, 1.03),
     "pair03": ("high", 48.1, 1.02), "pair04": ("medium", 63.8, 0.99),

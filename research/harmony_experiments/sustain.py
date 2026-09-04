@@ -18,7 +18,7 @@ Trigger tuning (no synthesis):
 Offline render (ear-gate material):        same command without --scan
 Live (headphones; sing in --key, default C):
     /opt/anaconda3/envs/vcclient-dev/bin/python sustain.py --live \
-        --in-name 外接麥克風 --out-name 外接耳機
+        --in-name "USB PnP" --out-name "External Headphones"
 """
 
 import argparse

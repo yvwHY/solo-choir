@@ -52,47 +52,47 @@
 <body>
 <header>
   <div id="dot"></div><h1>Solo Choir · v3 lab</h1>
-  <span class="sub">live_v3 引擎實驗台——Stop＝收官報表（mic dump＋命題一）</span>
+  <span class="sub">engine test bench - Stop gives the closing report (microphone dump and headline numbers)</span>
 </header>
 <main>
   <div id="cfg">
     <div class="seg">
       <button id="mLive" class="on" onclick="setMode('live')">live</button>
-      <button id="mFile" onclick="setMode('file')">file 重放</button>
+      <button id="mFile" onclick="setMode('file')">file replay</button>
     </div>
 
     <fieldset id="fsDev"><legend>DEVICES</legend>
-      <label>輸入（mic）</label><select id="inDev"><option value="">系統預設</option></select>
-      <label>輸出</label><select id="outDev"><option value="">系統預設</option></select>
-      <label>out-map（upper,lower；空＝立體聲混合）</label>
-      <input type="text" id="outMap" placeholder="例：0,1">
-      <label>dry-ch（配 out-map；空＝乾聲不出）</label>
+      <label>input (mic)</label><select id="inDev"><option value="">system default</option></select>
+      <label>output</label><select id="outDev"><option value="">system default</option></select>
+      <label>out-map (upper, lower; empty = stereo mix)</label>
+      <input type="text" id="outMap" placeholder="e.g. 0,1">
+      <label>dry-ch (with out-map; empty = no dry output)</label>
       <input type="number" id="dryCh" placeholder="">
     </fieldset>
 
     <fieldset id="fsFile" style="display:none"><legend>FILE</legend>
-      <label>輸入 wav 路徑</label>
+      <label>input wav path</label>
       <input type="text" id="fileIn" placeholder="out/loopback_0730/seg_take.wav">
     </fieldset>
 
     <fieldset><legend>ENGINE</legend>
-      <label>key（auto 只適合大調音階即興；<b style="color:var(--warn)">唱真歌一律填整數</b>——keydet 在真歌會鎖垃圾調，07-30 已判死）</label>
+      <label>key (auto only suits major-scale improvisation; <b style="color:var(--warn)">always give an integer for a real song</b> - key detection locks onto a rubbish key on real songs, condemned 07-30)</label>
       <input type="text" id="key" value="auto">
       <label>lag <span class="v" id="lagV">0.60s</span></label>
       <div class="row"><input type="range" id="lag" min="0.3" max="1.2" step="0.05" value="0.6"></div>
       <label>gain <span class="v" id="gainV">1.5</span></label>
       <div class="row"><input type="range" id="gain" min="0" max="4" step="0.1" value="1.5"></div>
-      <label>表現層 expr-gain（0＝舊固定顫音）<span class="v" id="exprV">1.0</span></label>
+      <label>expression layer expr-gain (0 = the old fixed vibrato)<span class="v" id="exprV">1.0</span></label>
       <div class="row"><input type="range" id="expr" min="0" max="2" step="0.1" value="1.0"></div>
-      <div class="chk"><input type="checkbox" id="ant"><label for="ant" style="margin:0">預感模式（anticipate）</label></div>
-      <label>進階參數（原樣傳給 live_v3；低延遲實驗：--hop-ms 100 --bound-ms 450 配 lag 0.35）</label>
+      <div class="chk"><input type="checkbox" id="ant"><label for="ant" style="margin:0">anticipation mode</label></div>
+      <label>advanced arguments (passed through verbatim; low-latency experiment: --hop-ms 100 --bound-ms 450 with lag 0.35)</label>
       <div class="row"><input type="text" id="extra" placeholder="--hop-ms 100 --bound-ms 450"></div>
     </fieldset>
 
-    <fieldset><legend>REHEARSE（緊檔 v1）</legend>
-      <label>排練檔（含 lead 的 *_notes.json）</label>
-      <select id="reh"><option value="">關（腦即興）</option></select>
-      <label>r̂ 速度先驗（譜tick/實tick）</label>
+    <fieldset><legend>REHEARSE (v1)</legend>
+      <label>rehearsal file (a *_notes.json containing the lead)</label>
+      <select id="reh"><option value="">off (the model improvises)</option></select>
+      <label>r-hat tempo prior (score ticks per real tick)</label>
       <input type="number" id="rehRate" value="1.0" step="0.05">
     </fieldset>
 
@@ -107,9 +107,9 @@
       <div class="cell"><div class="k">LOWER</div><div class="n" id="sL">–</div></div>
       <div class="cell"><div class="k">MARGIN</div><div class="n" id="sMg">–</div></div>
       <div class="cell"><div class="k">STARVED</div><div class="n" id="sSt">–</div></div>
-      <div class="cell"><div class="k">BRAIN p95<br>(預算187)</div><div class="n" id="sBr">–</div></div>
-      <div class="cell"><div class="k">HOP p95<br>(預算150)</div><div class="n" id="sHp">–</div></div>
-      <div class="cell"><div class="k">IO 丟失<br>(入/出)</div><div class="n" id="sIo">–</div></div>
+      <div class="cell"><div class="k">BRAIN p95<br>(budget 187)</div><div class="n" id="sBr">-</div></div>
+      <div class="cell"><div class="k">HOP p95<br>(budget 150)</div><div class="n" id="sHp">-</div></div>
+      <div class="cell"><div class="k">IO lost<br>(in/out)</div><div class="n" id="sIo">-</div></div>
     </div>
     <div id="log"></div>
   </div>
@@ -180,7 +180,7 @@ function onLine(t){
       $("sIo").textContent = m[9] + "/" + m[10];
       $("sIo").classList.toggle("warn", +m[9] + +m[10] > 0);
     }
-    return;                       // 狀態列不進 console，太吵
+    return;                       // the status line does not go to the console; too noisy
   }
   const cls = t.startsWith("$") ? "cmd"
     : /^(mic level|rehearse:|anticipation|\[keydet\]|\[rehearse\]|mic dump|wrote)/.test(t) ? "hl"

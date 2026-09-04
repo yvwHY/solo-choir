@@ -1,14 +1,18 @@
-"""a_enh.py — A 版配方＋NSF-HiFiGAN enhancer（08-05 §F；接 clean_ab 判決）
+"""a_enh.py - the A recipe plus the NSF-HiFiGAN enhancer.
 
-Harry 定位：「enh 檔其實還好，我說的是非 enh 的 bass wav」＝autotune 感
-不在音高曲線（canon/bare 的 f0 已量測＝他的曲線 −12、偏差 1–2c）、在
-**低音域 CombSub 裸輸出的死平諧波**；NSF-HiFiGAN enhancer 重整後消失。
+The verdict this follows: "the enhanced files are actually fine; I meant the
+un-enhanced bass wav". So the auto-tuned quality is not in the pitch curve - the f0
+of the reference and bare cells was measured as his own curve at -12 with 1 to 2
+cents of deviation - but in **the dead flat harmonics of the bare CombSub output in
+the low register**, which disappear once the NSF-HiFiGAN enhancer rebuilds them.
 
-本檔＝把 enhancer 掛上現行配方（phrase_render `enhance=True` 守衛參數）
-渲染 A+enh 版，素材同 clean_ab 兩句（xcorr 選段）：
+This file hangs the enhancer on the current recipe (the `enhance=True` guard
+parameter of phrase_render) and renders an A-plus-enhancer version, on the same two
+phrases as clean_ab, selected by cross-correlation:
   seg{i}_Aenh_mix.wav / seg{i}_Aenh_bass1_lower.wav
-過耳＝enhancer 入配方（再量 live RTF 預算）；不過＝enhancer 也救不了
-配方層，回頭查骨架×enhancer 的交互。
+If it passes by ear, the enhancer joins the recipe and its live real-time budget is
+measured next. If not, the enhancer cannot save the recipe layer either, and the
+interaction between the skeleton and the enhancer is where to look.
 
 Run (DDSP venv):  python a_enh.py
 """
@@ -47,8 +51,10 @@ def main():
 
     for i, seg in enumerate(segs):
         sh = {"f0m": dm.harvest_f0(seg)}
-        # 音符線＝讀 bare_test 落檔的同一條（EarV3 隨機性對呼叫序敏感，
-        # 重算會岔線＝不是單一變因；實測岔線後同音幀只剩 11–37%）。
+        # the note line is read from what bare_test wrote, not recomputed: the ear
+        # has randomness and is sensitive to call order, so recomputing forks the
+        # line and it stops being a single-variable comparison (measured: after a
+        # fork only 11 to 37% of frames hold the same note).
         d = json.load(open(OUT / f"seg{i}_notes.json"))
         kw = {v: dict(expr_gain=0.0, vib_semi=0.12, vib_onset_ms=250.0,
                       uv_dry=0.0, vib_hz=R.VIB[v][0], vib_phase=R.VIB[v][1])
@@ -61,7 +67,7 @@ def main():
         wr(f"seg{i}_Aenh_mix.wav",
            DRY * seg[:n] + GU * ang["upper"][:n] + GL * ang["lower"][:n])
         wr(f"seg{i}_Aenh_bass1_lower.wav", ang["lower"][:n])
-        print(f"seg{i}: 兩聲部含 enhancer {dt:.2f}s／{len(seg)/SR:.1f}s 音訊"
+        print(f"seg{i}: both parts with the enhancer, {dt:.2f}s for {len(seg)/SR:.1f}s of audio"
               f" = RTF {dt/(len(seg)/SR):.2f}")
     print("wrote", OUT, "(seg*_Aenh_*.wav)")
 

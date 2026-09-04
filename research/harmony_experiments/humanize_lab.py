@@ -11,7 +11,7 @@ the SAME WORLD mouth on the SAME take + brain line for a blind ranking:
                     live pitch.
   H2 transplant  -- his own micro-deviation (cents from HIS rounded note,
                     clamped, scaled ALPHA) grafted onto the target note.
-                    Note placement stays target-式 (F16); only the micro
+                    Note placement stays target-style (F16); only the micro
                     texture is his. No synthetic vibrato.
   H3 hybrid      -- H2 at lower alpha + H1's onset-ramped vibrato at half
                     depth + light drift.

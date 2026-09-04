@@ -1,14 +1,17 @@
-"""合成 live probe：BlackHole 當虛擬 mic、feeder 播 wav，live_v3 真 sd.Stream
-三執行緒全鏈無人測試（07-31 §G/§H 用過；當時沒進 repo＝儀器教訓再犯一次，
-本檔固化）。輸出 gain 0＝桌面無聲，量測全靠收官報表＋mic dump。
+"""A synthetic live probe: BlackHole as a virtual microphone and a feeder playing a
+wav, so the whole three-thread chain with a real sd.Stream can be tested with
+nobody in the room. The output gain is 0, so the desk stays silent and everything
+is measured from the closing report and the microphone dump.
 
-用法（DDSP venv，於 harmony/ 下）:
+Usage (DDSP venv, from harmony/):
   .../260724_ddsp_svc/venv/bin/python live_probe.py out/loopback_0730/seg_take.wav \
-      --lag 0.45 -- --free-run 0        # -- 之後原樣傳給 live_v3
+      --lag 0.45 -- --free-run 0        # anything after -- is passed straight through
 
-血訓（07-31 §H）：shell `&` 背景起的行程 SIGINT 被 POSIX 設成忽略，
-pkill -INT 全空包——必須 Popen（無 shell）＋ proc.send_signal(SIGINT)。
-即餵：live_v3 印出開場行後立刻開始播，消除靜音前導污染。
+A lesson learned the hard way: a process started with a shell `&` has SIGINT set to
+ignored by POSIX, so pkill -INT does nothing at all. It has to be Popen with no
+shell plus proc.send_signal(SIGINT).
+Feeding starts the instant the engine prints its opening line, which removes the
+silent lead-in that would otherwise contaminate the measurement.
 """
 import argparse
 import signal
@@ -26,7 +29,7 @@ ap.add_argument("wav")
 ap.add_argument("--lag", default="0.6")
 ap.add_argument("--key", default="0")
 ap.add_argument("--in-name", default="BlackHole")
-a, rest = ap.parse_known_args()   # 未認得的參數原樣傳給 live_v3
+a, rest = ap.parse_known_args()   # unrecognised arguments pass straight through to the engine
 if rest and rest[0] == "--":
     rest = rest[1:]
 a.rest = rest
@@ -54,12 +57,12 @@ def reader():
 threading.Thread(target=reader, daemon=True).start()
 if not started.wait(120):
     proc.kill()
-    sys.exit("live_v3 沒開場（120s）")
+    sys.exit("the engine never started (120s)")
 
 time.sleep(0.3)
 print(f"probe: feeding {len(x) / sr:.1f}s into {a.in_name}", flush=True)
 sd.play(x, sr, device=a.in_name, blocking=True)
-time.sleep(float(a.lag) + 1.0)          # 讓尾巴播完、收官統計含完整素材
+time.sleep(float(a.lag) + 1.0)          # let the tail play out, so the closing statistics cover all the material
 proc.send_signal(signal.SIGINT)
 proc.wait(timeout=60)
 print("probe: done", flush=True)

@@ -1,12 +1,15 @@
-"""vs_male3_trial.py — VocalSet male3 試訓模型的耳測樣本（08-04）
+"""vs_male3_trial.py - listening samples from a trial model trained on VocalSet male3.
 
-⚠ 08-05 素材翻案：本檔與 prosody_ab 同一套 `[0::2]` 選段＝選到 dump 的
-回應段（三聲部混音）；產物作廢、male3 判決需在乾淨素材上重測
-（worklog 08-05 §C）。勿再執行。
+**The material was withdrawn.** This uses the same `[0::2]` selection as
+prosody_ab, which picked the RESPONSE segments out of the dump, that is a
+three-part mix. Its output is void and the male3 verdict has to be re-measured on
+clean material. Do not run it.
 
-從 16:00 場 dump 抽 Harry 實唱句，渲染：male3 唱他的線（音色檢查）、
-male3 唱下天使線（實戰位）、girl 同線對照、dry+male3 混音。
-素材抽取與渲染配方照抄 angel_audit.py（同一口徑）。判決＝Harry 耳朵。
+It extracts his sung phrases from a session dump and renders: male3 singing his
+line (a timbre check), male3 on the lower part line (its real position), the same
+line on the existing voice for comparison, and a dry-plus-male3 mix. The extraction
+and the render recipe are copied from angel_audit.py so the measure is the same.
+The verdict is by ear.
 
 Run (DDSP venv):  python vs_male3_trial.py
 """
@@ -45,8 +48,8 @@ for s, e in R.find_phrases(x, 0.35, 0.8):
     if float(np.mean(v > 340.0)) < 0.05:
         segs.append(np.ascontiguousarray(x[s:e]))
 segs = segs[0::2]
-segs = sorted(segs, key=len, reverse=True)[:2]     # 取最長兩句＝最有內容
-print(f"素材：{len(segs)} 句, {', '.join(f'{len(s)/SR:.1f}s' for s in segs)}")
+segs = sorted(segs, key=len, reverse=True)[:2]     # the two longest phrases, which have the most content
+print(f"material: {len(segs)} phrases, {', '.join(f'{len(s)/SR:.1f}s' for s in segs)}")
 
 torch.manual_seed(1234)
 ear = EarV3(indep=0.15, stab=1, key=0)
