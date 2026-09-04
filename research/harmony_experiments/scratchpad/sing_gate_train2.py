@@ -1,22 +1,28 @@
-"""sing_gate_train2 — 在 27 維嘴/下巴 blendshape 之外加「唇內暗區佔比」當第二票
+"""sing_gate_train2 - add "the share of dark area inside the lips" as a second vote alongside the 27 mouth and jaw blendshapes
 
-為什麼：現行門控（08-13，27 維）跨場次 acc 0.934、閉嘴/微張誤觸 0%，但
-**講話 11% 誤觸**——那是誠實邊界，不是 bug。blendshape 描述的是「嘴的形狀」，
-而唱與講話的形狀重疊；**唱歌時嘴會持續張開露出口腔內部（暗）**，講話則是
-快速開闔，暗區佔比的時間分布不同。所以加的是一個 blendshape 拿不到的通道。
+Why: the current gate (27 dimensions) reaches 0.934 accuracy across sessions with
+no false triggers on a closed or slightly open mouth, but **11% on speech** - an
+honest boundary, not a bug. Blendshapes describe the SHAPE of the mouth, and the
+shapes of singing and speaking overlap; but **singing holds the mouth open, showing
+the dark inside**, while speech opens and closes rapidly, so the dark share has a
+different distribution in time. This adds a channel the blendshapes cannot reach.
 
-暗區佔比＝唇內多邊形裡「比周圍皮膚暗很多」的像素比例。**一定要用周圍皮膚
-亮度正規化**，否則它量到的是打光不是嘴（換一盞燈就全盤失效）。
+The dark share is the fraction of pixels inside the lip polygon much darker than the
+surrounding skin. It MUST be normalised against the surrounding skin brightness, or
+it measures the lighting rather than the mouth and fails entirely when a lamp changes.
 
-紀律（08-13 血訓，違反過一次就夠了）：
-  **同場次 CV 不算驗證。** 52 維那版同場次 CV 0.915 看起來很漂亮，跨場次
-  誤觸 47.5%，Harry 螢幕實證「閉嘴 sing 1.00」。所以這支**錄兩個場次**：
-  場次 A 訓練、場次 B 當沒看過的考卷，中間要求受試者起身走動改變姿勢/角度。
-  報出來的數字一律是「A 訓 → B 測」，同場次 CV 只印出來當對照，不當結論。
+Discipline (a lesson learned once, which was enough):
+  **Same-session cross-validation is not validation.** The 52-dimension version
+  scored 0.915 in same-session CV, which looked excellent, and had 47.5% false
+  triggers across sessions, demonstrated on screen with a closed mouth reading 1.00.
+  So this records TWO sessions: session A trains, session B is the unseen paper, and
+  in between the subject stands up and moves to change their posture and angle.
+  Every reported figure is "train on A, test on B"; same-session CV is printed only
+  as a control and is never the conclusion.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/sing_gate_train2.py
-    已經錄過要重訓（不用再錄）: 同上 + --retrain
+    to retrain from an existing recording: the same, plus --retrain
 """
 import subprocess
 import sys
@@ -31,7 +37,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 SEC, WARM = 8.0, 3.0
-BS_LO, BS_HI = 23, 50            # 現行模型的嘴/下巴區塊（idx 23..49）
+BS_LO, BS_HI = 23, 50            # the mouth and jaw block of the current model, indices 23 to 49
+# The prompt strings stay in Chinese: they are spoken to the singer by macOS `say`.
 STATES = [("rest", 0, "閉著嘴，放鬆"), ("ajar", 0, "嘴巴微微張開，不出聲"),
           ("talk", 0, "隨便講幾句話"), ("ah", 1, "唱啊，拉長"),
           ("yi", 1, "唱咿，拉長"), ("wu", 1, "唱嗚，拉長"),
@@ -39,16 +46,18 @@ STATES = [("rest", 0, "閉著嘴，放鬆"), ("ajar", 0, "嘴巴微微張開，�
 DATA = "scratchpad/sing_gate_data2.npz"
 MODEL = "scratchpad/sing_gate_model2.npz"
 
-# MediaPipe 478 點網格的**內唇**環（唱歌時這圈裡面就是口腔）
+# The INNER lip ring of the MediaPipe 478-point mesh; while singing, what is inside it is the mouth cavity
 INNER_LIP = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324,
              308, 415, 310, 311, 312, 13, 82, 81, 80, 191]
 
 
 def dark_feats(frame_bgr, landmarks):
-    """→ (暗區佔比, 唇內中位亮度/皮膚中位亮度)。取不到就 (0, 1)＝中性值。
+    """Returns (dark share, median brightness inside the lips over median skin brightness). (0, 1), a neutral value, if it cannot be taken.
 
-    皮膚參考取唇環膨脹後的「環帶」（嘴周圍那圈皮膚），不是整張臉——臉頰
-    與額頭的打光跟嘴周圍差很多，用整張臉正規化等於引進一個跟嘴無關的變數。
+    The skin reference is the BAND around the dilated lip ring, that is the skin just
+    around the mouth, not the whole face: the cheeks and forehead are lit quite
+    differently from the mouth, and normalising against the whole face introduces a
+    variable that has nothing to do with the mouth.
     """
     h, w = frame_bgr.shape[:2]
     pts = np.array([[int(landmarks[i].x * w), int(landmarks[i].y * h)]
@@ -56,7 +65,7 @@ def dark_feats(frame_bgr, landmarks):
     mask = np.zeros((h, w), np.uint8)
     cv2.fillPoly(mask, [pts], 255)
     inside = int((mask > 0).sum())
-    if inside < 30:                       # 嘴閉著＝多邊形退化，沒有內部
+    if inside < 30:                       # mouth closed: the polygon degenerates and has no interior
         return 0.0, 1.0
     k = max(5, int(np.sqrt(inside) * 0.8)) | 1
     ring = cv2.dilate(mask, np.ones((k, k), np.uint8)) - mask
@@ -80,7 +89,7 @@ def open_cam():
         c.release()
         if best is None or b > best[1]:
             best = (ci, b)
-    assert best and best[1] > 10, f"找不到有畫面的鏡頭 {best}"
+    assert best and best[1] > 10, f"no camera with a picture {best}"
     return cv2.VideoCapture(best[0])
 
 
@@ -95,15 +104,15 @@ def record():
     names = None
     for sess in ("A", "B"):
         if sess == "A":
-            subprocess.run(["say", "場次 A，訓練用。七個狀態，各八秒"])
+            subprocess.run(["say", "場次 A，訓練用。七個狀態，各八秒"])   # spoken prompt
         else:
             subprocess.run(["say", "場次 A 錄完。請站起來走一下、換個姿勢和角度，"
-                                   "這是驗證用的第二場次，十秒後開始"])
+                                   "這是驗證用的第二場次，十秒後開始"])   # spoken prompt
             time.sleep(10)
-            subprocess.run(["say", "場次 B，驗證用"])
+            subprocess.run(["say", "場次 B，驗證用"])   # spoken prompt
         lmk = vision.FaceLandmarker.create_from_options(opts)
         t0 = time.time()
-        while time.time() - t0 < WARM:          # 每場次各自暖機
+        while time.time() - t0 < WARM:          # each session warms up on its own
             okf, frame = cap.read()
             if okf:
                 lmk.detect_for_video(mp.Image(
@@ -142,12 +151,12 @@ def record():
                 cv2.waitKey(1)
             lmk.close()
             out[f"{sess}_{key}"] = np.array(rows)
-            print(f"[{sess} {key}] 幀 {len(rows)}  暗區中位 "
+            print(f"[{sess} {key}] {len(rows)} frames  median dark share "
                   f"{np.median(np.array(rows)[:, -2]):.3f}", flush=True)
     cap.release()
     cv2.destroyAllWindows()
     np.savez(DATA, names=np.array(names), **out)
-    print(f"\n原始資料 → {DATA}")
+    print(f"\nraw data -> {DATA}")
 
 
 def fit(Xtr, ytr, Xte, yte):
@@ -173,11 +182,11 @@ def train():
         return np.vstack(X), np.concatenate(y), np.array(tag)
 
     NB = len(names)
-    VARIANTS = [("27 維（現行做法）", list(range(NB))),
-                ("27+暗區", list(range(NB)) + [NB]),
-                ("27+暗區+相對亮度", list(range(NB)) + [NB, NB + 1])]
-    print(f"{'方案':<22}{'A訓→B測 acc':>13}{'講話誤觸':>10}{'閉嘴/微張誤觸':>15}"
-          f"{'唱漏接':>9}")
+    VARIANTS = [("27 dimensions (current)", list(range(NB))),
+                ("27 + dark share", list(range(NB)) + [NB]),
+                ("27 + dark share + relative brightness", list(range(NB)) + [NB, NB + 1])]
+    print(f"{'variant':<38}{'A->B acc':>10}{'speech FP':>11}{'closed/ajar FP':>16}"
+          f"{'sung missed':>12}")
     best = None
     for label, cols in VARIANTS:
         Xa, ya, _ = pack("A", cols)
@@ -191,7 +200,7 @@ def train():
               f"{miss*100:>8.1f}%")
         if best is None or (talk, -acc) < best[0]:
             best = ((talk, -acc), label, cols)
-    print(f"\n跨場次最好的是：{best[1]}")
+    print(f"\nbest across sessions: {best[1]}")
     return z, names, best
 
 

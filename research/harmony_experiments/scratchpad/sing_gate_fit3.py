@@ -1,25 +1,33 @@
-"""sing_gate_fit3 — 三場次重訓＋每場基線自校，產 sing_gate_model3.npz
+"""sing_gate_fit3 - retrain over three sessions with per-session baseline self-calibration, producing sing_gate_model3.npz
 
-不需要重錄。吃現有的兩個資料檔：
-  scratchpad/sing_gate_data.npz   08-13 那場（52 維，取 [23:50]）
-  scratchpad/sing_gate_data2.npz  08-15 兩場 A/B（已是 27 維＋2 欄暗區，取前 27）
+No new recording needed. It consumes the two existing data files:
+  scratchpad/sing_gate_data.npz   the first session (52 dimensions, taking [23:50])
+  scratchpad/sing_gate_data2.npz  two A/B sessions (already 27 dimensions plus 2
+                                  dark columns; the first 27 are taken)
 
-為什麼要這支（08-15 量出來的三件事）：
- ① 現行模型跨場次會垮：同一個人同一個動作，jawOpen 靜止值 08-13 是 0.031、
-    08-15 是 0.017。逐幀 logistic 吃標準化後的絕對值，基線位移足以整批翻盤。
-    實測「08-13＋A 訓 → B 測」閉嘴誤觸 44.3%、微張 36.4%。
-    **每場自校**（用該場自己的 rest 均值把特徵歸零）→ 10.6% / 0.0%。
- ② 講話擋不掉：任何場次組合、任何門檻，講話誤觸都是 63-97%。嘴型分不開
-    唱歌與講話——資訊本身不夠，不是模型不夠好。
- ③ 但**運動量**分得開：0.5s 因果窗的 |ΔjawOpen| 平均，講話在三場是
-    0.0173/0.0130/0.0079，唱歌最高的「啊」只有 0.0023。差分量不吃基線，
-    所以跨場次站得住。當**否決票**用（模型說像在唱、但嘴在高速開闔＝講話）
-    → 講話 97.5% → 0.0%。
- ⚠ 代價：唱歌漏接 13-17%（狀態機有 0.8s 保持開啟，漏幀不等於漏音）。
- ⚠ 門檻是在單一 held-out 場次（08-15 B）上掃出來的＝有調參過擬風險，
-    真正驗收在 Harry live。
+Why this exists - three things that were measured:
+ 1. The current model collapses across sessions. The same person in the same posture
+    had a resting jawOpen of 0.031 on one day and 0.017 two days later. A per-frame
+    logistic model on standardised absolute values can be flipped wholesale by that
+    much baseline shift. Measured: training on the first session plus A and testing
+    on B gave 44.3% false triggers on a closed mouth and 36.4% on a slightly open
+    one. **Self-calibrating per session**, zeroing the features against that
+    session's own resting mean, brings those to 10.6% and 0.0%.
+ 2. Speech cannot be excluded. Across every combination of sessions and every
+    threshold, speech triggers 63 to 97% of the time. Mouth shape does not separate
+    singing from speech: the information is not there, and no model can fix that.
+ 3. But MOVEMENT does separate them. The mean |delta jawOpen| over a 0.5 s causal
+    window is 0.0173, 0.0130 and 0.0079 for speech across the three sessions, while
+    the highest vowel in singing reaches only 0.0023. A difference does not depend on
+    the baseline, so it holds across sessions. Used as a VETO - the model says this
+    looks like singing, but the jaw is opening and closing rapidly, so it is speech -
+    it takes speech from 97.5% to 0.0%.
+ Cost: 13 to 17% of singing frames are missed (the state machine holds the gate open
+ for 0.8 s, so a missed frame is not a missed note).
+ The threshold was swept on a single held-out session, so it carries a risk of
+ overfitting; the real acceptance test is live.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/sing_gate_fit3.py
 """
 import numpy as np
@@ -27,21 +35,21 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 NB, FPS, JAW, WIN = 27, 29.4, 2, 15      # JAW=names[2]='jawOpen'；WIN≈0.5s
-BS_LO = 23                               # 52 維裡嘴/下巴區塊的起點
+BS_LO = 23                               # where the mouth and jaw block starts within the 52 dimensions
 STATES = [("rest", 0), ("ajar", 0), ("talk", 0),
           ("ah", 1), ("yi", 1), ("wu", 1), ("ei", 1)]
 TH_GRID = (0.0040, 0.0030, 0.0025, 0.0020)
 
 
 def motion(r, w=WIN):
-    """0.5s 因果窗的平均絕對幀差（只看過去）＝說話的音節開闔速率。"""
+    """Mean absolute frame difference over a 0.5 s causal window (past only), that is the syllable rate of speech."""
     j = r[:, JAW].astype("float64")
     d = np.abs(np.diff(j, prepend=j[0]))
     return np.array([d[max(0, i - w + 1):i + 1].mean() for i in range(len(r))])
 
 
 def sim(p, veto, so=0.7, sh=0.3, nfr=2, hold_s=0.8):
-    """複製 bank_live 的門控狀態機（遲滯＋連續幀開門＋0.8s 保持）。"""
+    """A copy of bank_live's gate state machine: hysteresis, consecutive frames to open, and a 0.8 s hold."""
     on, arm, last, out = False, 0, -1e9, []
     for i, pi in enumerate(p):
         ok = pi > (sh if on else so) and not veto[i]
@@ -63,7 +71,7 @@ def load():
     o = np.load("scratchpad/sing_gate_data.npz")
     n = np.load("scratchpad/sing_gate_data2.npz")
     names = [str(x) for x in o["names"]][BS_LO:BS_LO + NB]
-    assert names == [str(x) for x in n["names"]], "兩份資料的欄位順序不一致"
+    assert names == [str(x) for x in n["names"]], "the two data files order their columns differently"
     S = {"0813": {k: o[f"bs_{k}"][:, BS_LO:BS_LO + NB] for k, _ in STATES},
          "0815A": {k: n[f"A_{k}"][:, :NB] for k, _ in STATES},
          "0815B": {k: n[f"B_{k}"][:, :NB] for k, _ in STATES}}
@@ -71,7 +79,7 @@ def load():
 
 
 def pack(sess):
-    """每場用自己的 rest 均值自校＝訓練與 live 的前處理必須一致。"""
+    """Each session self-calibrates against its own resting mean; training and live preprocessing have to match."""
     base = sess["rest"].mean(0)
     X, y, tag, mo = [], [], [], []
     for k, lab in STATES:
@@ -88,7 +96,7 @@ def report(clf, sc, te, label):
     p = 1.0 / (1.0 + np.exp(-(((X - sc.mean_) / sc.scale_) @ clf.coef_[0]
                               + float(clf.intercept_[0]))))
     print(f"  {label}")
-    print(f"  {'運動否決':>10}{'閉嘴':>8}{'微張':>8}{'講話':>8}{'唱漏接':>9}")
+    print(f"  {'motion veto':>12}{'closed':>8}{'ajar':>8}{'speech':>8}{'sung missed':>12}")
     rows = []
     for th in (None,) + TH_GRID:
         veto = np.zeros(len(mo), bool) if th is None else (mo > th)
@@ -97,7 +105,7 @@ def report(clf, sc, te, label):
         r = (f(["rest"]), f(["ajar"]), f(["talk"]),
              (1 - g[y == 1].mean()) * 100)
         rows.append((th, r))
-        print(f"  {('無' if th is None else f'{th:.4f}'):>10}"
+        print(f"  {('none' if th is None else f'{th:.4f}'):>12}"
               f"{r[0]:>7.1f}%{r[1]:>7.1f}%{r[2]:>7.1f}%{r[3]:>8.1f}%")
     return rows
 
@@ -106,8 +114,9 @@ def main():
     names, S = load()
     packs = {k: pack(v) for k, v in S.items()}
 
-    # 誠實的成績＝拿一整場當沒看過的考卷（同場次 CV 不算驗證，08-13 血訓）
-    print("留一場驗證（每次拿一整場當沒看過的考卷）")
+    # the honest score is holding out a whole session; same-session cross-validation
+    # is not validation, which is the lesson from the first session
+    print("leave-one-session-out validation")
     holdout_rows = []
     for te_k in S:
         tr = [packs[k] for k in S if k != te_k]
@@ -116,10 +125,10 @@ def main():
         sc = StandardScaler().fit(Xt)
         clf = LogisticRegression(max_iter=5000).fit(sc.transform(Xt), yt)
         holdout_rows.append(report(clf, sc, packs[te_k],
-                                   f"訓 {'+'.join(k for k in S if k != te_k)}"
-                                   f" → 測 {te_k}"))
+                                   f"train {'+'.join(k for k in S if k != te_k)}"
+                                   f" -> test {te_k}"))
 
-    # 出貨模型＝三場全訓（留一的數字才是它的期望表現）
+    # the shipping model trains on all three; the leave-one-out figure is what to expect of it
     Xa = np.vstack([packs[k][0] for k in S])
     ya = np.concatenate([packs[k][1] for k in S])
     sc = StandardScaler().fit(Xa)
@@ -129,9 +138,9 @@ def main():
     Z = (Xa - sc.mean_) / sc.scale_
     p = 1.0 / (1.0 + np.exp(-(Z @ W + b0)))
     assert abs(p - clf.predict_proba(sc.transform(Xa))[:, 1]).max() < 1e-9, \
-        "numpy 推論與 sklearn 不一致"
+        "the numpy inference disagrees with sklearn"
 
-    # cv 欄位：**留一場**的平均 acc（不是同場次 CV——那正是 08-13 被騙的東西）
+    # the cv field holds the LEAVE-ONE-SESSION-OUT mean accuracy, not same-session CV, which is exactly what misled the first round
     accs = []
     for te_k in S:
         tr = [packs[k] for k in S if k != te_k]
@@ -148,14 +157,14 @@ def main():
              names=np.array(names),
              idx=np.arange(BS_LO, BS_LO + NB),
              cv=np.float64(cv),
-             # v40 新契約：live 端必須做同樣的前處理，否則模型是廢的
-             calib=np.int64(1),           # 1＝特徵要先減開場基線
-             jaw_col=np.int64(JAW),       # 運動量算在第幾欄
-             motion_win=np.int64(WIN),    # 因果窗幀數（≈0.5s @29fps）
+             # the v40 contract: the live end must do the same preprocessing or the model is useless
+             calib=np.int64(1),           # 1 means subtract the opening baseline from the features first
+             jaw_col=np.int64(JAW),       # which column the movement is computed on
+             motion_win=np.int64(WIN),    # causal window in frames (about 0.5 s at 29 fps)
              motion_th=np.float64(0.0025))
-    print(f"\n模型 → scratchpad/sing_gate_model3.npz")
-    print(f"  留一場平均 acc {cv:.3f}（**跨場次**，不是同場次 CV）")
-    print(f"  參數 {W.size + 1}；契約新增 calib/jaw_col/motion_win/motion_th")
+    print(f"\nmodel -> scratchpad/sing_gate_model3.npz")
+    print(f"  leave-one-session-out mean acc {cv:.3f} (ACROSS sessions, not same-session CV)")
+    print(f"  {W.size + 1} parameters; the contract adds calib, jaw_col, motion_win and motion_th")
 
 
 if __name__ == "__main__":

@@ -1,24 +1,30 @@
-"""lip_ring_calib — v17.1 整圈嘴校準儀式（Harry 08-13「為什麼不測整圈嘴」）
+"""lip_ring_calib - the full lip-ring mouth calibration ritual (v17.1).
 
-v16.3/v17 只量 (開口高, 嘴角寬) 2D＝欸↔咿 幾乎重疊（錨距 0.37）。這裡
-改存**整圈唇形**：內外唇 40 點 → 去平移（唇心）/去旋轉（太陽穴連線）/
-去尺度（太陽穴距離）→ 80 維向量。母音靠圓唇度/嘴角形狀/上下唇曲率分，
-不只高寬。
+v16.3 and v17 measured only two dimensions, mouth height and corner width, and two
+of the vowels almost overlapped there (anchor distance 0.37). This stores the WHOLE
+LIP RING instead: 40 points on the inner and outer lips, with translation removed
+(the lip centre), rotation removed (the line between the temples) and scale removed
+(the distance between the temples), giving an 80-dimensional vector. Vowels then
+separate by lip rounding, corner shape and the curvature of both lips, not by
+height and width alone.
 
-儀式（血訓內建）：五母音各唱 ~7s 由低掃到高（錨點平均掉音高變化、
-scales 吃到變異）；語音報幕用**描述詞**防聽混（圓嘴的喔≠張大的啊）；
-每段錄完**立刻驗有聲**（RMS 門檻，不過就重唱該母音——lip_sweep v1
-空資料血案）。
+The ritual, with its hard-won lessons built in: each of the five vowels is sung for
+about 7 s sweeping from low to high, so the anchor averages out pitch and the scales
+capture the variation; the spoken prompt uses a DESCRIPTION of the mouth shape so
+two vowels cannot be confused by ear; and each take is checked for voicing
+immediately (an RMS threshold, and a failed vowel is sung again) after an earlier
+version silently recorded empty data.
 
-產出：
-  lip_ring_sweep.npz   原始資料（全 478 landmark/幀＋音檔）＝之後改特徵
-                       定義可離線重算，不用重錄
+Output:
+  lip_ring_sweep.npz   the raw data: all 478 landmarks per frame plus the audio, so
+                       changing the feature definition later can be recomputed
+                       offline without recording again
   vowel_ring_calib.npz anchors (5,80) + scales (80,) + labels
-                       —— bank_live 有此檔＝自動走整圈嘴（沒有＝退 2D）
+                       - if bank_live finds this file it uses the full ring; without it, it falls back to two dimensions
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/lip_ring_calib.py [--seconds 7] [--in-name "USB PnP"]
-重算不重錄: 加 --recompute
+Recompute without recording: add --recompute
 """
 import argparse
 import subprocess
@@ -27,19 +33,22 @@ import time
 import numpy as np
 
 SR = 44100
-LABELS = ["喔", "欸", "咿", "嗚", "啊"]      # 順序＝VOWEL_LAYERS 層 0-4
-ANNOUNCE = ["圓嘴的喔", "扁嘴的欸", "咧嘴的咿", "嘟嘴的嗚", "張大的啊"]
+# The five vowel labels stay in Chinese: they must match bank_live.VOWEL_NAMES,
+# which is compared by string and feeds the bank cache key.
+LABELS = ["喔", "欸", "咿", "嗚", "啊"]      # the order matches VOWEL_LAYERS layers 0-4
+ANNOUNCE = ["圓嘴的喔", "扁嘴的欸", "咧嘴的咿", "嘟嘴的嗚", "張大的啊"]  # spoken as a mouth-shape description
 
-# ⚠ 與 bank_live.py 的 _ring_vec/LIP_RING 是**刻意複製**，改一處要改兩處
-# （_render_layer 同款紀律：校準與 live 特徵定義必須逐位元同）
+# Deliberately duplicated from _ring_vec and LIP_RING in bank_live.py: change one
+# and change the other. Same discipline as _render_layer - the calibration and the
+# live feature definition have to be identical to the bit.
 LIP_RING = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405,
-            314, 17, 84, 181, 91, 146,           # 外圈 20
+            314, 17, 84, 181, 91, 146,           # 20 on the outer ring
             78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402,
-            317, 14, 87, 178, 88, 95]            # 內圈 20
+            317, 14, 87, 178, 88, 95]            # 20 on the inner ring
 
 
 def ring_vec(LA, aspect):
-    """LA=(478,2) 正規化座標 → 80 維整圈嘴形。x 乘長寬比＝幾何等距。"""
+    """LA of shape (478,2) in normalised coordinates to an 80-dimensional lip ring. x is multiplied by the aspect ratio so distances are geometric."""
     pts = LA[LIP_RING].copy()
     pts[:, 0] *= aspect
     e0 = np.array([LA[234, 0] * aspect, LA[234, 1]])
@@ -57,7 +66,7 @@ def say(txt):
 
 
 def capture_vowel(cap, lmk, mp, cv2, in_name, seconds, label):
-    """一個母音的擷取：回 (landmarks (T,478,2), t (T,), audio (N,))。"""
+    """Capture one vowel: returns (landmarks (T,478,2), t (T,), audio (N,))."""
     import sounddevice as sd
     frames, ts, audio = [], [], []
 
@@ -96,13 +105,13 @@ def capture_vowel(cap, lmk, mp, cv2, in_name, seconds, label):
 
 
 def voiced_mask(ts, au):
-    """逐幀有聲判定：該幀 ±100ms 音訊 RMS ≥ 全段 75 分位的 1/4。"""
+    """Voicing per frame: the audio RMS within 100 ms of the frame is at least a quarter of the take's 75th percentile."""
     if not len(ts):
         return np.zeros(0, dtype=bool)
     n = len(au)
     c = np.concatenate([[0.0], np.cumsum(au.astype("float64") ** 2)])
     w = int(0.1 * SR)
-    i = np.clip((ts * SR).astype(int), 0, n - 1)   # ts 與音訊同起點（秒）
+    i = np.clip((ts * SR).astype(int), 0, n - 1)   # ts shares its origin with the audio, in seconds
     lo = np.clip(i - w, 0, n - 1)
     hi = np.clip(i + w, 1, n)
     rms = np.sqrt((c[hi] - c[lo]) / np.maximum(hi - lo, 1))
@@ -110,17 +119,17 @@ def voiced_mask(ts, au):
 
 
 def compute_calib(raw):
-    """raw dict → anchors/scales＋分離度報表。"""
+    """raw dict to anchors and scales, plus a separation report."""
     vecs = []
     for vi in range(5):
         LA, ts, au = raw[f"l{vi}"], raw[f"t{vi}"], raw[f"a{vi}"]
         vm = voiced_mask(ts, au)
         keep = LA[vm]
-        assert len(keep) >= 30, (LABELS[vi], "有聲幀不足", int(vm.sum()))
+        assert len(keep) >= 30, (LABELS[vi], "too few voiced frames", int(vm.sum()))
         vecs.append(np.array([ring_vec(x, float(raw["aspect"])) for x in keep]))
     A = np.array([v.mean(0) for v in vecs])
     S = np.maximum(np.concatenate(vecs).std(0), 1e-4)
-    print("配對分離度（mean |Δ|/scale；越大越好）：")
+    print("pairwise separation (mean |delta| over scale; larger is better):")
     for i in range(5):
         for j in range(i + 1, 5):
             d = float(np.abs((A[i] - A[j]) / S).mean())
@@ -136,14 +145,14 @@ def main():
     ap.add_argument("--raw", default="scratchpad/lip_ring_sweep.npz")
     ap.add_argument("--out", default="scratchpad/vowel_ring_calib.npz")
     ap.add_argument("--recompute", action="store_true",
-                    help="不錄，直接用 --raw 重算 anchors/scales")
+                    help="do not record; recompute anchors and scales from --raw")
     args = ap.parse_args()
 
     if args.recompute:
         raw = dict(np.load(args.raw))
         A, S = compute_calib(raw)
         np.savez(args.out, anchors=A, scales=S, labels=np.array(LABELS))
-        print(f"重算完成 → {args.out}")
+        print(f"recomputed -> {args.out}")
         return
 
     import cv2
@@ -156,7 +165,7 @@ def main():
         running_mode=vision.RunningMode.VIDEO, num_faces=1)
     if args.cam >= 0:
         cap = cv2.VideoCapture(args.cam)
-    else:                                    # bank_live 同款：挑最亮的
+    else:                                    # as bank_live does: pick the brightest
         best = None
         for ci in range(3):
             c = cv2.VideoCapture(ci)
@@ -168,20 +177,20 @@ def main():
             c.release()
             if best is None or b > best[1]:
                 best = (ci, b)
-        assert best and best[1] > 10, f"找不到有畫面的鏡頭 {best}"
-        print(f"鏡頭 index {best[0]}（亮度 {best[1]:.0f}）", flush=True)
+        assert best and best[1] > 10, f"no camera with a picture {best}"
+        print(f"camera index {best[0]} (brightness {best[1]:.0f})", flush=True)
         cap = cv2.VideoCapture(best[0])
     assert cap.isOpened()
 
     raw = {}
     aspect = None
-    say("整圈嘴校準。每個母音由低唱到高，唱滿提示秒數。")
+    say("整圈嘴校準。每個母音由低唱到高，唱滿提示秒數。")  # spoken prompt, Chinese
     for vi, (lab, ann) in enumerate(zip(LABELS, ANNOUNCE)):
         for attempt in range(3):
             lmk = vision.FaceLandmarker.create_from_options(opts)
             say(ann)
             time.sleep(0.5)
-            say("唱")
+            say("唱")        # "sing"
             LA, ts, au = capture_vowel(cap, lmk, mp, cv2, args.in_name,
                                        args.seconds, lab)
             lmk.close()
@@ -190,25 +199,25 @@ def main():
                 aspect = fr0.shape[1] / fr0.shape[0] if okf else 4 / 3
             rms = float(np.sqrt((au ** 2).mean()))
             vm = voiced_mask(ts, au)
-            print(f"[{lab}] 幀 {len(LA)}（有聲 {int(vm.sum())}）"
-                  f" 音 RMS {20*np.log10(rms+1e-9):.1f} dBFS", flush=True)
+            print(f"[{lab}] {len(LA)} frames ({int(vm.sum())} voiced)"
+                  f" audio RMS {20*np.log10(rms+1e-9):.1f} dBFS", flush=True)
             if rms >= 0.01 and int(vm.sum()) >= 30 and len(LA) >= 60:
                 raw[f"l{vi}"], raw[f"t{vi}"], raw[f"a{vi}"] = LA, ts, au
-                say("好")
+                say("好")     # "good"
                 break
-            say("沒收到聲音或臉，重來")
+            say("沒收到聲音或臉，重來")   # "no sound or face, again"
         else:
-            raise SystemExit(f"{lab} 三次都不合格，中止（血訓：不拿空資料算）")
+            raise SystemExit(f"{lab} failed three times, stopping (the lesson: never compute on empty data)")
     cap.release()
     cv2.destroyAllWindows()
 
     raw["aspect"] = np.float64(aspect or 4 / 3)
     np.savez(args.raw, **raw)
-    print(f"原始資料 → {args.raw}")
+    print(f"raw data -> {args.raw}")
     A, S = compute_calib(raw)
     np.savez(args.out, anchors=A, scales=S, labels=np.array(LABELS))
-    say("校準完成")
-    print(f"校準 → {args.out}（anchors {A.shape}）")
+    say("校準完成")   # "calibration complete"
+    print(f"calibration -> {args.out} (anchors {A.shape})")
 
 
 if __name__ == "__main__":

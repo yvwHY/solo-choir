@@ -1,15 +1,19 @@
-"""sing_gate_train — 用 blendshape 訓「他在不在唱」的門控（08-13）
+"""sing_gate_train - train a gate for "is he singing" from blendshapes
 
-Harry：「唱咿會變紅嘴」＝門控判他沒在唱。與嗚同型：咿的下巴幾乎不開
-（jawOpen 低）、又不是嘟嘴（pucker 低），兩個手挑的判準都不成立。
-再手挑第三個係數只是一個母音一個母音打地鼠 ⇒ 改成**讓資料決定**：
-錄「在唱」（啊/咿/嗚/欸）與「沒在唱」（閉嘴/微張/講話）各數秒，
-用 52 維 blendshape 訓一顆 logistic，機率當門控。
+The complaint that started it: singing one particular vowel turned the indicator
+red, that is, the gate decided he was not singing. It has the same shape as another
+vowel: the jaw barely opens (jawOpen low) and the lips are not pursed (pucker low),
+so both hand-picked criteria fail. Hand-picking a third coefficient is whack-a-mole,
+one vowel at a time, so **let the data decide**: record a few seconds each of
+singing (four vowels) and not singing (closed, slightly open, speaking), fit one
+logistic model on the 52 blendshapes, and use its probability as the gate.
 
-同 v18 母音模型的做法與紀律：時間分塊 CV（相鄰幀相關，不做隨機切分）、
-原始資料存 npz、numpy 推論與 sklearn 逐位元對照、live 端純 numpy 五行。
+The same method and discipline as the v18 vowel model: cross-validation over blocks
+of time (adjacent frames are correlated, so no random split), raw data saved to an
+npz, the numpy inference checked bit for bit against sklearn, and five lines of pure
+numpy at the live end.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/sing_gate_train.py
 """
 import subprocess
@@ -24,6 +28,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 SEC, WARM, NB = 5.0, 3.0, 5
+# The prompt strings stay in Chinese: they are spoken to the singer by macOS `say`.
 STATES = [("rest", 0, "閉著嘴，放鬆"), ("ajar", 0, "嘴巴微微張開，不出聲"),
           ("talk", 0, "隨便講幾句話"), ("ah", 1, "唱啊，拉長"),
           ("yi", 1, "唱咿，拉長"), ("wu", 1, "唱嗚，拉長"),
@@ -47,10 +52,10 @@ def main():
         c.release()
         if best is None or b > best[1]:
             best = (ci, b)
-    assert best and best[1] > 10, f"找不到有畫面的鏡頭 {best}"
+    assert best and best[1] > 10, f"no camera with a picture {best}"
     cap = cv2.VideoCapture(best[0])
     lmk = vision.FaceLandmarker.create_from_options(opts)
-    subprocess.run(["say", "暖機三秒"])
+    subprocess.run(["say", "暖機三秒"])       # spoken: warming up, three seconds
     t0 = time.time()
     while time.time() - t0 < WARM:
         okf, frame = cap.read()
@@ -62,7 +67,7 @@ def main():
     lmk.close()
 
     names, X, y, blk, raw = None, [], [], [], {}
-    subprocess.run(["say", "七個狀態，各五秒"])
+    subprocess.run(["say", "七個狀態，各五秒"])   # spoken: seven states, five seconds each
     for key, lab, prompt in STATES:
         lmk = vision.FaceLandmarker.create_from_options(opts)
         subprocess.run(["say", prompt])
@@ -98,7 +103,7 @@ def main():
         y.append(np.full(len(r), lab))
         blk.append(np.minimum((np.arange(len(r)) * NB) // max(len(r), 1),
                               NB - 1))
-        print(f"[{key}] 幀 {len(r)}", flush=True)
+        print(f"[{key}] {len(r)} frames", flush=True)
     cap.release()
     cv2.destroyAllWindows()
     X = np.vstack(X)
@@ -114,7 +119,7 @@ def main():
         clf = LogisticRegression(max_iter=2000).fit(sc.transform(X[~te]),
                                                     y[~te])
         accs.append((clf.predict(sc.transform(X[te])) == y[te]).mean())
-    print(f"\n時間分塊 CV 準確率 {np.mean(accs):.3f}")
+    print(f"\ncross-validation accuracy over blocks of time {np.mean(accs):.3f}")
 
     sc = StandardScaler().fit(X)
     clf = LogisticRegression(max_iter=2000).fit(sc.transform(X), y)
@@ -123,7 +128,7 @@ def main():
     Z = (X - sc.mean_) / sc.scale_
     p = 1.0 / (1.0 + np.exp(-(Z @ W + b0)))
     assert abs(p - clf.predict_proba(sc.transform(X))[:, 1]).max() < 1e-9
-    print("逐狀態的『在唱』機率中位：")
+    print("median probability of singing, per state:")
     for key, lab, _pr in STATES:
         Zk = (raw[key] - sc.mean_) / sc.scale_
         pk = 1.0 / (1.0 + np.exp(-(Zk @ W + b0)))
@@ -133,8 +138,9 @@ def main():
     np.savez("scratchpad/sing_gate_model.npz", W=W, b=np.float64(b0),
              mean=sc.mean_, scale=sc.scale_, names=np.array(names),
              cv=np.float64(np.mean(accs)))
-    print(f"\n模型 → scratchpad/sing_gate_model.npz（{W.size + 1} 參數）")
-    # 門檻建議：唱要過、沒唱要不過，看尾巴不是中位（08-13 血訓）
+    print(f"\nmodel -> scratchpad/sing_gate_model.npz ({W.size + 1} parameters)")
+    # Choosing the threshold: singing must pass and not-singing must not. Read the
+    # TAILS, not the medians.
     pos = np.concatenate([1.0 / (1.0 + np.exp(-(((raw[k] - sc.mean_)
                                                  / sc.scale_) @ W + b0)))
                           for k, l, _ in STATES if l])
@@ -143,8 +149,8 @@ def main():
                           for k, l, _ in STATES if not l])
     for t in np.arange(0.3, 0.95, 0.05):
         if (neg > t).mean() <= 0.01:
-            print(f"建議門檻 {t:.2f}：唱過 {(pos > t).mean()*100:.0f}%、"
-                  f"沒唱誤觸 {(neg > t).mean()*100:.1f}%")
+            print(f"threshold {t:.2f}: singing passes {(pos > t).mean()*100:.0f}%, "
+                  f"not singing false triggers {(neg > t).mean()*100:.1f}%")
             break
 
 

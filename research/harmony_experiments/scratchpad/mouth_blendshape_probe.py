@@ -1,18 +1,20 @@
-"""mouth_blendshape_probe — 用 mediapipe blendshape 取代手刻幾何（08-13）
+"""mouth_blendshape_probe - replace hand-coded geometry with mediapipe blendshapes
 
-Harry：「嗚嘴型判斷還是差一點，有沒有更聰明的方式」。有——我們一直在
-手算兩個距離比值（開口高、嘴寬），但 mediapipe 的 FaceLandmarker 本來
-就能輸出 **52 個 blendshape**，其中 `mouthPucker`（嘟嘴）/`mouthFunnel`
-（撮口）/`jawOpen`（下巴開）就是專門描述這件事的、訓練出來的量，且對
-頭部角度與距離已正規化。啟動日誌裡的 FaceBlendshapesGraph 就是它，
-我們只是沒開輸出。
+The question: the rounded vowel is still not reliably detected, is there a smarter
+way? There is. We had been computing two distance ratios by hand (opening height and
+mouth width), but mediapipe's FaceLandmarker can already output **52 blendshapes**,
+among them `mouthPucker`, `mouthFunnel` and `jawOpen`, which are trained quantities
+describing exactly this and are already normalised for head angle and distance. The
+FaceBlendshapesGraph in the start-up log is that; we simply had its output turned
+off.
 
-量四態（rest／微張／嗚／啊，啊＝陽性對照），各 6s（含 3s 暖機、畫面
-即時顯示數值＝血訓：沒被人看過的數字不准拿來定參數），**原始資料存
-npz**（上一版忘了存，重算得重錄）。輸出：每個 blendshape 的分離度排名
-＋建議的門控規則。
+This measures four states (rest, ajar, the rounded vowel, and an open vowel as a
+positive control), 6 s each including a 3 s warm-up, with the values shown live -
+numbers nobody has looked at must not set a parameter - and **the raw data saved to
+an npz**, which the previous version forgot, so recomputing meant recording again.
+Output: the blendshapes ranked by separation, plus a suggested gate rule.
 
-跑: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
+Run: cd harmony && ../../../260724_ddsp_svc_6x/venv/bin/python \
       scratchpad/mouth_blendshape_probe.py
 """
 import subprocess
@@ -24,6 +26,7 @@ import numpy as np
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
+# The prompts stay in Chinese: they are spoken to the singer by macOS `say`.
 STATES = [("rest", "閉著嘴，放鬆"), ("ajar", "嘴巴微微張開，不要出聲"),
           ("wu", "唱嗚，嘟嘴，拉長"), ("ah", "唱啊，拉長")]
 SEC, WARM = 6.0, 3.0
@@ -36,7 +39,7 @@ def main():
         base_options=mp_python.BaseOptions(
             model_asset_path="scratchpad/face_landmarker.task"),
         running_mode=vision.RunningMode.VIDEO, num_faces=1,
-        output_face_blendshapes=True)          # ← 這行就是「更聰明的方式」
+        output_face_blendshapes=True)          # this line is the smarter way
     best = None
     for ci in range(3):
         c = cv2.VideoCapture(ci)
@@ -48,11 +51,11 @@ def main():
         c.release()
         if best is None or b > best[1]:
             best = (ci, b)
-    assert best and best[1] > 10, f"找不到有畫面的鏡頭 {best}"
+    assert best and best[1] > 10, f"no camera with a picture {best}"
     cap = cv2.VideoCapture(best[0])
 
     lmk = vision.FaceLandmarker.create_from_options(opts)
-    subprocess.run(["say", "暖機三秒"])
+    subprocess.run(["say", "暖機三秒"])           # spoken: warming up, three seconds
     t0 = time.time()
     while time.time() - t0 < WARM:
         okf, frame = cap.read()
@@ -63,7 +66,7 @@ def main():
     lmk.close()
 
     names, out = None, {}
-    subprocess.run(["say", "四個狀態，各六秒"])
+    subprocess.run(["say", "四個狀態，各六秒"])     # spoken: four states, six seconds each
     for key, prompt in STATES:
         lmk = vision.FaceLandmarker.create_from_options(opts)
         subprocess.run(["say", prompt])
@@ -102,7 +105,7 @@ def main():
         lmk.close()
         out[key] = (np.array(rows), np.array(geo))
         d = dict(zip(names, np.median(np.array(rows), 0)))
-        print(f"[{key}] 幀 {len(rows)}  " + "  ".join(
+        print(f"[{key}] {len(rows)} frames  " + "  ".join(
             f"{w} {d[w]:.3f}" for w in WATCH), flush=True)
     cap.release()
     cv2.destroyAllWindows()
@@ -110,7 +113,7 @@ def main():
              **{f"bs_{k}": v[0] for k, v in out.items()},
              **{f"geo_{k}": v[1] for k, v in out.items()})
 
-    print("\n── 誰最能把「唱嗚」跟「閉嘴/微張」分開 ──")
+    print("\n-- what best separates the rounded vowel from closed and ajar --")
     wu = out["wu"][0]
     neg = np.vstack([out["rest"][0], out["ajar"][0]])
     sc = []
@@ -119,14 +122,14 @@ def main():
              / (np.std(np.concatenate([wu[:, i], neg[:, i]])) + 1e-6))
         sc.append((abs(s), nm, np.median(wu[:, i]), np.median(neg[:, i])))
     for s, nm, a_, b_ in sorted(sc, reverse=True)[:6]:
-        print(f"  {nm:<22} 分離度 {s:>5.2f}   嗚 {a_:.3f} vs 閉/微張 {b_:.3f}")
-    # 幾何基線（現行門控用的）
+        print(f"  {nm:<22} separation {s:>5.2f}   vowel {a_:.3f} vs closed/ajar {b_:.3f}")
+    # the geometric baseline, which the current gate uses
     g_wu, g_neg = out["wu"][1], np.vstack([out["rest"][1], out["ajar"][1]])
-    for j, nm in enumerate(["開口值(幾何)", "嘴寬(幾何)"]):
+    for j, nm in enumerate(["opening (geometric)", "mouth width (geometric)"]):
         s = ((np.median(g_wu[:, j]) - np.median(g_neg[:, j]))
              / (np.std(np.concatenate([g_wu[:, j], g_neg[:, j]])) + 1e-6))
-        print(f"  {nm:<22} 分離度 {abs(s):>5.2f}")
-    print("\n── 單一門檻掃描（嗚 通過率 / 閉嘴微張誤觸）──")
+        print(f"  {nm:<22} separation {abs(s):>5.2f}")
+    print("\n-- single-threshold sweep (vowel pass rate / closed-ajar false triggers) --")
     for _s, nm, a_, b_ in sorted(sc, reverse=True)[:3]:
         i = names.index(nm)
         for t in np.arange(0.05, 0.95, 0.05):
@@ -135,7 +138,7 @@ def main():
             bad = (neg[:, i] > t).mean() if hi else (neg[:, i] < t).mean()
             if ok >= 0.9 and bad <= 0.05:
                 print(f"  {nm} {'>' if hi else '<'} {t:.2f}："
-                      f"嗚過 {ok*100:.0f}%、誤觸 {bad*100:.0f}%")
+                      f"vowel passes {ok*100:.0f}%, false triggers {bad*100:.0f}%")
                 break
 
 
