@@ -513,7 +513,7 @@
     const d=await api.list_devices();
     _fill($('inDev'), d.inputs||[], /usb/i);
     // out: prefer headphones; never default to a SILENT virtual device (BlackHole/NDI) — pick a real one
-    _fill($('outDev'), d.outputs||[], /head|phone|earbud|airpod|耳/i, /blackhole|ndi/i);
+    _fill($('outDev'), d.outputs||[], /head|phone|earbud|airpod|\u8033/i  /* \u8033 = 'ear', for zh-Hant device names */, /blackhole|ndi/i);
     return d;
   }
   async function boot(){

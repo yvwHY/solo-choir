@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Practice-log report for the (子) learning study — bone-conduction vs headphone, and
+"""Practice-log report for the learning study: bone conduction against headphones, and
 single-learner before/after.
 
 ADDITIVE, READ-ONLY: reads recordings/practice_log.csv (written by bridge.log_practice,

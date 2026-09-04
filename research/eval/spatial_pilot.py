@@ -63,7 +63,9 @@ def main() -> None:
     ap.add_argument("stem_dir", help="a recordings/studio_render_* folder")
     ap.add_argument("--mode", choices=("mono", "split"), required=True)
     ap.add_argument("--dev-a", default="AI-Micro", help="device A (mono baseline plays here)")
-    ap.add_argument("--dev-b", default="揚聲器", help="device B (split mode: tenor+bass)")
+    ap.add_argument("--dev-b", default="揚聲器",  # the macOS speaker device name on a
+                    # zh-Hant system, matched literally against the device list
+                    help="device B (split mode: tenor+bass)")
     ap.add_argument("--gain", type=float, default=1.0, help="overall gain")
     ap.add_argument("--gain-b", type=float, default=1.0, help="extra gain on device B (level-match by ear)")
     ap.add_argument("--seconds", type=float, default=0, help="limit playback length (0 = full)")

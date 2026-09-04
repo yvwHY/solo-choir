@@ -1,18 +1,23 @@
-"""spike_stream.py — DDSP 滑窗串流 spike（08-05；G28 案③、G33b 後的下一注）
+"""spike_stream.py - a sliding-window streaming spike for the DDSP carrier.
 
-問題：即時線 batch 觸發陣亡（延遲地板）。這支驗「連續滑窗轉換」的兩個
-生死數字：①端到端延遲體感（Harry live 裁）②串流質感有沒有 G28 死味。
+The problem: the real-time line died on batch triggering, at a latency floor.
+This tests two make-or-break numbers for continuous sliding-window conversion:
+how the end-to-end latency feels live, and whether the streamed sound carries the
+dead quality that killed the earlier naive resynthesis (G28).
 
-架構＝抄 DDSP-SVC gui.py 的即時核心（rolling window＋SOLA 對齊＋
-crossfade 接縫），差異：headless（PySimpleGUI 缺＋授權麻煩）、device
-改 MPS（原版只認 cuda/cpu）、f0 用 parselmouth（rmvpe 權重不在）。
-單聲部 identity 先行（--pitch 可移調）；過了才蓋和聲層。
+The architecture copies the real-time core of DDSP-SVC's gui.py - rolling
+window, SOLA alignment, crossfaded splices - with three differences: it is
+headless, the device is MPS rather than CUDA or CPU, and f0 comes from
+parselmouth because the rmvpe weights are not present. A single-part identity
+conversion comes first (--pitch transposes); the harmony layer goes on top only
+once that passes.
 
 Run (DDSP venv):
-  python spike_stream.py                          # 他的模型 identity
+  python spike_stream.py                          # identity through his own model
   python spike_stream.py --pitch -12 --model exp/combsub-m4-bass1/model_11000.pt
-  python spike_stream.py --sustain 250            # v15 樂句橋接（E 版 live 化）
-Ctrl-C 結束；每塊印 infer ms（>block ms＝會斷音）。
+  python spike_stream.py --sustain 250            # v15 phrase bridging
+Ctrl-C to stop. Each block prints its inference time; above the block duration
+the sound breaks up.
 """
 import argparse
 import sys
@@ -37,7 +42,7 @@ MAJ = [0, 2, 4, 5, 7, 9, 11]
 
 
 def dia_from_note(note, steps, root):
-    """已定的音符 → diatonic steps 的半音偏移。"""
+    """A settled note to a semitone offset, that many diatonic steps away."""
     rel = int(note) - root
     oc, pc = divmod(rel, 12)
     di = min(range(7), key=lambda i: min((MAJ[i] - pc) % 12,
@@ -47,8 +52,10 @@ def dia_from_note(note, steps, root):
 
 
 class NoteTracker:
-    """遲滯音符追蹤（v11 長音穩定核心）：偏離 >0.65 半音且持續 ≥3 幀
-    （~35ms）才換音＝顫音/微偏跨界不再抖串。逐幀因果＝跨窗一致。"""
+    """Note tracking with hysteresis (the core of v11 sustain stability): the
+    note only changes after deviating more than 0.65 semitones for at least 3
+    frames, about 35 ms, so vibrato and small excursions across a boundary no
+    longer chatter. Frame by frame and causal, so it is consistent across windows."""
 
     def __init__(self):
         self.cur = None
@@ -57,8 +64,9 @@ class NoteTracker:
         self.streak = 0
 
     def feed(self, f0_hz):
-        """回 (notes, streaks)：streak＝同一音符連續幀數（0＝剛換音/無聲）
-        ＝v12 units 平滑的門（穩定才釘、換音立即跟）。"""
+        """Returns (notes, streaks), where streak is how many consecutive frames
+        have held the same note (0 means it just changed, or silence). This is the
+        gate for the v12 units smoothing: pin when stable, follow instantly on a change."""
         out = np.zeros(len(f0_hz))
         stk = np.zeros(len(f0_hz), dtype=int)
         for h, f in enumerate(f0_hz):
@@ -85,12 +93,13 @@ class NoteTracker:
 
 
 def dia_offsets(f0c, steps, root):
-    """凍結 f0（Hz per-hop）→ 每幀半音偏移（diatonic steps 內的調內音程）。
-    量化只決定音程、曲線不動（D 版哲學＝08-05 驗證過的美學）。
-    決定性：只依賴凍結 fc 的局部（±2 幀中位）＝跨窗一致、不需另建快取。"""
+    """Frozen f0 in Hz per hop to a per-frame semitone offset, the diatonic
+    interval. Quantisation decides the interval only; the curve itself does not
+    move. Deterministic: it depends only on a local median of the frozen f0, so
+    it is consistent across windows and needs no separate cache."""
     v = f0c > 0
     m = np.where(v, 69 + 12 * np.log2(np.maximum(f0c, 1.0) / 440.0), 0.0)
-    # 局部中位（5 幀）壓顫音抖動，避免音界抖串
+    # a local median over 5 frames damps vibrato jitter, so note boundaries do not chatter
     k = 2
     mm = np.copy(m)
     for h in range(len(m)):
@@ -115,7 +124,7 @@ def dia_offsets(f0c, steps, root):
 
 
 def phase_vocoder(a, b, fade_out, fade_in):
-    """gui.py:15 原樣：接縫相位連續化（跳針的主治醫）。"""
+    """Straight from gui.py:15: phase continuity across the splice, the cure for skipping."""
     window = torch.sqrt(fade_out * fade_in)
     fa = torch.fft.rfft(a * window)
     fb = torch.fft.rfft(b * window)
@@ -137,7 +146,8 @@ def phase_vocoder(a, b, fade_out, fade_in):
 
 
 class Svc:
-    """gui.py SvcDDSP 精簡＋多聲部：encoder/f0/vol/enhancer 共用、N 張嘴。
+    """A trimmed SvcDDSP from gui.py, extended to several parts: one encoder, f0,
+    volume and enhancer shared across N voices.
     voices: [(model_path, semitones, gain), ...]"""
 
     def __init__(self, voices, device="mps", enhance=True):
@@ -146,7 +156,7 @@ class Svc:
         for path, semi, gain in voices:
             model, args = load_model(path, device=device)
             self.voices.append((model, semi, gain))
-        self.args = args                      # 同管線＝共用 data 參數
+        self.args = args                      # one pipeline, so the data parameters are shared
         self.units_encoder = Units_Encoder(
             self.args.data.encoder,
             f"{DDSP}/{self.args.data.encoder_ckpt}",
@@ -159,10 +169,11 @@ class Svc:
         self.spk = torch.LongTensor([[1]]).to(device)
 
     def prep(self, audio, threhold=-60.0, want_uv=False):
-        """回 (f0_np, vol_t, mask[, uv])：f0 留 numpy 給呼叫端上凍結網格。
-        want_uv＝一併回傳 parselmouth 真 voicing（f0==0 幀；v16 橋接判準：
-        喉麥的子音音量掉不到 -60dB 門檻下，聲帶判定才是 E 版 vm 的正身）。
-        插值段復刻 vocoder.py:142-146＝f0 與 uv_interp=True 逐 byte 同。"""
+        """Returns (f0_np, vol_t, mask[, uv]). f0 stays numpy so the caller can put
+        it on the frozen grid. want_uv also returns parselmouth's real voicing (the
+        frames where f0 is 0): with a throat microphone a consonant's level never
+        falls below the -60 dB threshold, so the vocal-fold decision is the honest
+        one. The interpolation follows vocoder.py:142-146 byte for byte."""
         hop = self.args.data.block_size
         pe = F0_Extractor("parselmouth", SR, hop, 65.0, 800.0)
         if want_uv:
@@ -188,10 +199,12 @@ class Svc:
     def infer(self, audio, pitch_adjust=0.0, threhold=-60.0,
               units_override=None, feats=None, phases=None, ratios=None,
               enh_tail=0):
-        """每聲部各自輸出：共同 units/f0/vol、各自移調＋增益。
-        feats＝(f0_np, vol_t, mask) 外部給＝不重算（凍結網格用）。
-        phases＝每聲部絕對相位（弧度）＝comb 源跨窗同相（v6 跳針正解）。
-        ratios＝每聲部逐幀半音偏移陣列（diatonic）；None＝用固定 semi。"""
+        """One output per part: shared units, f0 and volume, each with its own
+        transposition and gain. feats = (f0_np, vol_t, mask) supplied from outside
+        so nothing is recomputed, for the frozen grid. phases are each part's
+        absolute phase in radians, so the comb source stays in phase across windows
+        (the fix for v6's skipping). ratios are per-frame semitone offsets per
+        part; None uses the fixed semitone value."""
         hop = self.args.data.block_size
         f0_np, vol_t, mask = feats if feats is not None \
             else self.prep(audio, threhold)
@@ -218,15 +231,17 @@ class Svc:
                 outs.append(out)
                 fvs.append(fv)
             if self.enhancer is not None:
-                # 三聲部合批一發 hifigan（worklog 08-05 §M 刀位；逐聲部呼叫
-                # ＝3 次 kernel 起跳成本）。44.1k/512＋adaptive_key=0 時
-                # enhance() 全路徑 batch 透明（無 resample、f0 走 squeeze(-1)）。
+                # all three parts go through hifigan in one batch; calling it per
+                # part costs three kernel launches. At 44.1k/512 with adaptive_key
+                # 0, enhance() is transparent to batching along its whole path.
                 ob, fb = torch.cat(outs, 0), torch.cat(fvs, 0)
                 if enh_tail and enh_tail < ob.size(-1):
-                    # v23：只 enhance step 實際取用的尾段＋邊距（−28ms 級）。
-                    # NSF 相位從呼叫起點積分＝尾段版相位平移，但每窗相位本
-                    # 來就重啟、SOLA＋phase_vocoder 是縫的主治醫——是否可
-                    # 聞由 replay 接縫指標＋耳測裁，不再紙上判死。
+                    # v23: enhance only the tail the step actually consumes plus a
+                    # margin, worth about 28 ms. The NSF phase integrates from the
+                    # call's start, so a tail-only call shifts the phase - but the
+                    # phase restarts every window anyway, and SOLA plus the phase
+                    # vocoder are what treat the splice. Whether it is audible is
+                    # settled by the replay splice metric and by ear.
                     tl = (enh_tail // hop + 1) * hop
                     eb, esr = self.enhancer.enhance(
                         ob[:, -tl:], self.args.data.sampling_rate,
@@ -245,7 +260,7 @@ class Svc:
                 outs = [ob[vi:vi + 1] for vi in range(len(self.voices))]
         return [out.squeeze() * gain for out, (_, _, gain)
                 in zip(outs, self.voices)]
-        # 每聲部分開回＝接縫各自對齊（混音 SOLA 對不齊兩個週期）
+        # returned per part, so each splice aligns on its own; SOLA cannot align two periods in a mix
 
     def encode(self, audio):
         au = torch.from_numpy(audio).float()[None].to(self.device)
@@ -256,90 +271,96 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model",
                     default=f"{DDSP}/exp/combsub-harry-260730/model_30000.pt",
-                    help="--solo 模式用的模型")
+                    help="model used by --solo mode")
     ap.add_argument("--solo", action="store_true",
-                    help="單聲部 identity（質感/延遲檢驗用）；預設＝和聲"
-                         "（S=Soprano-3 +12、B=Bass-1 −12 跟著唱）")
+                    help="single-part identity, for judging timbre and latency; "
+                         "the default is harmony (S = Soprano-3 +12, B = Bass-1 -12)")
     ap.add_argument("--pitch", type=float, default=0.0)
     ap.add_argument("--no-enhance", dest="enh", action="store_false")
     ap.add_argument("--in-name", default="USB PnP")
     ap.add_argument("--out-name", default="AI-Micro")
     ap.add_argument("--gain", type=float, default=0.8)
     ap.add_argument("--thr", type=float, default=-60.0,
-                    help="音量門檻 dB（正式配方 -60；gui.py 的 -45 對喉麥"
-                         "太高＝輸出被切成斷斷續續）")
+                    help="volume threshold in dB. The recipe uses -60; gui.py's -45 "
+                         "is too high for a throat microphone and chops the output up")
     ap.add_argument("--key", type=int, default=0,
-                    help="大調主音 pitch class（0=C…11=B）；diatonic 映射用")
+                    help="major tonic pitch class (0=C to 11=B), for the diatonic mapping")
     ap.add_argument("--no-brain", dest="brain", action="store_false",
-                    help="關天使腦＝退回 v12 固定 diatonic 映射")
+                    help="turn the harmony model off and fall back to the v12 fixed diatonic mapping")
     ap.add_argument("--octave", type=int, default=12,
-                    help="腦空間位移（respond2 同款；16:00 場＝12）")
+                    help="model space shift, as in respond2")
     ap.add_argument("--block", type=float, default=0.10,
-                    help="每塊秒數＝延遲主項；infer ms 必須小於它"
-                         "（bench：1.0s 視窗 infer p95 39ms＝0.10 有 2.5x 餘裕）")
+                    help="seconds per block, the dominant latency term; the inference "
+                         "time has to stay under it (benched: a 1.0 s window has p95 39 ms)")
     ap.add_argument("--crossfade", type=float, default=0.04)
     ap.add_argument("--extra", type=float, default=1.0,
-                    help="前貼上下文秒數（質感 vs 算力）")
+                    help="seconds of context prepended: timbre against compute")
     ap.add_argument("--sustain", type=float, default=0.0,
-                    help="v15 樂句橋接 ms：≤此長度的 uv 洞天使撐母音唱過去"
-                         "（E 版 sustain live 化；0＝關＝舊路徑）")
+                    help="v15 phrase bridging in ms: an unvoiced gap this short or "
+                         "shorter is sung through on the vowel; 0 disables it")
     ap.add_argument("--release", type=float, default=120.0,
-                    help="超過 sustain 的真休止：淡出收尾 ms（取代硬 gate 剁）")
+                    help="a real rest, longer than sustain: fade out over this many ms "
+                         "instead of chopping with a hard gate")
     ap.add_argument("--floor-db", type=float, default=0.0,
-                    help="v21 音量地板 dBFS（0＝關＝舊路徑）：vol 低於此值的"
-                         "幀強制視同 uv＝gate 可關、腦收休止。治喉麥氣音/摩擦"
-                         "被 parselmouth 判有聲（diag4：gate 開啟幀 61% 是"
-                         "mic 峰值<歌聲 1/10 的垃圾、f0 中位 562Hz＝怪音原料；"
-                         "−36 實測殺 100% voiced 垃圾、誤傷 0%）")
+                    help="v21 volume floor in dBFS (0 disables): frames below this are "
+                         "forced to unvoiced, so the gate can close and the model takes a "
+                         "rest. This treats breath and friction on a throat microphone being "
+                         "called voiced by parselmouth: 61% of gate-open frames peaked below "
+                         "a tenth of the singing level with a median f0 of 562 Hz, which is "
+                         "the raw material of the strange sound. -36 killed 100% of that "
+                         "with no false positives")
     ap.add_argument("--dump", default="",
-                    help="退場時寫 <dump>_{mic,angel}.wav＋_feats.npz"
-                         "（逐幀 f0/uv/gate/橋/音量/音程；診斷用）")
+                    help="on exit write <dump>_{mic,angel}.wav and _feats.npz, with "
+                         "per-frame f0, voicing, gate, bridge, volume and interval")
     ap.add_argument("--enc-win", type=float, default=0.0,
-                    help="v26 hubert 編碼窗秒數（0＝關＝與渲染窗同）：encode"
-                         "吃更長的「過去」音訊＝左上下文買咬字、零延遲代價。"
-                         "diag5 劑量反應：0.7s→0.524、1.5s→0.694、3s→0.788"
-                         "（canon 0.813；成本 15→40ms）。建議 3.0。")
+                    help="v26 hubert encoding window in seconds (0 uses the render "
+                         "window): encoding a longer past buys articulation as left "
+                         "context at no latency cost. Dose response: 0.7s gives 0.524, "
+                         "1.5s 0.694, 3s 0.788, against 0.813 offline, costing 15 to 40 ms")
     ap.add_argument("--lookahead", type=int, default=0,
-                    help="v25 前瞻幀數（路線圖①）：渲染/取用窗整體回移 N 幀"
-                         "＝該區 hubert/EMA/音符多 N 幀右上下文（咬字準），"
-                         "代價＝輸出 +N×11.6ms 延遲。0＝關＝原行為。"
-                         "enh-tail 的省幅拿來買這個＝延遲不變咬字升級。")
+                    help="v25 lookahead in frames: the render and consumption window "
+                         "shifts back by N frames, giving that region N frames of right "
+                         "context for hubert, the EMA and the note, at a cost of N x 11.6 ms "
+                         "of output latency. 0 disables it")
     ap.add_argument("--rehearse", default="",
-                    help="v24 排練譜模式（路線圖⑦論文級）：notes.json"
-                         "（lead/upper/lower，mic 空間絕對音，tick=186ms 網格"
-                         "＝scratchpad/make_score.py 從 dump 自產）。"
-                         "ScoreTracker v3 對位他的 lead、天使唱譜線＝和聲由譜"
-                         "保證、腦（含 token 吸附層）整層旁路。")
+                    help="v24 rehearsal-score mode: notes.json (lead/upper/lower, "
+                         "absolute pitch in microphone space, on a 186 ms tick grid, "
+                         "produced from a dump by scratchpad/make_score.py). ScoreTracker "
+                         "v3 aligns to the lead and the parts sing the score, so the harmony "
+                         "is guaranteed by the score and the model is bypassed entirely")
     ap.add_argument("--reh-rate", type=float, default=1.0,
-                    help="排練對位速度先驗 r̂（live_v3 同名旋鈕；固定優於自估）")
+                    help="tempo prior for the rehearsal alignment; a fixed value beats self-estimation")
     ap.add_argument("--enh-tail", action="store_true",
-                    help="v23 enhancer 只算 SOLA 取用尾段＋0.1s 邊距"
-                         "（−28ms 級）；接縫品質由 replay 指標＋耳測裁")
+                    help="v23: run the enhancer only over the tail SOLA consumes plus a "
+                         "0.1 s margin, worth about 28 ms")
     ap.add_argument("--dump-stems", action="store_true",
-                    help="dump 加每聲部 stem 波形（歸因診斷用；檔案大三倍）")
+                    help="add per-part stems to the dump, for attribution; three times the file size")
     ap.add_argument("--ema-alpha", type=float, default=0.12,
-                    help="v12 units EMA 平滑係數（音符穩定時）；調高＝母音"
-                         "跟得快/咬字銳、調低＝更釘住。0.12＝原值")
+                    help="v12 units EMA coefficient while the note is stable. Higher "
+                         "follows the vowel faster and articulates more sharply, lower pins harder")
     ap.add_argument("--ema-streak", type=int, default=6,
-                    help="幾幀穩定才開始 EMA 釘住（6≈70ms＝原值）")
+                    help="frames of stability before the EMA starts pinning (6 is about 70 ms)")
     ap.add_argument("--agc", action="store_true",
-                    help="v22 串流 AGC（direct_mouth input_agc 的因果版）：把"
-                         "voiced 位準拉向 TRAIN_REF_RMS 0.0566 再餵模型、輸出"
-                         "除回＝位準結構不變。治「位準掉出訓練分布＝轉換退化」"
-                         "（咬字糊/沒力主嫌；07-30 量測 14.3→18.3dB 單調惡化）。"
-                         "預設關＝舊路徑。")
+                    help="v22 streaming AGC, the causal version of direct_mouth's input "
+                         "AGC: pull the voiced level towards the training reference RMS of "
+                         "0.0566 before the model and divide it back out afterwards, so the "
+                         "level structure is unchanged. This treats conversion degrading when "
+                         "the level falls outside the training distribution, the main suspect "
+                         "for mushy, weak articulation (measured degrading monotonically from "
+                         "14.3 to 18.3 dB). Off by default")
     ap.add_argument("--replay", default="",
-                    help="v22 離線重播：讀 wav 逐 block 走同一條 step/brain"
-                         "路徑（不開音訊裝置；腦每 block 同步 drain＝與 live"
-                         "同樣落後一塊）。配 --dump 產出可跟現場 dump 對照。"
-                         "迭代品質不用重唱的地基。")
+                    help="v22 offline replay: read a wav and run it block by block down "
+                         "the same step and model path, with no audio device open and the "
+                         "model draining synchronously each block, so it lags by one block "
+                         "exactly as it does live. With --dump it produces something directly "
+                         "comparable to a live dump, so quality can be iterated without singing again")
     a = ap.parse_args()
 
     print("loading models…", flush=True)
     ear = kt = None
     REH = None
     if a.rehearse:
-        # v24：譜模式＝腦旁路。三張嘴同 brain 配置；音符線來自譜追蹤。
+        # v24: in score mode the model is bypassed. All three voices share the configuration; the note lines come from the score tracker.
         import json
         from rehearse_ab import ScoreTracker
         d = json.load(open(a.rehearse))
@@ -357,19 +378,21 @@ def main():
         dia_steps = [None]
         vmode = [None]
     elif a.brain:
-        # v13 天使腦：EarV3 tick 流（本來就是 live 機器）＝girl 唱上聲部線、
-        # Bass-1 唱下聲部線（indep/stab/legato 全部繼承）、S=+8ve 頂旋律。
-        # 腦輸出換算成「相對他音高的音程」進快取＝音程恆定（D 哲學）。
+        # v13: the harmony model runs on the EarV3 tick stream, which is a live
+        # machine already. The upper line goes to one voice, the lower to Bass-1,
+        # the soprano an octave above the melody. The model's output is converted
+        # into an interval relative to the singer's pitch before it enters the
+        # cache, so the interval is constant.
         import respond2 as R2
         from live_v3 import EarV3
         voices = [(f"{DDSP}/exp/combsub-m4-sop3/model_10000.pt", 12.0, 0.8),
                   (f"{DDSP}/exp/combsub-girl/model_30000.pt", 12.0, 0.85),
                   (f"{DDSP}/exp/combsub-m4-bass1/model_11000.pt", -12.0, 1.0)]
         dia_steps = [None, None, None]
-        vmode = [None, "up", "lo"]        # sop 固定 +12；girl/bass 走腦
+        vmode = [None, "up", "lo"]        # the soprano is fixed at +12; the other two follow the model
         ear = EarV3(indep=0.15, stab=1, key=0)
         ear.v2t.shift = a.octave
-        ear.k_shift = 0        # keylock 交給 KeyTracker 外部維護（v14 直饋）
+        ear.k_shift = 0        # the key lock is maintained externally by KeyTracker
         kt = R2.KeyTracker()
     else:
         voices = [(f"{DDSP}/exp/combsub-m4-sop3/model_10000.pt", 12.0, 0.85),
@@ -380,11 +403,11 @@ def main():
         vmode = [None, None, None]
     svc = Svc(voices, enhance=a.enh)
     HOP = svc.args.data.block_size
-    blk = max(1, round(a.block * SR / HOP)) * HOP     # 512 對齊＝網格不漂
+    blk = max(1, round(a.block * SR / HOP)) * HOP     # aligned to 512, so the grid does not drift
     cf = int(a.crossfade * SR)
     sola_search = int(0.01 * SR)
     last_delay = int(0.02 * SR)
-    LA = a.lookahead * HOP              # v25 前瞻（樣本）；0＝關
+    LA = a.lookahead * HOP              # v25 lookahead in samples; 0 disables
     input_frame = ((max(int(a.extra * SR),
                         blk + cf + sola_search + 2 * last_delay + LA)
                     // HOP + 1) * HOP)
@@ -404,25 +427,33 @@ def main():
           "f0q": [], "hf0": 0.0, "ufifo": [], "inbr": False,
           "ivp": {"up": None, "lo": None}, "klock": False,
           "agc_g": 1.0, "agc_ema": None}
-    accs = [0.0] * len(svc.voices)      # 每聲部絕對相位累加器（弧度）
-    tracker = NoteTracker()             # 遲滯音符（v11 長音穩定）
+    accs = [0.0] * len(svc.voices)      # per-part absolute phase accumulator, in radians
+    tracker = NoteTracker()             # note hysteresis (v11 sustain stability)
     from collections import defaultdict
     dmp = defaultdict(list) if a.dump else None
-    sus_f = int(round(a.sustain / 1000.0 * SR / HOP))   # 橋接上限（幀）
+    sus_f = int(round(a.sustain / 1000.0 * SR / HOP))   # bridging limit, in frames
     rel_f = max(1, int(round(a.release / 1000.0 * SR / HOP)))
-    ENV_DK = float(np.exp(-(HOP / SR) / 0.15))   # 音量慣性 τ≈150ms
+    ENV_DK = float(np.exp(-(HOP / SR) / 0.15))   # volume inertia, tau about 150 ms
 
     def bridge_feed(vol_np, uv, f0_np):
-        """v18 樂句橋接（因果逐幀；演化史見 worklog §O/§P）。回 (gate, vol,
-        bridged, f0_hold)，只餵新到幀＝結果可凍進網格（跨窗一致）。
-        入洞＝聲帶判無聲 且 音量掉到包絡 1/4 以下（−12dB；擋滑窗尾端假
-        uv＝v16 亂源）；洞的**持續**只看 uv——v17 的坑：長休止時包絡衰到
-        底噪、相對判準失效＝gate 重開＝bass 拿內插假 f0 唱低頻嗡（review
-        F1）。hold 哲學（v17「三個都亂」的教訓）：洞口幀已被子音污染
-        （窗尾 f0 亂猜、units 髒）＝不能 hold 洞口——f0 取洞口前 ~45ms 的
-        安全幀（4 幀 FIFO 最舊值＝免費的事後 lookahead），音量取包絡
-        （起音瞬跟、釋放 τ≈150ms）。短洞（≤sus_f）gate 撐 1；真休止撐滿
-        後 rel_f 幀餘弦淡出收尾。"""
+        """v18 phrase bridging, causal and frame by frame. Returns (gate, vol,
+        bridged, f0_hold), fed only new frames so the result can be frozen into the
+        grid and stay consistent across windows.
+
+        A gap opens when the vocal folds read unvoiced AND the level falls below a
+        quarter of the envelope (-12 dB), which rejects the false unvoiced readings
+        at the tail of a sliding window. Whether the gap CONTINUES depends on
+        voicing alone: in v17, during a long rest the envelope decays to the noise
+        floor, the relative test stops working, the gate reopens, and the bass sings
+        a low hum on interpolated f0.
+
+        On holding: the frame at the mouth of the gap is already contaminated by the
+        consonant (f0 guessed at the window tail, dirty units), so it cannot be the
+        one held. f0 is taken from a safe frame about 45 ms earlier, the oldest of a
+        four-frame FIFO, which is lookahead after the fact and free. The volume comes
+        from the envelope, following the onset instantly and releasing at tau about
+        150 ms. A short gap holds the gate open; a real rest holds to the limit and
+        then fades out over rel_f frames with a cosine."""
         g = np.zeros(len(vol_np))
         v = np.copy(vol_np)
         b = np.zeros(len(vol_np), dtype=bool)
@@ -450,7 +481,7 @@ def main():
                     vf0[j] = st["hf0"]
         return g, v, b, vf0
 
-    # 預熱（同視窗大小＋同 ratios 路徑＝MPS kernel 編好才開流）
+    # warm up with the same window size and the same ratios path, so the MPS kernels are compiled before the stream opens
     nfrm = input_frame // HOP + 1
     svc.infer(buf.astype("float64") + 1e-6, a.pitch, a.thr,
               ratios=[np.zeros(nfrm) if (s is not None or vm) else None
@@ -465,9 +496,10 @@ def main():
     st2 = {"under": 0, "flags": 0, "die": False}
 
     def cb(indata, outdata, frames, tinfo, status):
-        # v9：callback 只搬記憶體（μs 級）。推論在 worker——110ms 的 MPS
-        # 工作放這裡是 v1–v8「斷斷續續」的真兇（CoreAudio 死線是硬的，
-        # 平均達標沒用；status 旗標之前還被忽略＝假安心）。
+        # v9: the callback only moves memory, in microseconds. Inference happens in
+        # the worker. Putting 110 ms of MPS work here was the real cause of the
+        # break-up in v1 to v8: the CoreAudio deadline is hard, and meeting it on
+        # average is not enough.
         if status:
             st2["flags"] += 1
         with qlock:
@@ -508,14 +540,17 @@ def main():
                 step(chunk)
 
     bq, block = [], threading.Lock()
-    TICK_FRAMES = 16                    # 16×512/44100 ≈ 186ms ≈ 原 tick 節奏
+    TICK_FRAMES = 16                    # 16 x 512 / 44100, about 186 ms, the original tick
 
     def ear_note_tick(f_in):
-        """v14 音符直饋＝ear.tick 減去 tracker.push/keylock（那是 +55ms 的
-        全部成本；k_shift 由 KeyTracker 外部維護、f_in 來自凍結 f0）。
-        反應式路徑逐行對齊 live_v3.EarV3.tick。
-        v24 rehearse：譜追蹤取代腦——mic 空間絕對音直進直出，token/吸附/
-        k_shift 整層不進場；他脫稿時天使＝譜錨（iv 對他實唱算）。"""
+        """v14 note feed-through: ear.tick minus tracker.push and the key lock,
+        which were the whole 55 ms cost. k_shift is maintained externally by
+        KeyTracker and f_in comes from the frozen f0. The reactive path matches
+        live_v3.EarV3.tick line for line.
+
+        v24 rehearsal: the score tracker replaces the model. Absolute pitch in
+        microphone space goes straight through, with no tokens, no snapping and no
+        key shift; when the singer leaves the score, the parts anchor to it."""
         if REH is not None:
             tr = REH["tracker"]
             tr.observe(None if f_in is None else int(f_in))
@@ -528,7 +563,7 @@ def main():
                         st["cur"][part] = float(int(note) - int(f_in))
             return
         from live_v3 import token_to_midi
-        real = f_in                 # 他真唱的音（吸附/摺疊前；v18 音程參照）
+        real = f_in                 # the note actually sung, before snapping or folding
         if f_in is not None and ear.k_shift:
             f_in = int(f_in) + ear.k_shift
         s = ear.v2t.token(f_in)
@@ -539,13 +574,16 @@ def main():
         lead = ear.lead_prev
         offsp = ear.v2t.shift + (ear.k_shift or 0)
         if lead is not None:
-            # v18（review F6）：參照＝他真唱的音。舊版 lead−offsp 是內部
-            # 吸附/摺疊後表徵，C 大調吸附時差 1 半音（實測 40% tick 觸發
-            # ＝bass 唱高半音）——respond2.py:419 同款血訓，串流版重踩。
-            # v20：真唱參照要再減 token() 同款吸附差 d——腦全程在吸附空間
-            # 寫和聲，iv 對「未吸附的真唱」算＝腦內音程 −d：bass 想同度變
-            # −1 貼臉、girl 五度變三全音（diag1：P(bass=−1|吸附)=24% vs
-            # 未吸附 4%；修正模擬 −1 佔比 11.3%→4.2%，girl 4/6→5/7）。
+        # v18: the reference is the note actually sung. The old lead minus offset
+        # was an internal representation after snapping and folding, and in C major
+        # snapping put it a semitone out, which fired on 40% of ticks and made the
+        # bass sing a semitone sharp.
+        # v20: that reference then has to lose the same snapping offset d, because
+        # the model writes harmony entirely in the snapped space. Computing the
+        # interval against the unsnapped real note gives the model's interval minus
+        # d: a bass aiming at the unison lands on -1, right against the voice, and
+        # a fifth becomes a tritone. Measured: P(bass = -1) is 24% snapped against
+        # 4% unsnapped; correcting it took the -1 share from 11.3% to 4.2%.
             if sus_f and real is not None:
                 d_snap = 1 if (real + offsp) % 12 in (1, 3, 6, 8, 10) else 0
                 mic = real - d_snap
@@ -558,9 +596,11 @@ def main():
                 if not sus_f:
                     st["cur"][part] = iv
                     continue
-                # v19 音程遲滯（diag1 實錘：換音 7 次/s、駐留 p50 12ms＝
-                # 和聲線在抖＝「沒有和聲感」主因）：新音程連續兩 tick
-                # 一致才換＝駐留下限 ~370ms，一次性的骰子不上線。
+                # v19 interval hysteresis: the harmony was changing note 7 times a
+                # second with a median dwell of 12 ms, which is why there was no sense
+                # of harmony. A new interval now has to hold for two consecutive ticks,
+                # putting the dwell floor at about 370 ms, so a single roll of the dice
+                # never reaches the output.
                 if iv == st["cur"][part]:
                     st["ivp"][part] = None
                 elif st["ivp"][part] == iv:
@@ -572,8 +612,9 @@ def main():
     brain_acc = []
 
     def brain_drain():
-        """把 bq 裡累積的凍結 f0 幀吃成 tick（live 由執行緒呼叫、
-        replay 每 step 後同步呼叫＝同一份邏輯、腦落後一個 block 一致）。"""
+        """Consume the frozen f0 frames accumulated in bq into ticks. Live this is
+        called from a thread; in replay it is called synchronously after each step,
+        so the same logic runs and the model lags by one block either way."""
         with block:
             if bq:
                 brain_acc.extend(bq)
@@ -591,7 +632,7 @@ def main():
                 print("brain err:", e, flush=True)
 
     def brain_worker():
-        # 腦執行緒吃凍結 f0 幀（不再碰音訊）＝成本趨近零。
+        # the model thread consumes frozen f0 frames and never touches audio, so it costs almost nothing
         while not st2["die"]:
             time.sleep(0.02)
             brain_drain()
@@ -604,24 +645,28 @@ def main():
             buf3[:-blk] = buf3[blk:]
             buf3[-blk:] = chunk
         try:
-            # f0 凍結網格 v11：到幀即凍（尾端估計 p95 4.3c 夠好）＋遲滯音符
-            # →音程/穩定 streak 也進快取＝渲染與相位帳同一份精確值。
+                # v11 frozen f0 grid: freeze a frame as it arrives (the tail estimate
+                # is good to p95 4.3 cents), and freeze the hysteretic note, its
+                # interval and its stability streak with it, so rendering and the phase
+                # accounting use exactly the same values.
             xb = buf.astype("float64")
             if a.agc:
-                xb = xb * st["agc_g"]      # v22：模型看拉平位準（輸出會除回）
+                xb = xb * st["agc_g"]      # v22: the model sees a levelled signal, divided back out later
             if sus_f:
                 f0f, vol_t, mask, uvf = svc.prep(xb, a.thr, want_uv=True)
                 if a.floor_db < 0:
-                    # v21：地板下幀＝uv（下游 bridge_feed 的 gate 與腦 feed
-                    # 的休止判定全走 uvf，單點生效）。門檻對原始位準定義，
-                    # AGC 開著時 vol 已被 ×g，門檻同乘。
+                    # v21: frames below the floor count as unvoiced, so the downstream
+                    # bridge gate and the model's rest detection both follow from one
+                    # place. The threshold is defined on the raw level, so with the AGC
+                    # on it is scaled by the same gain.
                     uvf = uvf | (vol_t[0, :, 0].cpu().numpy()
                                  < 10 ** (a.floor_db / 20.0) * st["agc_g"])
             else:
                 f0f, vol_t, mask = svc.prep(xb, a.thr)
             if a.agc:
-                # 增益更新（因果、一 block 延遲生效）：新幀活動段的原始位準
-                # EMA（τ≈2s）→ g＝REF/ema，夾 [0.25,16]（input_agc 同界）。
+                # gain update, causal and effective one block later: an EMA over the
+                # raw level of the voiced frames (tau about 2 s), giving g = ref / ema,
+                # clamped to [0.25, 16] as the offline input AGC is.
                 vn = vol_t[0, -nb:, 0].cpu().numpy() / st["agc_g"]
                 act = vn > 10 ** (a.thr / 20.0)
                 if act.any():
@@ -637,7 +682,7 @@ def main():
                     g, v, b, vf0 = bridge_feed(
                         vol_t[0, :, 0].cpu().numpy(), uvf, f0f)
                     st["gt"], st["vc"], st["br"] = g, v, b
-                    st["fc"] = vf0      # 橋接幀凍安全 f0；有聲幀＝f0f 原值
+                    st["fc"] = vf0      # a bridged frame freezes the safe f0; a voiced frame keeps its own
                 else:
                     st["fc"] = f0f
                 notes, stks = tracker.feed(f0f)
@@ -654,7 +699,7 @@ def main():
                     else:
                         st["offc"].append(None)
             else:
-                # 絕對相位推進：離開視窗的 nb 幀 × 快取裡渲染用過的音程
+                # advance the absolute phase: the nb frames leaving the window, times the interval that was rendered
                 for vi, (_, semi, _) in enumerate(svc.voices):
                     if st["offc"][vi] is not None:
                         adv = float((fc[:nb] * 2 ** (
@@ -665,7 +710,7 @@ def main():
                     accs[vi] = (accs[vi] + 2 * np.pi * adv * HOP / SR) \
                         % (2 * np.pi)
                 if sus_f:
-                    if st.get("gt") is None:    # 自癒（init 例外後不永久卡死）
+                    if st.get("gt") is None:    # self-healing, so an exception during init does not wedge it permanently
                         g, v, b, vf0 = bridge_feed(
                             vol_t[0, :, 0].cpu().numpy(), uvf, f0f)
                         st["gt"], st["vc"], st["br"] = g, v, b
@@ -682,9 +727,10 @@ def main():
                     st["fc"] = np.concatenate([fc[nb:], f0f[-nb:]])
                 if ear is not None or REH is not None:
                     with block:
-                        # v18（review F7）：uv 幀送 0＝腦收得到休止符
-                        # （舊版餵內插 f0＝REST 0/484 tick、token 流離開
-                        # 訓練分佈）。brain_worker 的 w>0 篩選現成處理。
+                        # v18: unvoiced frames send 0, so the model receives a rest.
+                        # The old code fed interpolated f0, which produced 0 rests in
+                        # 484 ticks and took the token stream outside its training
+                        # distribution.
                         bq.extend((np.where(uvf[-nb:], 0.0, f0f[-nb:])
                                    if sus_f else f0f[-nb:]).tolist())
                 notes, stks = tracker.feed(f0f[-nb:])
@@ -699,8 +745,8 @@ def main():
                         new = np.full(nb, tgt)
                         pv = float(st["offc"][vi][-1])
                         if sus_f and pv != tgt:
-                            # v18（review F8）：換音 ~35ms 滑進新音程，
-                            # 不整塊硬跳（離線 target_f0 的 porta 精神）。
+                            # v18: slide about 35 ms into a new interval rather than
+                            # jumping a whole block, in the spirit of the offline porta.
                             k3 = min(nb, 3)
                             new[:k3] = np.linspace(pv, tgt, k3 + 2)[1:k3 + 1]
                     else:
@@ -709,22 +755,27 @@ def main():
                         [st["offc"][vi][nb:], new])
                 if kt is not None:
                     st["ktn"] += 1
-                    if st["ktn"] % 10 == 0:        # ~2s 推一次 key 追蹤
+                    if st["ktn"] % 10 == 0:        # push the key tracker about every 2 s
                         kt.push(st["fc"])
                         rb = kt.best()
                         if rb is not None and rb[2] >= 0.015 and \
                                 not (sus_f and st["klock"]):
-                            # v19：k_shift 一鎖不再動（respond2 同款紀律；
-                            # 持續重估＝一飄全部音程平移＝腦線抖動子嫌）
+                            # v19: once locked, k_shift never moves again (the same
+                            # discipline as respond2); re-estimating continuously shifts
+                            # every interval the moment it drifts.
                             ear.k_shift = rb[0]
                             st["klock"] = True
-            # units 凍結快取（v2）＋ v12 長音平滑：他唱「嗚」時窗尾 hubert
-            # 逐幀亂猜元音＝輸出母音遊走。音符穩定（streak≥6≈70ms）→ units
-            # 走 EMA α=0.12（τ≈90ms）釘住；換音/子音（streak 歸零）→ α=1
-            # 立即跟上＝起音不糊。平滑在絕對網格上因果進行＝跨窗一致。
+            # frozen units cache (v2) plus v12 sustain smoothing. On a held vowel,
+            # hubert guesses a different vowel frame by frame at the window tail and
+            # the output wanders. Once the note is stable (streak >= 6, about 70 ms),
+            # units follow an EMA with alpha 0.12 (tau about 90 ms) and pin; on a note
+            # change or a consonant the streak resets and alpha goes to 1, so the onset
+            # is not blurred. The smoothing runs causally on the absolute grid, so it
+            # is consistent across windows.
             if ENC_WIN:
-                # v26：encode 吃 3s 過去（左上下文＝免費咬字），只取渲染窗
-                # 對應的尾端幀＝下游 uc/usm/infer 完全不感知差異。
+                # v26: encode 3 s of the past as free left context for articulation,
+                # then take only the tail frames matching the render window, so nothing
+                # downstream can tell the difference.
                 xbe = buf3.astype("float64")
                 if a.agc:
                     xbe = xbe * st["agc_g"]
@@ -741,17 +792,19 @@ def main():
                 st["uc"] = torch.cat(
                     [keep[:, :fresh.size(1) - m], fresh[:, -m:]], 1)
                 us = st["usm"][:, nb:]
-                # v23：EMA 逐幀迴圈在 CPU numpy 做（256 維×nb 幀＝CPU 零成
-                # 本；原本每幀 2-3 次 MPS kernel 發射＝step 隱形成本大宗）。
-                # 一次下載、算完一次上傳，數值同 float32 lerp。
+                # v23: the per-frame EMA loop runs on the CPU in numpy (256 dimensions
+                # by nb frames costs nothing there); it used to launch two or three MPS
+                # kernels per frame, which was the bulk of the step's hidden cost. One
+                # download, one upload, numerically identical to a float32 lerp.
                 fr = fresh[:, -nb:].detach().cpu().numpy()
                 prev = us[:, -1].detach().cpu().numpy()
                 news = np.empty_like(fr)
                 for j in range(nb):
                     if sus_f and st["br"][-nb + j]:
                         if not st["inbr"]:
-                            # v18 洞口回捲：洞口幀已被子音污染，凍的母音
-                            # 取洞前 ~45ms 的 FIFO 最舊值（同 f0 hold 哲學）
+                            # v18 rewind at the mouth of the gap: that frame is already
+                            # contaminated by the consonant, so the frozen vowel comes
+                            # from the oldest FIFO entry, about 45 ms earlier
                             if st["ufifo"]:
                                 prev = st["ufifo"][0]
                             st["inbr"] = True
@@ -767,10 +820,13 @@ def main():
                 st["usm"] = torch.cat(
                     [us, torch.from_numpy(news).to(us)], 1)
             if sus_f:
-                # v18：橋接 gate 直接取代原 mask——喉麥底噪 −55dB 高於
-                # −60 門檻＝原 mask 恆開（review F1：20 分鐘 3 個洞），
-                # 取 max 等於沒 gate、真休止關不掉＝bass 低頻嗡。橋接
-                # gate 自含「有聲＝開」。音量走凍結快取（洞內包絡 hold）。
+                # v18: the bridge gate replaces the original mask outright. A throat
+                # microphone's noise floor at -55 dB sits above the -60 dB threshold, so
+                # the original mask is always open (20 minutes produced 3 gaps); taking
+                # the max of the two is the same as having no gate, real rests never
+                # close, and the bass hums. The bridge gate already means "voiced =
+                # open". The volume comes from the frozen cache, holding the envelope
+                # inside a gap.
                 gu = upsample(torch.from_numpy(st["gt"]).float().to(
                     svc.device)[None, :, None], HOP).squeeze(-1)
                 k2 = min(mask.size(1), gu.size(1))
@@ -786,9 +842,10 @@ def main():
                             if a.enh_tail else 0)
             y = None
             stems = [] if (dmp is not None and a.dump_stems) else None
-            for vi, au in enumerate(aus):    # 每聲部各自 SOLA＋接縫，拼完才混
-                # 全特徵凍結後重疊區 corr 0.96（儀器實證）＝縫只剩相位位移
-                # ＝SOLA 的本職；內容一致 → shift 穩定不再抖。
+            for vi, au in enumerate(aus):    # SOLA and splice each part separately, mix afterwards
+                # with every feature frozen, the overlap correlates at 0.96, so the
+                # splice is only a phase shift, which is SOLA's actual job; with the
+                # content identical the shift is stable and no longer chatters
                 tw = au[-blk - cf - sola_search - last_delay - LA:
                         -last_delay - LA if last_delay + LA else None]
                 ci = tw[None, None, :cf + sola_search]
@@ -805,7 +862,7 @@ def main():
                     stems.append(w.copy())
                 y = w if y is None else y[:len(w)] + w[:len(y)]
             if a.agc:
-                y = y / st["agc_g"]        # 位準結構還原（input_agc 同哲學）
+                y = y / st["agc_g"]        # restore the level structure, as the offline input AGC does
             y = np.clip(y * a.gain, -1.0, 1.0).astype("float32")
             with qlock:
                 out_q.append(y)
@@ -847,7 +904,7 @@ def main():
                   flush=True)
 
     def flush_dump():
-        """dump 落檔（退場＋每 10s 週期性；行程被硬殺最多丟 10s）。"""
+        """Write the dump, on exit and every 10 s, so a hard kill loses at most 10 s."""
         import soundfile as sf
         sf.write(a.dump + "_mic.wav", np.concatenate(list(dmp["mic"])), SR)
         sf.write(a.dump + "_angel.wav", np.concatenate(list(dmp["out"])), SR)
@@ -858,7 +915,7 @@ def main():
     if a.replay:
         import soundfile as sf
         x, sr_in = sf.read(a.replay, dtype="float32", always_2d=True)
-        assert sr_in == SR, f"replay 檔要 {SR}Hz，拿到 {sr_in}"
+        assert sr_in == SR, f"replay file must be {SR}Hz, got {sr_in}"
         x = x[:, 0]
         nblk = (len(x) - blk) // blk + 1
         print(f"replay {a.replay}  {len(x)/SR:.0f}s / {nblk} blocks",
@@ -867,7 +924,7 @@ def main():
         for i in range(nblk):
             step(x[i * blk:(i + 1) * blk])
             with qlock:
-                out_q.clear()          # 無播放端，別讓佇列吃記憶體
+                out_q.clear()          # nothing is playing, so do not let the queue eat memory
             if ear is not None or REH is not None:
                 brain_drain()
         el = time.perf_counter() - t0
@@ -888,7 +945,7 @@ def main():
     import signal
 
     def _term(*_):
-        raise KeyboardInterrupt      # nohup 背景行程會擋 SIGINT；TERM 也走 dump 路
+        raise KeyboardInterrupt      # a background process blocks SIGINT, so TERM takes the dump path too
 
     signal.signal(signal.SIGTERM, _term)
     with sd.Stream(samplerate=SR, blocksize=blk, channels=(1, 2),
@@ -904,7 +961,7 @@ def main():
         except KeyboardInterrupt:
             st2["die"] = True
             if dmp is not None and dmp["mic"]:
-                time.sleep(0.3)          # 等 worker 收尾，避免寫到半筆
+                time.sleep(0.3)          # let the worker finish, so nothing is written half-way
                 flush_dump()
                 print(f"dump: {a.dump}_mic/_angel.wav + _feats.npz",
                       flush=True)

@@ -1,71 +1,38 @@
-"""score_live — 天使照譜唱、你當指揮（08-11 v3）
+"""score_live - the parts sing from a score and the singer conducts (v7.1).
 
-Harry 對 --rehearse 的三刀（worklog 08-11）＝本檔需求規格：
-  「天使不知道我在哪一段」→ ScoreTracker v3 的 HMM 先驗改均勻＝全局定位，
-    從任何一段開口它自己收斂到你的位置；收斂前天使不出聲（乾淨進場）。
-  「表現卡在我身上」→ 天使的聲音材料**不再來自麥克風**：譜給 f0/音量、
-    母音 units 循環（score_sing 管線）＝獨立歌手；你只給**位置與速度**。
-  「雜亂」→ 特徵確定性＝跨窗一致性天生成立（不需要凍結網格/橋接/EMA），
-    你不順天使照樣圓潤——只是等你。
+An abandoned line, kept as the evidence behind the score-following entries in
+GRAVEYARD. Superseded by the answering mode and the sampled choir.
 
-  你唱 lead（真嗓直接進房間，不過機器）；天使：t1→sop3、t2→Alto-6、
-  t4→bass1＝四部齊響。你停 >2.5s 天使淡出等你，開口再回來。
+The problem: the parts have no idea where in the piece the singer is. Five
+versions circled one question, who leads.
 
-v3：樂句邊界進場＋速度鎖＝領導權合約「位置是他的、速度是譜的」。
-  v2 死結（句內 PLL 追他、他聽天使調自己＝互相跟隨：conf 震盪、rate 飄）
-  的根治：句內天使恆定譜速前進（無 PLL、無 rate EMA）；只在樂句邊界對位
-  ——你唱進某句開頭（進場窗內）天使才進場，唱完該句就待命等下一句。
-  停 >2.5s 淡出棄句，回來（或跳段）一樣從你所在的句首接。
+  v3   The parts follow the singer within a phrase, tracked by an HMM over the
+       score with a uniform prior so they converge from anywhere. This
+       deadlocked: the parts chase the singer while the singer tunes to the
+       parts, and confidence oscillates. The fix made leadership explicit -
+       position belongs to the singer, tempo belongs to the score - so the parts
+       advance at score tempo within a phrase and realign only at boundaries.
+  v3.1 A camera gate on the mouth, because feedback cannot fool the lips, and it
+       fails open to audio-only if the camera dies.
+  v3.2 Parts hold their own line: standby moved to a rest in every part rather
+       than the end of the lead's phrase, because in a real score 91% of the
+       ticks where the lead rests still have harmony sounding.
+  v4   Choir intuition: sing in order from memory, no global search. The HMM
+       stayed available for rehearsal under --explore.
+  v7   Dependency inverted. The choir sings by itself and the singer joins it:
+       whichever line they sing is yielded to them and taken back about 1.5 s
+       after they stop. The classification sits behind the mouth gate, so the
+       choir's own lead returning through the microphone cannot claim a line.
+  v7.1 The parts play pre-rendered stems rather than rendering live. Rendering
+       live through a sliding window with SOLA overlap held the melody line to
+       the score only 49% of the time against 80% offline, because every note
+       change lands on a splice; sustained harmony lines were largely spared.
+       Since the choir's part is fixed by the score, nothing needs rendering
+       live: the four parts are rendered once at start-up, cached to disk, and
+       the live loop only plays, yields and advances.
 
-v3.1：嘴部門控（mediapipe 讀嘴＝回授騙不了的第二感測器）。probe 實測
-  開口度（唇距/臉高）分離 34×、活動量尾巴反而重疊 → 用開口度＋遲滯＋
-  0.8s 寬限。接三點：進場多一 AND｜lastv 只在嘴開時更新（回授騙不了
-  淡出）｜嘴閉時 observe(None)（天使回授不進 HMM）。鏡頭掛＝退回純
-  音訊 v3（fail-open）；--mouth 0 關閉。
-
-v3.2：聲部獨立織體支援（真譜實測 lead 休止 tick 的 91% 和聲仍有音，
-  按 lead 句尾待命會斬斷和聲線）。三改：
-  ① 待命點改 tutti 休止（四部全停；真譜 8 段）＝和聲唱完自己的線；
-  ② 段太長（最長 212s）純速度鎖會積差 → 句首再同步：你每開新句，
-    位置向你做一次有界修正（≤2 tick、每塊 ≤4 幀滑入）；偏 >8 tick
-    ＝你跳段了 → 回待命重進場。仍是「位置他的、只在句首對」。
-  ③ 棄句看譜：lead 譜上休止＝你的沉默是寫好的，天使照唱；譜上該唱
-    而你停 >2.5s 才淡出棄句（每次譜面回到該唱，計時器重給 2.5s）。
-
-v4（現 --wait；當時預設＝順序模式）：合唱團直覺——背譜按順序唱，不做全局定位。
-  HMM 那套完整保留在 --explore（排練：從任何一段開口它自己找你）。
-  ・段＝tutti 休止切的 8 段，永遠知道下一段是哪段（待命時終端打
-    段號+Enter 跳段、r 回頭＝指揮用講的）。
-  ・進場 cue：lead 段＝你開唱（音高要對得上句首±4 半音，含低八度）；
-    無 lead 段（純和聲 intro）＝呼吸 cue（開口 ≥0.3s）或哼聲；
-    無 lead 段之間自動接續（合唱團自己數短休止，不用重 cue）。
-  ・段內＝速度鎖；句首對表：安靜 ≥0.5s 後開唱＝句首 onset，位置
-    做一次有界修正（≤2 tick 滑入）。嘴＝呼吸 cue＋回授免疫，非監視。
-  ・棄段後 cue 從最近句首接（不用從段頭重唱）。
-
-v7（預設＝團員模式）：依賴反轉——團自主唱，你加入它（08-11 第一性拆解，
-  成分一「音樂大於你、不靠你」）。v1–v4 的共同前提「天使繞著你轉」翻掉：
-  ・lead 也是天使（t0→alto3-40k，同 score_sing）＝五部自主唱；開演 cue
-    （呼吸/發聲）之後段自動接續到曲終，**你停團不停**——棄句/淡出等人刪除，
-    音樂只在譜上寫休止的地方休止。
-  ・你唱哪條線，那條線讓給你：你的音對到五線中最近者（八度折疊、要贏
-    第二名 ≥2 半音、連 3 塊同判才換位）→ 該天使淡出讓位；你停 ~1.5s
-    天使把線接回來唱。誤判 fail-soft＝沒人讓位（你跟天使 double）。
-  ・分類掛嘴部門控後面（嘴閉不算你的音）＝天使自己的 lead 從喇叭繞回
-    mic 不會騙到讓位（G34 教訓：能量域判不了回授，只有嘴判得了）。
-  ・v4 伴唱模式保留在 --wait（A/B 對照）；--explore 行為不變（排練）。
-
-v7.1：天使改預渲 stems 播放（live 首輪實測：旋律線在滑窗+SOLA live 渲染
-  下貼譜 49%／亂 10%（正典 80%／1%）＝G37 換音接縫病×旋律 1–2 tick 換音；
-  和聲線長音倖免（70%／0%）。v4 之前 lead 是他唱＝此病從未曝光）。
-  團的唱法是譜定的＝live 根本不用渲染：開場把四部渲成正典 stems
-  （score_sing 品質＝過耳的那個；磁碟快取，key=譜+聲部配置，第二次免渲），
-  live 只做播放＋讓位淡出＋段行進；slew/跳段＝播放頭跳針＋20ms crossfade。
-  順帶：渲染 RTF 歸零（xrun 消失）、快取命中時模型都不用載＝秒開。
-  同思想前例：prerender_stems.py（08-01 Harry「優化天使、不是優化 live」）。
-
-跑: venv/bin/python score_live.py --score scratchpad/xnn_all5.json \
-      --line2 scratchpad/xnn_t34.json [--in-name "USB PnP"] [--out-name ...]
+Run: venv/bin/python score_live.py --score scratchpad/xnn_all5.json \
+       --line2 scratchpad/xnn_t34.json [--in-name "USB PnP"] [--out-name ...]
 """
 import argparse
 import hashlib
@@ -85,31 +52,32 @@ SR, HOP, TICK = 44100, 512, 16
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--score", required=True, help="lead/upper/lower json（t0/t1/t2）")
-ap.add_argument("--line2", default="", help="第二份 json（t3/t4 用 lead/upper）")
+ap.add_argument("--line2", default="", help="a second json; t3/t4 take its lead/upper")
 ap.add_argument("--in-name", default="USB PnP")
-ap.add_argument("--out-name", default="MacBook Pro的揚聲器")
+ap.add_argument("--out-name", default="MacBook Pro的揚聲器")  # zh-Hant macOS speaker name
 ap.add_argument("--block", type=float, default=0.24)
 ap.add_argument("--vowel-src", default="scratchpad/take17.wav")
 ap.add_argument("--gain", type=float, default=1.0)
 ap.add_argument("--min-rest", type=int, default=2,
-                help="樂句邊界的最短休止（tick；1 tick≈186ms）")
+                help="shortest rest counting as a phrase boundary, in ticks of about 186 ms")
 ap.add_argument("--entry-win", type=int, default=6,
-                help="句首進場窗（tick）：定位落在句首這麼多 tick 內才進場")
+                help="entry window at the head of a phrase, in ticks")
 ap.add_argument("--explore", action="store_true",
-                help="探索模式（HMM 全局定位＝v3.2 行為）；預設＝順序模式")
+                help="explore mode: global HMM location, the v3.2 behaviour; default is sequential")
 ap.add_argument("--wait", action="store_true",
-                help="v4 伴唱模式（lead 歸你、天使等 cue、你停就淡出）"
-                     "＝v7 的 A/B 對照")
+                help="v4 accompaniment mode: the lead is the singer's, the parts "
+                     "wait for a cue and fade when they stop; the A/B against v7")
 ap.add_argument("--voice", type=float, default=0.0,
-                help="你的聲音直通輸出的 gain（0=關；喇叭回授風險自負）")
+                help="gain of the dry pass-through, 0 to disable; feedback over speakers is your own risk")
 ap.add_argument("--latency", default="low",
-                help="stream latency：low/high 或秒數（08-11 實測 high 在"
-                     "本機 in 839ms/out 723ms＝房間晚 ~1.9s，改預設 low）")
+                help="stream latency: low, high, or seconds. Measured here, high "
+                     "gives 839 ms in and 723 ms out, about 1.9 s late in the room")
 ap.add_argument("--sblock", type=int, default=512,
-                help="stream 塊大小（樣本）；處理粒度仍是 --block。"
-                     "08-11 實測 latency 由 stream 塊主宰＝縮小這個才有感")
-ap.add_argument("--mouth", type=int, default=1, help="嘴部門控（0=關）")
-ap.add_argument("--cam", type=int, default=-1, help="鏡頭 index（-1=自動挑最亮）")
+                help="stream block size in samples; processing granularity is still "
+                     "--block. Latency is dominated by the stream block, so this is "
+                     "the one that matters")
+ap.add_argument("--mouth", type=int, default=1, help="camera mouth gate, 0 to disable")
+ap.add_argument("--cam", type=int, default=-1, help="camera index, -1 picks the brightest")
 ap.add_argument("--dump", default="")
 a = ap.parse_args()
 
@@ -117,20 +85,21 @@ d = json.load(open(a.score))
 lead, t1, t2 = d["lead"], d["upper"], d["lower"]
 t4 = json.load(open(a.line2))["upper"] if a.line2 else None
 
-WAIT = a.wait or a.explore               # 舊行為：天使等你、你停團停
+WAIT = a.wait or a.explore               # the older behaviour: the parts wait for the singer and stop when they stop
 
 PARTS = [("t1", f"{S.DDSP}/exp/reflow-sop3/model_20000.pt", 1, 0.7, t1),
          ("t2", f"{S.DDSP}/exp/reflow-alto3/model_40000.pt", 2, 0.85, t2)]
 if t4:
     PARTS.append(("t4", f"{S.DDSP}/exp/reflow-bass1/model_32000.pt", 1, 1.0, t4))
-LIDX = -1                                # lead 天使在 PARTS 的位置（v7 才有）
+LIDX = -1                                # index of the lead part in PARTS (v7 only)
 if not WAIT:
-    # v7：lead 也是天使（alto3-40k；spk 3 避開 t2 的 spk 2），你唱它才讓位
+    # v7: the lead is a part too (alto3-40k, speaker 3 to avoid t2's speaker 2),
+    # and yields only when the singer sings that line
     PARTS.insert(0, ("t0", f"{S.DDSP}/exp/reflow-alto3/model_40000.pt",
                      3, 1.0, lead))
     LIDX = 0
 
-# ── 譜 → 幀網格特徵 ──
+# -- score to a frame grid of features --
 NT = len(lead)
 NF = NT * TICK
 
@@ -153,19 +122,20 @@ def line_feats(line):
 
 FEATS = [line_feats(l) for *_, l in PARTS]
 
-# ── v7.1 stems：正典預渲＋磁碟快取（live 只播放，渲染 RTF 歸零）──
+# -- v7.1 stems: rendered once at reference quality and cached to disk, so the
+# live loop only plays and the render cost falls to zero --
 _ck = hashlib.md5((repr([(nm_, p_, sp_, g_) for nm_, p_, sp_, g_, _l in PARTS])
                    + repr([l for *_x, l in PARTS])
                    + a.vowel_src).encode()).hexdigest()[:10]
 _spaths = [f"scratchpad/stems_{_ck}_{nm_}.wav" for nm_, *_x in PARTS]
 STEMS = []
 if all(os.path.exists(p_) for p_ in _spaths):
-    print(f"stems 快取命中（{_ck}）＝不載模型、秒開", flush=True)
+    print(f"stems cache hit ({_ck}): no models loaded, opens instantly", flush=True)
     for p_ in _spaths:
         w_, _ = sf.read(p_, dtype="float32")
         STEMS.append(w_)
 else:
-    print("預渲 stems（首次較久；之後快取秒開）…", flush=True)
+    print("pre-rendering stems (slow the first time, instant from cache after)...", flush=True)
     mic0, _ = sf.read(a.vowel_src, dtype="float64", always_2d=True)
     mic0 = mic0[:, 0]
     UU = None
@@ -173,7 +143,7 @@ else:
             zip(PARTS, FEATS)):
         svc = S.Svc([(p_, 0.0, g_, sp_)], step=2, t_start=0.85)
         if UU is None:
-            # 母音 units（同 score_sing）：take17 最長無聲…有聲段中段循環
+            # vowel units, as in score_sing: loop the middle of the longest voiced stretch of take17
             _f, _v, _m, uv0 = svc.prep(mic0[:60 * SR], -60.0, want_uv=True)
             runs, i = [], 0
             while i < len(uv0):
@@ -192,7 +162,7 @@ else:
                     mic0[max(0, (mid - 40) * HOP):(mid + 40) * HOP])[:, 8:-8]
             NBANK = UU.size(1)
         outs = []
-        CHF = 800                        # 每塊幀（~9.3s）＝score_sing 正典路徑
+        CHF = 800                        # frames per chunk, about 9.3 s, the score_sing reference path
         torch.manual_seed(1234)
         t0_ = time.time()
         with torch.no_grad():
@@ -215,20 +185,21 @@ else:
         w_ = np.concatenate(outs).astype("float32")
         sf.write(_spaths[_pi], w_, SR)
         STEMS.append(w_)
-        print(f"  {nm_} 渲好（{time.time() - t0_:.0f}s）→ {_spaths[_pi]}",
+        print(f"  {nm_} rendered ({time.time() - t0_:.0f}s) -> {_spaths[_pi]}",
               flush=True)
         del svc
 STEMS = [np.pad(w_, (0, max(0, NF * HOP - len(w_))))[:NF * HOP]
          .astype("float32") for w_ in STEMS]
 
-# ── 追蹤器：v3 ＋ 均勻先驗＝從任何一段進場 ──
+# -- tracker: v3 with a uniform prior, so it can enter from anywhere --
 from rehearse_ab import ScoreTracker  # noqa: E402
 tr = ScoreTracker([None if n is None else n - 12 for n in lead], mode="v3")
-# ↑ 追蹤用 lead 降八度＝他的音域；天使唱譜面絕對音高不受影響
-tr.alpha = np.ones(NT) / NT              # 全局定位：起點不設先驗
+# the tracker drops the lead an octave into the singer's range; the parts sing
+# the score's absolute pitch and are unaffected
+tr.alpha = np.ones(NT) / NT              # global location: no prior on the starting point
 
-# ── 樂句表：lead 休止 ≥ min-rest tick ＝邊界 ──
-PHR = []                                 # (start, end) tick，end 不含
+# -- phrase table: a lead rest of at least min-rest ticks is a boundary --
+PHR = []                                 # (start, end) in ticks, end exclusive
 _i = 0
 while _i < NT and lead[_i] is None:
     _i += 1
@@ -243,16 +214,17 @@ while _i < NT:
             _k += 1
         if _k - _j >= a.min_rest:
             break
-        _j = _k                          # 短休止＝句內換氣，不切
+        _j = _k                          # a short rest is a breath within the phrase, not a cut
     PHR.append((_i, _j))
     _i = _j
     while _i < NT and lead[_i] is None:
         _i += 1
-PIDX = np.full(NT, -1, dtype=int)        # tick → 樂句 index（休止＝-1）
+PIDX = np.full(NT, -1, dtype=int)        # tick to phrase index, -1 for a rest
 for _pi, (_s, _e) in enumerate(PHR):
     PIDX[_s:_e] = _pi
 
-# ── 段表：tutti 休止（lead＋全和聲部同停 ≥1 tick）＝天使的待命點 ──
+# -- section table: a tutti rest, lead and every harmony part silent for at
+# least one tick, is where the parts stand by --
 _all = [lead] + [l for *_, l in PARTS]
 SEG = []                                 # (start, end) tick
 _i = 0
@@ -267,48 +239,49 @@ while _i < NT:
     _i = _j
     while _i < NT and _rest(_i):
         _i += 1
-SIDX = np.full(NT, -1, dtype=int)        # tick → 段 index
+SIDX = np.full(NT, -1, dtype=int)        # tick to section index
 for _si, (_s, _e) in enumerate(SEG):
     SIDX[_s:_e] = _si
-LFIRST = []                              # 各段 lead 首音 (tick, note)；無＝None
+LFIRST = []                              # first lead note per section as (tick, note); None if there is none
 for _s, _e in SEG:
     _lt = next((t for t in range(_s, _e) if lead[t] is not None), None)
     LFIRST.append(None if _lt is None else (_lt, lead[_lt]))
 
 
 def _match(n, ln):
-    """他唱的 MIDI 音 vs 譜（原調或低八度），差 ≤4 半音算對。"""
+    """The MIDI note sung against the score, at pitch or an octave down; within 4 semitones counts."""
     return ln is not None and min(abs(n - ln), abs(n - ln + 12)) <= 4
 
 
 def _duck_vote(n, t):
-    """v7 讓位判別：他唱的音對到哪條聲部線。八度折疊（±12）、最近者
-    要 ≤2 半音且贏第二名 ≥2 半音，否則棄權（-1＝沒人讓位＝double）。"""
+    """v7 yielding: which part line the singer is on. Octaves are folded, the
+    nearest must be within 2 semitones and beat the runner-up by 2, otherwise it
+    abstains (-1 means nobody yields and the singer doubles a part)."""
     ds = [1e9 if ln[t] is None else
           min(abs(n - ln[t] - o) for o in (-12, 0, 12))
           for *_x, ln in PARTS]
     w = int(np.argmin(ds))
     d2 = sorted(ds)
     return w if d2[0] <= 2 and d2[1] - d2[0] >= 2 else -1
-print(f"譜 {NT} tick（{NF*HOP/SR:.0f}s）；樂句 {len(PHR)} 句／"
-      f"段 {len(SEG)}；天使 {len(PARTS)} 部（stems {_ck}）",
+print(f"score {NT} ticks ({NF*HOP/SR:.0f}s); {len(PHR)} phrases, "
+      f"{len(SEG)} sections; {len(PARTS)} parts (stems {_ck})",
       flush=True)
 
-# ── 狀態 ──
+# -- state --
 blk = int(a.block * SR)
-NB = blk // HOP                          # 每塊幀數
-CF = int(0.02 * SR)                      # 播放頭跳針 crossfade（20ms）
+NB = blk // HOP                          # frames per block
+CF = int(0.02 * SR)                      # 20 ms crossfade when the play head jumps
 st = {"spos": None, "lastv": time.time(), "conf": 0.0, "okc": 0,
       "until": 0.0, "seg": -1, "sync_ph": -1, "slew": 0.0, "exp": True,
       "jmpc": 0, "ending": False, "nxt": 0, "sq": 0, "vc": 0, "vt0": 0.0,
       "wstart": time.time(), "rsm": None, "xrun": 0, "skip": 0, "blkc": 0,
       "tickbuf": np.zeros(0), "die": False, "fade": 0.0,
       "duck": -1, "dvc": 0, "dcand": -1, "pend": None}
-vfade = [1.0] * len(PARTS)               # 每聲部讓位淡出（1=天使唱）
+vfade = [1.0] * len(PARTS)               # per-part yield fade (1 means the part is singing)
 
 
 def rearm():
-    """回待命：清播放狀態，下一次進場從乾淨狀態起。"""
+    """Return to standby: clear playback state so the next entry starts clean."""
     st["spos"] = None
     st["ending"] = False
     st["sync_ph"] = -1
@@ -323,10 +296,11 @@ def rearm():
     st["dvc"] = 0
     st["dcand"] = -1
     with qlock:
-        out_q.clear()                    # 沖掉輸出積壓＝延遲不跨段沉澱
+        out_q.clear()                    # flush the output backlog so latency does not carry across sections
 
 
-# ── 嘴部門控（v3.1）：開口度＋遲滯＋0.8s 寬限；掛了就 fail-open ──
+# -- mouth gate (v3.1): mouth opening, hysteresis and a 0.8 s grace period;
+# fails open if the camera dies --
 M = {"ok": a.mouth == 0, "on": False, "last_open": 0.0, "val": -1.0,
      "t_on": 0.0}
 
@@ -344,9 +318,9 @@ def _mouth_worker():
         lmk = vision.FaceLandmarker.create_from_options(opts)
         if a.cam >= 0:
             cap = cv2.VideoCapture(a.cam)
-            assert cap.isOpened(), f"鏡頭 {a.cam} 打不開"
+            assert cap.isOpened(), f"cannot open camera {a.cam}"
         else:
-            # 挑最亮的鏡頭（index 0/2 常是虛擬相機＝全黑；同 mouth_probe）
+            # pick the brightest camera; indices 0 and 2 are often virtual cameras and come back black
             best = None
             for ci in range(3):
                 c = cv2.VideoCapture(ci)
@@ -358,8 +332,8 @@ def _mouth_worker():
                 c.release()
                 if best is None or b > best[1]:
                     best = (ci, b)
-            assert best and best[1] > 10, f"找不到有畫面的鏡頭 {best}"
-            print(f"[嘴] 鏡頭 index {best[0]}（亮度 {best[1]:.0f}）",
+            assert best and best[1] > 10, f"no camera with a picture {best}"
+            print(f"[mouth] camera index {best[0]} (brightness {best[1]:.0f})",
                   flush=True)
             cap = cv2.VideoCapture(best[0])
         t0 = time.time()
@@ -371,7 +345,7 @@ def _mouth_worker():
                 time.sleep(0.01)
                 continue
             now = time.time()
-            if now - last_det < 0.05:        # landmark ≤20fps，省 CPU 給渲染
+            if now - last_det < 0.05:        # landmarks at 20 fps or less, leaving CPU for rendering
                 continue
             last_det = now
             img = mp.Image(image_format=mp.ImageFormat.SRGB,
@@ -380,23 +354,25 @@ def _mouth_worker():
             if res.face_landmarks:
                 last_face = now
                 f = res.face_landmarks[0]
-                # 開口度＝內唇 13/14 距 ÷ 臉高（額 10–下巴 152）；probe：
-                # 唱 p50 0.099 / p10 0.0054，閉嘴 p50 0.0029
+                # opening = distance between the inner lips (13 to 14) over face
+                # height (forehead 10 to chin 152). Probed: singing p50 0.099,
+                # p10 0.0054; mouth closed p50 0.0029
                 val = abs(f[13].y - f[14].y) / (abs(f[10].y - f[152].y)
                                                 + 1e-9)
                 M["val"] = val
-                nv = val > (0.008 if M["on"] else 0.02)        # 遲滯
+                nv = val > (0.008 if M["on"] else 0.02)        # hysteresis
                 if nv and not M["on"]:
-                    M["t_on"] = now      # 開口瞬間＝呼吸 cue 的時間戳
+                    M["t_on"] = now      # the moment it opens is the timestamp of a breath cue
                 M["on"] = nv
                 if M["on"]:
                     M["last_open"] = now
-            # 0.8s 寬限（子音閉合/掉幀不斷線）；臉丟失 >1s＝fail-open
+            # 0.8 s grace, so a consonant closure or a dropped frame does not break
+            # the line; a face lost for over 1 s fails open
             M["ok"] = (now - M["last_open"] < 0.8) or (now - last_face > 1.0)
         cap.release()
     except Exception as e:
         M["ok"] = True
-        print(f"[嘴] 門控失效（{e}）＝退回純音訊 v3", flush=True)
+        print(f"[mouth] gate failed ({e}), falling back to audio-only v3", flush=True)
 
 
 if a.mouth:
@@ -404,7 +380,7 @@ if a.mouth:
 
 
 def _stdin_jump():
-    """跳段＝指揮用講的：終端打段號+Enter，r＝回頭從段 1。"""
+    """Jumping section is the conductor speaking: type a section number and Enter, or r to go back to section 1."""
     import sys
     for line in sys.stdin:
         w = line.strip().lower()
@@ -416,7 +392,7 @@ def _stdin_jump():
             continue
         rearm()
         st["nxt"] = k
-        print(f"\n[跳段] 待命段 {k + 1}/{len(SEG)}，cue 進場", flush=True)
+        print(f"\n[jump] standing by at section {k + 1}/{len(SEG)}, cue to enter", flush=True)
 
 
 threading.Thread(target=_stdin_jump, daemon=True).start()
@@ -424,7 +400,7 @@ dmp = {"mic": [], "out": [], "pos": [], "mouth": []} if a.dump else None
 
 
 def tick_note(x):
-    """0.25s 音訊 → sounding MIDI note 或 None。"""
+    """0.25 s of audio to a sounding MIDI note, or None."""
     try:
         p = parselmouth.Sound(x, SR).to_pitch(
             time_step=0.05, pitch_floor=65, pitch_ceiling=800)
@@ -449,7 +425,7 @@ def worker():
         if pend is None:
             time.sleep(0.005)
             continue
-        # 逐塊處理（一次進多塊時不能只渲一塊＝輸出斷流）
+        # process block by block; when several arrive at once, rendering only one breaks the output stream
         chunks = [pend[i:i + blk] for i in range(0, len(pend) - blk + 1, blk)]
         rem = len(pend) - len(chunks) * blk
         if rem > 0:
@@ -461,13 +437,13 @@ def worker():
 
 def _process(pend):
         st["tickbuf"] = np.concatenate([st["tickbuf"], pend])[-4 * blk:]
-        # 每塊做 tick 追蹤（塊 244ms ≈ 1.3 tick；粒度夠）
+        # tick tracking once per block; a 244 ms block is about 1.3 ticks, fine enough
         note = tick_note(st["tickbuf"][-int(0.25 * SR):])
-        mo = M["ok"]                     # 嘴部門控：閉嘴＝音高視為回授/雜訊
-        pv_sq = st["sq"]                 # 本塊之前已安靜幾塊（onset 判定用）
+        mo = M["ok"]                     # mouth gate: closed means any pitch is feedback or noise
+        pv_sq = st["sq"]                 # blocks of silence before this one, for onset detection
         if note is not None and mo:
             if st["vc"] == 0:
-                st["vt0"] = time.time()  # 這串發聲的起點
+                st["vt0"] = time.time()  # the start of this run of phonation
             st["vc"] += 1
             st["sq"] = 0
             st["lastv"] = time.time()
@@ -475,7 +451,7 @@ def _process(pend):
             st["sq"] += 1
             st["vc"] = 0
         if a.explore:
-            # ── 探索模式：HMM 全局定位（v3.2）──
+            # -- explore mode: global HMM location (v3.2) --
             tr.observe(note if mo else None)
             conf = float(np.max(tr.alpha)) if hasattr(tr, "alpha") else 1.0
             st["conf"] = conf
@@ -483,7 +459,7 @@ def _process(pend):
             st["okc"] = st["okc"] + 1 if conf > 0.22 else 0
             loc = (mo and p is not None and 0 <= p < NT and st["okc"] >= 3
                    and PIDX[p] >= 0 and p - PHR[PIDX[p]][0] < a.entry_win)
-            # ↑ 定位有效且他正站在某句開頭（進場窗內）
+            # location is valid and the singer is standing at the head of a phrase
             if st["spos"] is None and loc:
                 ph = int(PIDX[p])
                 sg = int(SIDX[p])
@@ -493,49 +469,49 @@ def _process(pend):
                 st["until"] = float(min(NF - 2, (SEG[sg][1] + 1) * TICK))
                 st["exp"] = True
                 st["lastv"] = time.time()
-                print(f"\n[進場] 段 {sg + 1}/{len(SEG)} "
-                      f"句 {ph + 1}/{len(PHR)} tick {p}"
+                print(f"\n[enter] section {sg + 1}/{len(SEG)} "
+                      f"phrase {ph + 1}/{len(PHR)} tick {p}"
                       f"（conf {conf:.2f}）", flush=True)
             elif st["spos"] is not None and loc and PIDX[p] != st["sync_ph"]:
-                # 句首再同步：一次有界修正，非連續 PLL
+                # realign at the phrase head: one bounded correction, not a continuous PLL
                 err = p * TICK - st["spos"]
                 if abs(err) > 8 * TICK:
                     st["jmpc"] += 1
-                    if st["jmpc"] >= 3:  # 連 3 塊都在別處＝他真的跳段
+                    if st["jmpc"] >= 3:  # three blocks elsewhere means they really did jump
                         rearm()
-                        print(f"\n[跳段] 偏 {err / TICK:+.0f} tick，"
-                              f"重新進場", flush=True)
+                        print(f"\n[jump] off by {err / TICK:+.0f} ticks, "
+                              f"re-entering", flush=True)
                 else:
                     st["jmpc"] = 0
                     st["slew"] = float(np.clip(err, -2 * TICK, 2 * TICK))
                     st["sync_ph"] = int(PIDX[p])
         else:
-            # ── 順序模式：按順序走（v7 團員／--wait v4 伴唱）──
+            # -- sequential mode: in order (v7 choir member, --wait v4 accompaniment) --
             if st["spos"] is None:
                 k = st["nxt"]
                 if k < len(SEG):
                     if not WAIT:
-                        # v7：呼吸或發聲＝開演 cue；團從段首自主唱
+                        # v7: a breath or a note is the cue to begin, and the choir sings on from the head of the section
                         at = SEG[k][0]
                         go = ((M["on"] and M["t_on"] > st["wstart"]
                                and time.time() - M["t_on"] > 0.3)
                               or st["vc"] >= 2)
                         adv = 0.0
                     elif st["rsm"] is None and LFIRST[k] is None:
-                        # 無 lead 段＝指揮 cue：開口 ≥0.3s（呼吸）或哼聲
+                        # a section with no lead takes a conductor cue: mouth open for 0.3 s, or a hum
                         at = SEG[k][0]
                         go = ((M["on"] and M["t_on"] > st["wstart"]
                                and time.time() - M["t_on"] > 0.3)
                               or st["vc"] >= 2)
                         adv = 0.0
                     else:
-                        # lead 段＝你開唱就是 cue（音高要對得上句首）
+                        # in a lead section the singer starting is the cue, and the pitch must match the phrase head
                         at = st["rsm"] if st["rsm"] is not None else (
                             LFIRST[k][0] if LFIRST[k] else SEG[k][0])
                         go = (st["vc"] >= 2 and note is not None
                               and _match(note, lead[at]))
                         adv = min((time.time() - st["vt0"]) * SR / HOP,
-                                  4.0 * TICK)   # 錨點補回偵測延遲
+                                  4.0 * TICK)   # anchor back to compensate detection latency
                     if go:
                         st["spos"] = float(at * TICK + adv)
                         st["seg"] = k
@@ -544,11 +520,11 @@ def _process(pend):
                         st["exp"] = True
                         st["lastv"] = time.time()
                         st["rsm"] = None
-                        print(f"\n[進場] 段 {k + 1}/{len(SEG)} tick {at}",
+                        print(f"\n[enter] section {k + 1}/{len(SEG)} tick {at}",
                               flush=True)
             elif (st["vc"] == 1 and pv_sq >= 2 and note is not None
                   and (WAIT or st["duck"] == LIDX)):
-                # 句首對表：安靜 ≥0.5s 後開唱＝句首 onset → 一次有界修正
+                # realign at the phrase head: singing after 0.5 s of silence is a phrase onset
                 cands = [s_ for s_, _e2 in PHR
                          if abs(s_ * TICK - st["spos"]) <= 4 * TICK]
                 if cands:
@@ -557,30 +533,31 @@ def _process(pend):
                     if _match(note, lead[s_]):
                         st["slew"] = float(np.clip(
                             s_ * TICK - st["spos"], -2 * TICK, 2 * TICK))
-        # ── v7 讓位：你唱哪條線，那條線交給你；你停 ~1.5s 天使接回 ──
+        # -- v7 yielding: the line the singer sings is handed over, and taken back about 1.5 s after they stop --
         if not WAIT and st["spos"] is not None:
             if note is not None and mo:
                 v = _duck_vote(note, min(int(st["spos"] / TICK), NT - 1))
                 if v >= 0 and v == st["duck"]:
-                    st["dvc"] = 0        # 在位者續任
+                    st["dvc"] = 0        # the incumbent stays
                 elif v >= 0:
                     st["dvc"] = st["dvc"] + 1 if v == st["dcand"] else 1
                     st["dcand"] = v
-                    if st["dvc"] >= 3:   # 連 ~0.7s 同判才換位（防瞬時誤判）
+                    if st["dvc"] >= 3:   # about 0.7 s of agreement before switching, against momentary errors
                         st["duck"] = v
                         st["dvc"] = 0
-                        print(f"\n[讓位] {PARTS[v][0]} 交給你", flush=True)
+                        print(f"\n[yield] {PARTS[v][0]} is yours", flush=True)
             elif st["sq"] >= 6 and st["duck"] >= 0:
-                print(f"\n[接手] {PARTS[st['duck']][0]} 天使接回",
+                print(f"\n[resume] {PARTS[st['duck']][0]} taken back",
                       flush=True)
                 st["duck"] = -1
                 st["dvc"] = 0
-        # 棄句看譜：譜上該唱而你停 >2.5s 才棄；譜上休止＝你的沉默是寫好的
-        # （v7 團員模式無此事：你停團不停，音樂只在譜面休止處休止）
+        # abandoning a phrase follows the score: only if the score says sing and
+        # the singer stops for over 2.5 s. A rest in the score means their silence
+        # is written. In v7 choir mode this never happens.
         exp = (st["spos"] is not None
                and lead[min(int(st["spos"] / TICK), NT - 1)] is not None)
         if exp and not st["exp"]:
-            st["lastv"] = time.time()    # 譜面回到該唱：計時器重給 2.5s
+            st["lastv"] = time.time()    # the score says sing again: reset the 2.5 s timer
         st["exp"] = exp
         want = 1.0 if (st["spos"] is not None
                        and (not WAIT or not exp
@@ -590,27 +567,27 @@ def _process(pend):
         if st["spos"] is not None and want == 0.0 and st["fade"] < 0.01:
             rs = None
             if not a.explore:
-                st["nxt"] = st["seg"]    # 棄段後 cue 從最近句首接，不重唱
+                st["nxt"] = st["seg"]    # after abandoning, cue from the nearest phrase head rather than repeating
                 sg0 = SEG[st["seg"]][0]
                 cands = [s_ for s_, _e2 in PHR
                          if sg0 <= s_ and s_ * TICK <= st["spos"]]
                 rs = max(cands) if cands else None
             rearm()
             st["rsm"] = rs
-            print(f"\n[淡出] 你停了，cue 我從句首接", flush=True)
+            print(f"\n[fade] you stopped; cue me from a phrase head", flush=True)
         if st["spos"] is not None:
-            sl = float(np.clip(st["slew"], -4, 4))   # 句首修正每塊 ≤4 幀滑入
+            sl = float(np.clip(st["slew"], -4, 4))   # a phrase-head correction slews in at 4 frames per block
             st["slew"] -= sl
-            st["spos"] += NB + sl        # 速度鎖：段內恆定譜速，無 PLL
+            st["spos"] += NB + sl        # tempo lock: constant score tempo within a section, no PLL
             if st["spos"] >= st["until"]:
-                # 過段尾：本塊照渲，渲完套收尾淡出再待命
+                # past the end of the section: render this block, then fade out and stand by
                 st["spos"] = min(st["spos"], float(NF - 2))
                 st["ending"] = True
         st["blkc"] += 1
         if st["spos"] is None or st["fade"] < 0.01:
             y = np.zeros(blk, dtype="float32")
         else:
-            # ── v7.1 播放：stems 切片＋讓位淡出（渲染已離線，RTF≈0）──
+            # -- v7.1 playback: slice the stems and apply the yield fade; rendering is offline --
             end_s = int(st["spos"]) * HOP
             lo_s = end_s - blk
             y = np.zeros(blk, dtype="float32")
@@ -618,8 +595,8 @@ def _process(pend):
                 w = np.zeros(blk, dtype="float32")
                 seg_ = STEMS[vi][max(0, lo_s):max(0, end_s)]
                 if len(seg_):
-                    w[blk - len(seg_):] = seg_   # 譜頭前不足補零
-                # 讓位淡出：0.3/塊（~0.8s 全程）、塊內線性＝無拉鏈聲
+                    w[blk - len(seg_):] = seg_   # pad with zeros before the head of the score
+                # yield fade: 0.3 per block, about 0.8 s in all, linear within the block so there is no zipper noise
                 vt_ = 0.0 if vi == st["duck"] else 1.0
                 vf0 = vfade[vi]
                 vfade[vi] = vf0 + float(np.clip(vt_ - vf0, -0.3, 0.3))
@@ -627,7 +604,7 @@ def _process(pend):
                     w = w * np.linspace(vf0, vfade[vi], blk)
                 y += w
             if st["pend"] is not None and lo_s != st["pend"]:
-                # 播放頭跳針（slew/進場跳位）＝20ms crossfade 防爆音
+                # a jump of the play head (slew or entry) gets a 20 ms crossfade against clicks
                 cont = np.zeros(CF, dtype="float32")
                 for vi in range(len(PARTS)):
                     s2 = STEMS[vi][max(0, st["pend"]):max(0, st["pend"]) + CF]
@@ -641,14 +618,15 @@ def _process(pend):
                 nx = st["seg"] + 1
                 if nx < len(SEG) and (not WAIT or (
                         not a.explore and LFIRST[nx] is None)):
-                    # v7 全段自動接續（團自主唱到曲終）；
-                    # --wait 只接無 lead 段＝合唱團自己數短休止，不重 cue
+                    # v7 runs section to section to the end of the piece;
+                    # --wait continues only through sections with no lead, so the
+                    # choir counts short rests itself and needs no new cue
                     st["ending"] = False
                     st["seg"] = nx
                     st["spos"] = float(SEG[nx][0] * TICK)
                     st["until"] = float(min(NF - 2,
                                             (SEG[nx][1] + 1) * TICK))
-                    print(f"\n[接續] 段 {nx + 1}/{len(SEG)}（和聲自走）",
+                    print(f"\n[continue] section {nx + 1}/{len(SEG)} (harmony carries on)",
                           flush=True)
                 else:
                     y *= np.linspace(1, 0, len(y), dtype="float32")
@@ -656,18 +634,19 @@ def _process(pend):
                     rearm()
                     st["nxt"] = nx
                     if nx >= len(SEG):
-                        print(f"\n[曲終] 段 {lastsg + 1}/{len(SEG)} 唱完"
-                              f"（r+Enter 回頭）", flush=True)
+                        print(f"\n[end] section {lastsg + 1}/{len(SEG)} finished"
+                              f" (r and Enter to go back)", flush=True)
                     else:
-                        print(f"\n[待命] 段 {lastsg + 1}/{len(SEG)} 唱完，"
-                              f"cue 段 {nx + 1} 進場", flush=True)
+                        print(f"\n[standby] section {lastsg + 1}/{len(SEG)} finished, "
+                              f"cue section {nx + 1} to enter", flush=True)
         if a.voice > 0:
-            # 你的聲音直通（不吃 fade：天使沉默時你照樣出聲）
+            # the dry pass-through ignores the fade, so the singer still sounds when the parts are silent
             y = np.clip(y + pend[:len(y)] * a.voice, -1, 1).astype("float32")
         with qlock:
             out_q.append(y)
-            # 積壓上限 2 塊：卡頓＝跳拍趕上（合唱團的絆倒），不當延遲沉澱
-            # （worker 輸入時鐘驅動＝積壓永不自排；08-11 buf 軌跡實證）
+            # backlog capped at two blocks: a stall skips ahead to catch up, the way
+            # a choir stumbles, rather than settling into latency. The worker is
+            # driven by the input clock, so a backlog never clears itself.
             while sum(len(q_) for q_ in out_q) > 2 * blk:
                 out_q.pop(0)
                 st["skip"] += 1
@@ -678,12 +657,12 @@ def _process(pend):
             dmp["mouth"].append((M["val"], 1.0 if mo else 0.0))
 
 
-OB = [np.zeros(0, dtype="float32")]      # 輸出 ring：worker 塊 → 小塊串流
+OB = [np.zeros(0, dtype="float32")]      # output ring: worker blocks out to small stream blocks
 
 
 def cb(indata, outdata, frames, tinfo, status):
     if status:
-        st["xrun"] += 1                  # under/overflow 計數＝低延遲的代價表
+        st["xrun"] += 1                  # under/overflow count, the price of low latency
     with qlock:
         in_q.append(indata[:, 0].copy())
         buf = OB[0]
@@ -704,12 +683,12 @@ def cb(indata, outdata, frames, tinfo, status):
 import sounddevice as sd  # noqa: E402
 
 threading.Thread(target=worker, daemon=True).start()
-_mode = ("探索模式：唱 lead，任何一段都行" if a.explore else
-         "伴唱模式：cue 段 1（開口或哼聲）" if a.wait else
-         "團員模式：呼吸/發聲＝開演，團自主唱到曲終；唱哪條線哪條讓給你")
-print(f"開流 in={a.in_name!r} out={a.out_name!r}"
-      f"（{_mode}；跳段＝段號+Enter、r＝回頭；Ctrl-C 結束）", flush=True)
-st["wstart"] = time.time()               # 呼吸 cue 只認開流之後的開口
+_mode = ("explore mode: sing the lead, from any section" if a.explore else
+         "accompaniment mode: cue section 1 with a breath or a hum" if a.wait else
+         "choir mode: a breath or a note begins it and the choir sings to the end; the line you sing is yielded to you")
+print(f"stream open in={a.in_name!r} out={a.out_name!r}"
+      f" ({_mode}; jump with a section number and Enter, r to go back; Ctrl-C to stop)", flush=True)
+st["wstart"] = time.time()               # a breath cue only counts after the stream opens
 try:
     try:
         _lat = float(a.latency)
@@ -726,11 +705,11 @@ try:
                 with qlock:
                     _bl = sum(len(q_) for q_ in out_q) + len(OB[0])
                 print(f"pos {st['spos']/TICK:6.0f}/{NT} tick  "
-                      f"段 {st['seg'] + 1}/{len(SEG)} "
-                      f"句 {_ph + 1 if _ph >= 0 else '—'}/{len(PHR)}  "
+                      f"sec {st['seg'] + 1}/{len(SEG)} "
+                      f"phr {_ph + 1 if _ph >= 0 else '-'}/{len(PHR)}  "
                       f"conf {st['conf']:.2f}  fade {st['fade']:.1f}  "
-                      f"你 {PARTS[st['duck']][0] if st['duck'] >= 0 else '—'}  "
-                      f"嘴 {'開' if M['ok'] else '閉'}  "
+                      f"you {PARTS[st['duck']][0] if st['duck'] >= 0 else '-'}  "
+                      f"mouth {'open' if M['ok'] else 'closed'}  "
                       f"buf {_bl / SR * 1000:3.0f}ms  "
                       f"xrun {st['xrun']}  skip {st['skip']}", flush=True)
 except KeyboardInterrupt:
