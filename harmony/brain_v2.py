@@ -22,7 +22,17 @@ WINDOW = 2048
 
 
 class BrainV2:
+    """The harmony partner: takes the singer's note each tick, returns the alto's."""
+
     def __init__(self, accent="cpdl", window=WINDOW):
+        """Load the trained harmony model and prepare an empty memory.
+
+        accent selects which training corpus the model should imitate
+        ('chorale', 'pop909' or 'cpdl'); it is passed to the model as a
+        source embedding on every call. window is how many past tokens
+        the model may look back over. One dummy forward pass is run so
+        the first real tick does not pay the kernel warm-up cost.
+        """
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         ck = torch.load(Path(__file__).parent / "checkpoints" / "v2" / "best.pt",
                         map_location=self.device, weights_only=True)
@@ -39,6 +49,12 @@ class BrainV2:
 
     @torch.no_grad()
     def logits_next(self):
+        """Score every possible next token given the current memory.
+
+        Feeds the last `window` tokens and their beat phases to the model
+        and returns the raw scores (logits) for the token that should come
+        next. The caller decides how to sample from them.
+        """
         x = torch.tensor([self.ctx[-self.window:]], device=self.device)
         p = torch.tensor([self.phases[-self.window:]], device=self.device)
         return self.model(x, p, self.src)[0, -1]
@@ -86,6 +102,15 @@ class BrainV2:
 
     @torch.no_grad()
     def step(self, sop_token):
+        """Advance one tick: hear the singer's token, answer with the alto's.
+
+        sop_token is the singer's note (or REST / HOLD) on this tick. It is
+        written into memory with the current beat phase, the model scores
+        the reply, and one alto token is sampled from the top-k candidates
+        with temperature. While the singer is sounding, REST is masked so
+        the part cannot fall silent under them. The alto token is written
+        into memory too, so the model sees both voices interleaved.
+        """
         phase = self.tick % 16
         self.tick += 1
         self.ctx.append(sop_token)

@@ -1,6 +1,15 @@
-"""Step 4: lightweight YIN pitch tracker (no external deps beyond numpy).
+"""Lightweight YIN pitch tracker for the live path (numpy only).
 
-Designed for singing voice: frame 2048 @ 44100 (46 ms), f0 range 80-1000 Hz.
+This is the project's own implementation of the YIN algorithm (de Cheveigne
+and Kawahara, 2002): a frame of audio is compared with delayed copies of
+itself, and the delay at which it best matches gives the period, hence the
+pitch. Designed for singing voice: 2048-sample frames at 44.1 kHz (46 ms),
+pitch range 100-1000 Hz.
+
+Two layers: yin_f0() estimates one frame; PitchTracker wraps it for streaming
+input and adds the cleaning a live singer needs (median smoothing, octave-jump
+correction, rejection of vocal fry and breath noise).
+
 Run directly for a self-test on synthetic tones:  venv/bin/python pitch.py
 """
 
@@ -14,7 +23,15 @@ RMS_GATE = 0.005  # below this the frame counts as silence (headset mics run qui
 
 
 def yin_f0(frame, sr=SR):
-    """Return f0 in Hz, or None if unvoiced/silent."""
+    """Estimate the pitch of one frame. Returns Hz, or None if silent/unvoiced.
+
+    Steps: remove DC and gate on level; build the YIN difference function
+    over the candidate delay range; normalise it (CMNDF) so the first true
+    dip is comparable across levels; take the first dip under YIN_THRESHOLD
+    and walk to its local minimum; refine the delay with a parabola through
+    the three points around it. The frame must be long enough to hold the
+    longest candidate period plus 512 samples of overlap.
+    """
     x = frame.astype(np.float64)
     x = x - x.mean()
     if np.sqrt(np.mean(x * x)) < RMS_GATE:
@@ -54,6 +71,7 @@ def yin_f0(frame, sr=SR):
 
 
 def hz_to_midi(f):
+    """Convert a frequency in Hz to a fractional MIDI note number (A4 = 69)."""
     return 69 + 12 * np.log2(f / 440.0)
 
 
@@ -61,6 +79,8 @@ class PitchTracker:
     """Streaming wrapper: push arbitrary-size chunks, poll latest (midi, voiced)."""
 
     def __init__(self, sr=SR, hop=1024, median=5):
+        """hop is the step between analysed frames in samples; median is how
+        many recent frame estimates are pooled before a note is accepted."""
         self.sr = sr
         self.hop = hop
         self.buf = np.zeros(0, dtype=np.float64)
@@ -73,6 +93,18 @@ class PitchTracker:
         self.rejected = []
 
     def push(self, samples):
+        """Feed audio in; return the current note as a MIDI integer, or None.
+
+        Samples are buffered and analysed one frame per hop. A note is only
+        reported when at least half of the last `median` frames were voiced,
+        and the median of those frames is used, which removes single-frame
+        blips. Two further corrections follow: a jump of almost exactly one
+        octave from the last note is treated as a tracking error and folded
+        back, and a note far below the recent register is held back as fry
+        or breath noise unless it persists for three frames, in which case
+        the register follows the singer down. self.latest_hz keeps the
+        unrounded frequency for pitch-shift ratios.
+        """
         self.buf = np.concatenate([self.buf, np.asarray(samples, dtype=np.float64)])
         while len(self.buf) >= FRAME:
             f0 = yin_f0(self.buf[:FRAME], self.sr)
@@ -110,6 +142,7 @@ class PitchTracker:
 
 
 def _selftest():
+    """Check yin_f0 on seven synthetic voice-like tones and on near-silence."""
     rng = np.random.default_rng(0)
     print("synthetic-tone self-test (target -> detected):")
     errs = []
