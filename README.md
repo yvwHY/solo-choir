@@ -136,6 +136,7 @@ which corpus is in which checkpoint.
 | [`docs/SOLO_CHOIR_TECH_DOC.md`](docs/SOLO_CHOIR_TECH_DOC.md) | Architecture, data flow, design decisions, the AI-assisted process |
 | [`docs/SOLO_CHOIR_RESEARCH_VISION.md`](docs/SOLO_CHOIR_RESEARCH_VISION.md) | The research framing: the body as an interface |
 | [`docs/PROCESS.md`](docs/PROCESS.md) | How it was built, June to August 2026, in eight phases |
+| [`docs/COMMIT_LOG.md`](docs/COMMIT_LOG.md) | The commit history of the working repositories, week by week, and the dates of the daily notes |
 | [`docs/VIVA_RUNBOOK.md`](docs/VIVA_RUNBOOK.md) | The frozen performance configuration, flag by flag, and the pre-show check |
 | [`docs/FINDINGS.md`](docs/FINDINGS.md) | Measured numbers: latency, glide, decorrelation, RTF |
 | [`docs/GRAVEYARD.md`](docs/GRAVEYARD.md) | Approaches that were tried and died, with root causes |
@@ -147,7 +148,10 @@ which corpus is in which checkpoint.
 
 The development was logged daily in Chinese working notes; those 53 logs and the
 rolling status file are condensed into [`docs/PROCESS.md`](docs/PROCESS.md) and
-kept in the development repository rather than here.
+kept in the development repository rather than here. This repository was
+assembled for submission on 3–4 September 2026, so its own git history is short;
+the commit history of the working repositories, June to September 2026, is
+exported in [`docs/COMMIT_LOG.md`](docs/COMMIT_LOG.md).
 
 ## Attribution and licence
 

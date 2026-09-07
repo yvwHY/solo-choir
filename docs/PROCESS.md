@@ -7,7 +7,8 @@ kept in the development repository rather than here.
 What did and did not work is recorded in two companion files:
 [`FINDINGS.md`](FINDINGS.md) holds the measured numbers, and
 [`GRAVEYARD.md`](GRAVEYARD.md) holds every approach that was tried and abandoned,
-with the evidence that killed it.
+with the evidence that killed it. The commit history behind this account, week by
+week and commit by commit, is exported in [`COMMIT_LOG.md`](COMMIT_LOG.md).
 
 ---
 
