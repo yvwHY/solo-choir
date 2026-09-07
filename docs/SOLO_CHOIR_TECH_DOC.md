@@ -174,7 +174,7 @@ The throughline: AI accelerated implementation and broadened the option space, b
 - **Audio setup note:** to avoid `input overflow`, use input and output on one clock domain — a macOS **Aggregate Device** (with drift correction) or a single USB audio interface.
 - **Licensing:**
   - The Beatrice engine binary and the trained voice model are **license-restricted (academic/personal use, no redistribution)** and are kept **out of version control**; they are referenced by path and backed up separately.
-  - The head model (`app/assets/head.glb`, *male_base*) is **CC-BY 3.0**; attribution is recorded in `app/assets/CREDITS.md`.
+  - The head model used by the early interface (`app/assets/head.glb`, "CCO_ Male_base_mesh_standing" by iamsunroy, Sketchfab) is under the **Sketchfab Standard** licence, which does not allow redistribution of the file, so it is not in the repository; source and download instructions are in `app/assets/CREDITS.md`.
 
 ---
 

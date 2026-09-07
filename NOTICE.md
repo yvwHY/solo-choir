@@ -77,8 +77,10 @@ voice. Both are documented in [`docs/VOICE_CREDITS.md`](docs/VOICE_CREDITS.md).
 
 ## Third-party assets in this repository
 
-- `app/assets/head.glb`, `three.min.js`, `GLTFLoader.js`, Space Grotesk web
-  fonts — see [`app/assets/CREDITS.md`](app/assets/CREDITS.md).
+- `three.min.js`, `GLTFLoader.js`, Space Grotesk web fonts — see
+  [`app/assets/CREDITS.md`](app/assets/CREDITS.md). The head mesh the early
+  interface used (`head.glb`, iamsunroy on Sketchfab, Sketchfab Standard
+  licence) is not redistributed; the same file says where to get it.
 - `research/web/roll/sf/` — WebAudioFont player and soundfont; see
   [`research/web/roll/sf/CREDITS.md`](research/web/roll/sf/CREDITS.md).
 - `research/harmony_experiments/` and `.claude/skills/` include workflow skills

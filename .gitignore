@@ -2,6 +2,9 @@
 /models/*
 !/models/README.md
 
+# Sketchfab Standard licence: not redistributable — see app/assets/CREDITS.md
+app/assets/head.glb
+
 # Render cache and session dumps
 harmony/scratchpad/bank_*
 harmony/scratchpad/*_mic.wav
